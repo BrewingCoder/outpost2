@@ -149,6 +149,15 @@ public static class ConnectionEndpoints
             return Results.Redirect("/connections");
         });
 
+        // Leaves the provider with no default, so unlabelled requests must name one.
+        group.MapPost("/{id:guid}/undefault", async (HttpContext ctx, IConnectionStore s, Guid id) =>
+        {
+            var userId = ctx.User.UserId();
+            var c = await s.GetAsync(userId, id);
+            if (c is not null) await s.ClearDefaultAsync(userId, c.Provider);
+            return Results.Redirect("/connections");
+        });
+
         group.MapPost("/{id:guid}/rename", async (HttpContext ctx, IConnectionStore s, Guid id, [FromForm] string label) =>
         {
             try { await s.RenameAsync(ctx.User.UserId(), id, label.Trim()); return Results.Redirect("/connections"); }

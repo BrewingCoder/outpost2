@@ -134,7 +134,7 @@ public sealed class YouTrackConnectionTests : IAsyncLifetime
 
         Assert.Equal(ProviderKind.YouTrack, c.Provider);
         Assert.Equal(AuthKind.PersonalAccessToken, c.AuthKind);
-        Assert.True(c.IsDefaultForProvider);          // first of its provider
+        Assert.False(c.IsDefaultForProvider);         // nothing becomes a default on its own
 
         // Stored form must not contain the token in the clear.
         Assert.DoesNotContain(_token, c.SealedCredential, StringComparison.Ordinal);
@@ -208,9 +208,13 @@ public sealed class YouTrackConnectionTests : IAsyncLifetime
         var all = await _store.ListAsync(_user);
 
         // The substrate claim: one resolver serves both providers, unchanged.
-        var r = ConnectionResolver.Resolve(all, Capabilities.IssuesRead, null, isWrite: false);
+        var r = ConnectionResolver.Resolve(all, Capabilities.IssuesRead, "lab", isWrite: false);
         Assert.Equal(ResolutionKind.Single, r.Kind);
         Assert.Equal("lab", r.Connection!.Label);
+
+        // Unnamed, it asks: a tracker is never picked for you.
+        var unnamed = ConnectionResolver.Resolve(all, Capabilities.IssuesRead, null, isWrite: false);
+        Assert.Equal(ResolutionKind.Ambiguous, unnamed.Kind);
 
         // ...and an admin action is refused, because that capability is switched off.
         var adminResolve = ConnectionResolver.Resolve(all, Capabilities.IssuesAdmin, "lab", isWrite: true);

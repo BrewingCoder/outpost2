@@ -60,7 +60,7 @@ public sealed class MailTools(
     [McpServerTool(Name = "list_mail")]
     [Description("List recent messages. Omit 'connection' to use the default mailbox, or pass 'all' to check every mailbox at once.")]
     public async Task<string> ListMail(
-        [Description("Connection name such as 'work' or 'home'. Use 'all' for every mailbox. Omit for the default.")] string? connection,
+        [Description("Connection name such as 'work' or 'home'. Use 'all' for every mailbox. Omit only if a default mailbox has been set.")] string? connection,
         [Description("Only unread messages.")] bool unreadOnly = false,
         [Description("How many to return, per mailbox.")] int count = 10,
         CancellationToken ct = default)
@@ -155,7 +155,7 @@ public sealed class MailTools(
     [Description("Search messages by text. Omit 'connection' for the default mailbox, or pass 'all' to search everywhere.")]
     public async Task<string> SearchMail(
         [Description("What to search for.")] string query,
-        [Description("Connection name, or 'all'. Omit for the default.")] string? connection = null,
+        [Description("Connection name, or 'all'. Omit only if a default mailbox has been set.")] string? connection = null,
         [Description("How many results per mailbox.")] int count = 10,
         CancellationToken ct = default)
     {

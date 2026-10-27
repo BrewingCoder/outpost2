@@ -129,14 +129,16 @@ public sealed class ConnectionStoreTests : IAsyncLifetime
     // ── defaults ─────────────────────────────────────────────────────────────
 
     [SkippableFact]
-    public async Task First_connection_for_a_provider_becomes_its_default()
+    public async Task No_connection_becomes_a_default_on_its_own()
     {
         Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
 
         var first = await Add(_alice, "work");
         var second = await Add(_alice, "home");
 
-        Assert.True(first.IsDefaultForProvider);
+        // A default is standing permission to act on a request that named nobody. Being
+        // added first is not a reason to be granted it.
+        Assert.False(first.IsDefaultForProvider);
         Assert.False(second.IsDefaultForProvider);
     }
 
@@ -148,9 +150,15 @@ public sealed class ConnectionStoreTests : IAsyncLifetime
         var mail = await Add(_alice, "work");
         var tracker = await Add(_alice, "lab-yt", ProviderKind.YouTrack);
 
-        // "check email" and "my open tickets" must resolve independently.
-        Assert.True(mail.IsDefaultForProvider);
-        Assert.True(tracker.IsDefaultForProvider);
+        await _store.SetDefaultAsync(_alice, mail.Id);
+        await _store.SetDefaultAsync(_alice, tracker.Id);
+        _db.ChangeTracker.Clear();
+
+        // "check email" and "my open tickets" must resolve independently: nominating a
+        // tracker must not unseat the mailbox.
+        var all = await _store.ListAsync(_alice);
+        Assert.True(all.Single(c => c.Provider == ProviderKind.Microsoft).IsDefaultForProvider);
+        Assert.True(all.Single(c => c.Provider == ProviderKind.YouTrack).IsDefaultForProvider);
     }
 
     [SkippableFact]
@@ -161,6 +169,7 @@ public sealed class ConnectionStoreTests : IAsyncLifetime
         var first = await Add(_alice, "work");
         var second = await Add(_alice, "home");
 
+        await _store.SetDefaultAsync(_alice, first.Id);
         await _store.SetDefaultAsync(_alice, second.Id);
         _db.ChangeTracker.Clear();
 
@@ -171,21 +180,39 @@ public sealed class ConnectionStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Deleting_the_default_promotes_a_survivor()
+    public async Task Deleting_the_default_does_not_promote_a_survivor()
     {
         Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
 
         var first = await Add(_alice, "work");
         await Add(_alice, "home");
+        await _store.SetDefaultAsync(_alice, first.Id);
 
         await _store.DeleteAsync(_alice, first.Id);
         _db.ChangeTracker.Clear();
 
-        // Otherwise the provider silently loses its default and every unlabelled request
-        // starts asking "which one?" for no visible reason.
+        // Inheriting standing permission because a different connection was removed is
+        // precisely the silent substitution the resolver exists to prevent. Asking is the
+        // correct outcome here, even though it is the more annoying one.
         var all = await _store.ListAsync(_alice);
         Assert.Single(all);
-        Assert.True(all[0].IsDefaultForProvider);
+        Assert.False(all[0].IsDefaultForProvider);
+    }
+
+    [SkippableFact]
+    public async Task Clearing_a_default_leaves_the_provider_with_none()
+    {
+        Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
+
+        var work = await Add(_alice, "work");
+        await Add(_alice, "home");
+        await _store.SetDefaultAsync(_alice, work.Id);
+
+        await _store.ClearDefaultAsync(_alice, ProviderKind.Microsoft);
+        _db.ChangeTracker.Clear();
+
+        var all = await _store.ListAsync(_alice);
+        Assert.All(all, c => Assert.False(c.IsDefaultForProvider));
     }
 
     // ── reconnect semantics ──────────────────────────────────────────────────

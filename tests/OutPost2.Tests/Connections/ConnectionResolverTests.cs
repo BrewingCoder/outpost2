@@ -51,10 +51,38 @@ public class ConnectionResolverTests
     }
 
     [Fact]
-    public void Single_capable_connection_needs_no_label()
+    public void Sole_capable_connection_is_still_not_chosen_unless_it_is_the_default()
     {
+        // Being the only candidate is not consent. If it were, adding a second connection
+        // would silently change what an unlabelled request already does — the user would
+        // have configured the change without ever being shown it.
         var r = ConnectionResolver.Resolve([Conn("work")], Read, null, isWrite: false);
+
+        Assert.Equal(ResolutionKind.Ambiguous, r.Kind);
+        Assert.False(r.IsActionable);
+        Assert.Contains("work", r.SpokenSummary);
+
+        // ...and it must not ask "which one?" of a list with one entry.
+        Assert.DoesNotContain("Which one", r.SpokenSummary);
+    }
+
+    [Fact]
+    public void Sole_capable_connection_resolves_once_it_is_made_the_default()
+    {
+        var r = ConnectionResolver.Resolve([Conn("work", isDefault: true)], Read, null, isWrite: false);
+
         Assert.Equal(ResolutionKind.Single, r.Kind);
+        Assert.Equal("work", r.Connection!.Label);
+    }
+
+    [Fact]
+    public void A_provider_with_no_default_asks_rather_than_guessing()
+    {
+        var r = ConnectionResolver.Resolve([Conn("lab"), Conn("indelible")], Read, null, isWrite: false);
+
+        Assert.Equal(ResolutionKind.Ambiguous, r.Kind);
+        Assert.Contains("lab", r.SpokenSummary);
+        Assert.Contains("indelible", r.SpokenSummary);
     }
 
     [Fact]

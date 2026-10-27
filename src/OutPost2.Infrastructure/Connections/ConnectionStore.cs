@@ -20,6 +20,12 @@ public interface IConnectionStore
     Task SetCredentialAsync(Connection connection, string credential, CancellationToken ct = default);
 
     Task SetDefaultAsync(Guid userId, Guid connectionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Leaves a provider with no default, so every unlabelled request must name a
+    /// connection. The right setting whenever picking wrong is worse than being asked.
+    /// </summary>
+    Task ClearDefaultAsync(Guid userId, ProviderKind provider, CancellationToken ct = default);
     Task SetStateAsync(Guid userId, Guid connectionId, ConnectionState state, CancellationToken ct = default);
     Task SetCapabilityEnabledAsync(Guid userId, Guid connectionId, string capability, bool enabled, CancellationToken ct = default);
     Task RenameAsync(Guid userId, Guid connectionId, string label, CancellationToken ct = default);
@@ -80,9 +86,6 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
             return existing;
         }
 
-        var isFirstForProvider = !await db.Connections
-            .AnyAsync(c => c.UserId == userId && c.Provider == provider, ct);
-
         var created = new Connection
         {
             UserId = userId,
@@ -94,9 +97,10 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
             SealedCredential = sealedCredential,
             State = ConnectionState.Active,
             LastHealthyAt = DateTimeOffset.UtcNow,
-            // First connection for a provider becomes its default, so a lone connection
-            // never forces a "which one?" question that has only one possible answer.
-            IsDefaultForProvider = isFirstForProvider,
+            // No connection becomes a default on its own. A default is standing
+            // permission to act on an unnamed request, and that is the user's call to
+            // make, not a side effect of being added first.
+            IsDefaultForProvider = false,
             Capabilities = capabilities.ToList(),
         };
 
@@ -133,6 +137,18 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
         await db.SaveChangesAsync(ct);
 
         target.IsDefaultForProvider = true;
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task ClearDefaultAsync(Guid userId, ProviderKind provider, CancellationToken ct = default)
+    {
+        var current = await db.Connections
+            .Where(c => c.UserId == userId && c.Provider == provider && c.IsDefaultForProvider)
+            .ToListAsync(ct);
+
+        if (current.Count == 0) return;
+
+        foreach (var c in current) c.IsDefaultForProvider = false;
         await db.SaveChangesAsync(ct);
     }
 
@@ -178,24 +194,11 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
         var c = await GetAsync(userId, connectionId, ct);
         if (c is null) return;
 
-        var wasDefault = c.IsDefaultForProvider;
-        var provider = c.Provider;
+        // Deleting the default does NOT promote a survivor. Inheriting standing
+        // permission to act unnamed, because a different connection was removed, is
+        // exactly the silent substitution the whole resolver exists to prevent.
         db.Connections.Remove(c);
         await db.SaveChangesAsync(ct);
-
-        // Promote a survivor, or the provider silently loses its default and every
-        // unlabelled request starts asking "which one?" for no reason the user can see.
-        if (!wasDefault) return;
-
-        var survivor = await db.Connections
-            .Where(x => x.UserId == userId && x.Provider == provider)
-            .OrderBy(x => x.AddedAt).FirstOrDefaultAsync(ct);
-
-        if (survivor is not null)
-        {
-            survivor.IsDefaultForProvider = true;
-            await db.SaveChangesAsync(ct);
-        }
     }
 
     public async Task SetAccountIdentityAsync(

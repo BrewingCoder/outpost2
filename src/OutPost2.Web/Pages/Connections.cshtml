@@ -108,7 +108,16 @@ else
                     {
                         <form method="post" action="/connections/@c.Id/default" class="d-inline">
     @Html.AntiForgeryToken()
-                            <button class="btn btn-sm btn-outline-primary">Make default</button>
+                            <button class="btn btn-sm btn-outline-primary"
+                                    title="Unnamed requests for @c.Provider will use this one.">Make default</button>
+                        </form>
+                    }
+                    else
+                    {
+                        <form method="post" action="/connections/@c.Id/undefault" class="d-inline">
+    @Html.AntiForgeryToken()
+                            <button class="btn btn-sm btn-outline-secondary"
+                                    title="Unnamed requests for @c.Provider will ask which connection to use.">Clear default</button>
                         </form>
                     }
                     <form method="post" action="/connections/@c.Id/delete" class="d-inline"

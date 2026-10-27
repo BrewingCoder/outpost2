@@ -123,6 +123,15 @@ public sealed class LiveYouTrackProbe(ITestOutputHelper output) : IDisposable
         Assert.Equal(ResolutionKind.Single, byName.Kind);
         Assert.Equal(trackers[0].Label, byName.Connection!.Label);
 
+        // No tracker is nominated, so even a read must ask. Picking the wrong tracker for
+        // "what's on my plate" quietly answers about the wrong client's work.
+        if (!trackers.Any(t => t.IsDefaultForProvider))
+        {
+            var vagueRead = ConnectionResolver.Resolve(trackers, Read, label: null, isWrite: false);
+            output.WriteLine($"unlabelled READ (no default) -> {vagueRead.Kind}: {vagueRead.SpokenSummary}");
+            Assert.Equal(ResolutionKind.Ambiguous, vagueRead.Kind);
+        }
+
         var fanOut = ConnectionResolver.Resolve(trackers, Read, "all", isWrite: false);
         output.WriteLine($"'all' -> {fanOut.Kind}: {fanOut.SpokenSummary}");
         Assert.Equal(ResolutionKind.FanOut, fanOut.Kind);

@@ -71,16 +71,20 @@ public static class ConnectionResolver
         }
 
         if (capable.Count == 0) return ConnectionResolution.None(capability, unusable);
-        if (capable.Count == 1) return ConnectionResolution.Single(capable[0], unusable);
 
-        // Several could serve it and the user named none.
-        if (isWrite)
-            return ConnectionResolution.Ambiguous(capable, capability);
-
+        // Nothing is chosen on the user's behalf unless they nominated it. Being the only
+        // candidate is not consent: a provider with no default means "always name one",
+        // and that has to hold at one connection as well as at five — otherwise adding a
+        // second tracker silently changes what the first unlabelled request does.
         var preferred = capable.FirstOrDefault(c => c.IsDefaultForProvider);
-        return preferred is not null
-            ? ConnectionResolution.Single(preferred, unusable)
-            : ConnectionResolution.Ambiguous(capable, capability);
+        if (preferred is null) return ConnectionResolution.Ambiguous(capable, capability);
+
+        // A default is a convenience for reading. It is not standing permission to write
+        // from an identity the user did not name in the moment, and other people see which
+        // identity acted, so once there is a choice to get wrong, ask.
+        if (isWrite && capable.Count > 1) return ConnectionResolution.Ambiguous(capable, capability);
+
+        return ConnectionResolution.Single(preferred, unusable);
     }
 }
 
@@ -152,7 +156,13 @@ public sealed record ConnectionResolution
     {
         Kind = ResolutionKind.Ambiguous,
         Connections = cs,
-        SpokenSummary = $"Which one — {Names(cs)}?",
+
+        // With one candidate "Which one — lab?" is a question with a single answer, which
+        // sounds broken. The reason it is being asked at all is that nothing was nominated,
+        // so say that instead.
+        SpokenSummary = cs.Count == 1
+            ? $"Tell me which connection to use — you have {Names(cs)}."
+            : $"Which one — {Names(cs)}?",
     };
 
     public static ConnectionResolution None(string capability, IReadOnlyList<Connection>? degraded = null) => new()
