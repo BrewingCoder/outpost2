@@ -22,7 +22,7 @@ public class ConnectionResolverTests
             Provider = provider,
             Instance = $"{label}.example",
             AuthKind = AuthKind.OAuth2,
-            CredentialRef = $"ref/{label}",
+            SealedCredential = $"ref/{label}",
             State = state,
             IsDefaultForProvider = isDefault,
             Capabilities = caps.Select(c => new Capability

@@ -34,6 +34,8 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Security.ICredentialProtector
 builder.Services.AddScoped<IConnectionStore, ConnectionStore>();
 builder.Services.AddScoped<IPendingConnectionStore, PendingConnectionStore>();
 builder.Services.AddScoped<IMicrosoftConnectionService, MicrosoftConnectionService>();
+builder.Services.AddHttpClient("youtrack").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddScoped<IYouTrackConnectionService, YouTrackConnectionService>();
 
 // The app sits behind the Cloudflare tunnel, which terminates TLS and forwards plain HTTP
 // to the container. Without honouring X-Forwarded-Proto, ASP.NET Core believes the request

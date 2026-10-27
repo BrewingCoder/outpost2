@@ -36,11 +36,6 @@ namespace OutPost2.Infrastructure.Data.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)");
 
-                    b.Property<string>("CredentialRef")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
                     b.Property<string>("HomeAccountId")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
@@ -68,6 +63,10 @@ namespace OutPost2.Infrastructure.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)");
+
+                    b.Property<string>("SealedCredential")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<string>("State")
                         .IsRequired()

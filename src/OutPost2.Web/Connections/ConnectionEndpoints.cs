@@ -91,6 +91,51 @@ public static class ConnectionEndpoints
             }
         }).AllowAnonymous();
 
+        // ── add a YouTrack connection (PAT, no redirect) ────────────────────
+        group.MapPost("/youtrack/add", async (
+            HttpContext ctx,
+            IYouTrackConnectionService youtrack,
+            IConnectionStore connections,
+            string label, string baseUrl, string token) =>
+        {
+            var userId = ctx.User.UserId();
+            label = label.Trim();
+
+            if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(token))
+                return Results.Redirect("/connections?error=Name,+server+and+token+are+all+required.");
+
+            if (await connections.FindByLabelAsync(userId, label) is not null)
+                return Results.Redirect($"/connections?error={Uri.EscapeDataString($"You already have a connection called '{label}'.")}");
+
+            try
+            {
+                var c = await youtrack.ConnectAsync(userId, baseUrl, token, label);
+                return Results.Redirect($"/connections?added={Uri.EscapeDataString(c.Label)}");
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Redirect($"/connections?error={Uri.EscapeDataString(ex.Message)}");
+            }
+        });
+
+        // ── re-check a connection's health ──────────────────────────────────
+        group.MapPost("/{id:guid}/check", async (
+            HttpContext ctx, IConnectionStore s, IYouTrackConnectionService yt, Guid id) =>
+        {
+            var c = await s.GetAsync(ctx.User.UserId(), id);
+            if (c is null) return Results.Redirect("/connections");
+
+            if (c.Provider == ProviderKind.YouTrack)
+            {
+                var ok = await yt.CheckHealthAsync(c);
+                return Results.Redirect(ok
+                    ? "/connections"
+                    : $"/connections?error={Uri.EscapeDataString($"{c.Label} is no longer authenticating - the token may have been revoked or expired.")}");
+            }
+
+            return Results.Redirect("/connections");
+        });
+
         // ── management ──────────────────────────────────────────────────────
         group.MapPost("/{id:guid}/default", async (HttpContext ctx, IConnectionStore s, Guid id) =>
         {

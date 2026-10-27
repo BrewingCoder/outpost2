@@ -117,3 +117,32 @@ else
         <button class="btn btn-primary w-100" type="submit">Connect</button>
     </div>
 </form>
+
+<hr />
+
+<h2 class="h5">Add a YouTrack server</h2>
+<form method="post" action="/connections/youtrack/add" class="row g-2 align-items-end" style="max-width:52rem">
+    <div class="col-sm-3">
+        <label class="form-label" for="ytlabel">Name it</label>
+        <input class="form-control" id="ytlabel" name="label" placeholder="lab tickets" required maxlength="60" />
+    </div>
+    <div class="col-sm-4">
+        <label class="form-label" for="baseUrl">Server</label>
+        <input class="form-control" id="baseUrl" name="baseUrl" placeholder="yt.example.com" required />
+    </div>
+    <div class="col-sm-3">
+        <label class="form-label" for="token">Permanent token</label>
+        <input class="form-control" id="token" name="token" type="password" placeholder="perm-..." required
+               autocomplete="off" />
+    </div>
+    <div class="col-sm-2">
+        <button class="btn btn-primary w-100" type="submit">Connect</button>
+    </div>
+    <div class="col-12">
+        <div class="form-text">
+            The token is validated against the server before it is stored, then encrypted.
+            OutPost2 cannot narrow what a token is allowed to do &mdash; whatever you paste,
+            it holds. The capability switches above are our own restraint, not an enforced limit.
+        </div>
+    </div>
+</form>

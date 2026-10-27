@@ -60,7 +60,7 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
 
         if (existing is not null)
         {
-            existing.CredentialRef = sealedCredential;
+            existing.SealedCredential = sealedCredential;
             existing.State = ConnectionState.Active;
             existing.LastHealthyAt = DateTimeOffset.UtcNow;
 
@@ -88,7 +88,7 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
             Instance = instance,
             HomeAccountId = homeAccountId,
             AuthKind = authKind,
-            CredentialRef = sealedCredential,
+            SealedCredential = sealedCredential,
             State = ConnectionState.Active,
             LastHealthyAt = DateTimeOffset.UtcNow,
             // First connection for a provider becomes its default, so a lone connection
@@ -104,13 +104,13 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
 
     public async Task<string?> GetCredentialAsync(Connection connection, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(connection.CredentialRef)) return null;
-        return await protector.UnprotectAsync(ProtectedCredential.FromJson(connection.CredentialRef), ct);
+        if (string.IsNullOrWhiteSpace(connection.SealedCredential)) return null;
+        return await protector.UnprotectAsync(ProtectedCredential.FromJson(connection.SealedCredential), ct);
     }
 
     public async Task SetCredentialAsync(Connection connection, string credential, CancellationToken ct = default)
     {
-        connection.CredentialRef = (await protector.ProtectAsync(credential, ct)).ToJson();
+        connection.SealedCredential = (await protector.ProtectAsync(credential, ct)).ToJson();
         await db.SaveChangesAsync(ct);
     }
 

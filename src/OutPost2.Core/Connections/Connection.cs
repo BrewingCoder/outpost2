@@ -29,10 +29,15 @@ public sealed class Connection
     public required AuthKind AuthKind { get; init; }
 
     /// <summary>
-    /// Opaque handle into the encrypted credential store. Never the credential itself —
-    /// credentials are envelope-encrypted with a Vault Transit DEK (OP2-5, OP2-15).
+    /// The envelope-encrypted credential itself, stored inline as JSON (OP2-5, OP2-15):
+    /// a Vault-wrapped data key plus AES-GCM ciphertext, nonce and tag.
+    /// <para>
+    /// Unbounded by design. A YouTrack PAT seals to a few hundred bytes, but an MSAL token
+    /// cache runs to kilobytes — an earlier varchar(200) cap silently worked in unit tests
+    /// and failed against real data.
+    /// </para>
     /// </summary>
-    public required string CredentialRef { get; set; }
+    public required string SealedCredential { get; set; }
 
     /// <summary>
     /// For Microsoft connections: MSAL's <c>home_account_id</c> (<c>&lt;oid&gt;.&lt;tid&gt;</c>),
