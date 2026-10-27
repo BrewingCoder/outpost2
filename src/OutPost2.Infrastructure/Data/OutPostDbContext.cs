@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using OutPost2.Core.Auth;
 using OutPost2.Core.Connections;
+using OutPost2.Core.Files;
+using OutPost2.Core.Jobs;
 using OutPost2.Core.Users;
 
 namespace OutPost2.Infrastructure.Data;
@@ -14,6 +16,8 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
     public DbSet<OAuthClient> OAuthClients => Set<OAuthClient>();
     public DbSet<OAuthAuthCode> OAuthAuthCodes => Set<OAuthAuthCode>();
     public DbSet<OAuthToken> OAuthTokens => Set<OAuthToken>();
+    public DbSet<StagedFile> StagedFiles => Set<StagedFile>();
+    public DbSet<Job> Jobs => Set<Job>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -122,6 +126,37 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             // Refresh lookups hit this on every renewal.
             e.HasIndex(t => t.RefreshTokenHash);
             e.HasIndex(t => new { t.UserId, t.RevokedAt });
+        });
+
+        b.Entity<StagedFile>(e =>
+        {
+            e.ToTable("staged_files");
+            e.HasKey(f => f.Id);
+            e.Property(f => f.Name).HasMaxLength(200).IsRequired();
+            e.Property(f => f.FileName).HasMaxLength(300).IsRequired();
+            e.Property(f => f.ContentType).HasMaxLength(200).IsRequired();
+            e.Property(f => f.StorageKey).HasMaxLength(200).IsRequired();
+            e.Property(f => f.Sha256).HasMaxLength(64);
+
+            e.HasIndex(f => new { f.UserId, f.ExpiresAt });
+        });
+
+        b.Entity<Job>(e =>
+        {
+            e.ToTable("jobs");
+            e.HasKey(j => j.Id);
+            e.Property(j => j.Kind).HasConversion<string>().HasMaxLength(40);
+            e.Property(j => j.State).HasConversion<string>().HasMaxLength(40);
+            e.Property(j => j.Description).HasMaxLength(500).IsRequired();
+            e.Property(j => j.ConnectionLabel).HasMaxLength(60);
+            e.Property(j => j.IdempotencyKey).HasMaxLength(128).IsRequired();
+            e.Property(j => j.Detail).HasMaxLength(500);
+            e.Property(j => j.Error).HasMaxLength(1000);
+
+            // Idempotency is enforced by the DATABASE, not by a check-then-insert that can
+            // race: two concurrent retries of the same tool call must not both send.
+            e.HasIndex(j => new { j.UserId, j.IdempotencyKey }).IsUnique();
+            e.HasIndex(j => new { j.UserId, j.State });
         });
     }
 }

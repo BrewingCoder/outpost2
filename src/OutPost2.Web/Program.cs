@@ -34,6 +34,8 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Auth.IOAuthService, OutPost2.
 builder.Services.Configure<OutPost2.Infrastructure.Security.VaultOptions>(
     builder.Configuration.GetSection(OutPost2.Infrastructure.Security.VaultOptions.SectionName));
 builder.Services.Configure<EntraOptions>(builder.Configuration.GetSection(EntraOptions.SectionName));
+builder.Services.Configure<OutPost2.Infrastructure.Files.StorageOptions>(
+    builder.Configuration.GetSection(OutPost2.Infrastructure.Files.StorageOptions.SectionName));
 
 builder.Services.AddSingleton<OutPost2.Infrastructure.Security.IVaultTransitClient,
                               OutPost2.Infrastructure.Security.VaultTransitClient>();
@@ -46,6 +48,10 @@ builder.Services.AddHttpClient("graph").ConfigureHttpClient(c => c.Timeout = Tim
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMicrosoftConnectionServiceAccessor>(
     sp => sp.GetRequiredService<IMicrosoftConnectionService>());
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailService, OutPost2.Infrastructure.Mail.MailService>();
+builder.Services.AddSingleton<OutPost2.Infrastructure.Files.IObjectStore, OutPost2.Infrastructure.Files.S3ObjectStore>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Files.IStagingService, OutPost2.Infrastructure.Files.StagingService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Mail.ILargeAttachmentSender,
+                           OutPost2.Infrastructure.Mail.LargeAttachmentSender>();
 builder.Services.AddHttpClient("youtrack").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<IYouTrackConnectionService, YouTrackConnectionService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Issues.IYouTrackService,
