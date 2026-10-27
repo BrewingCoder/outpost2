@@ -20,6 +20,13 @@ public interface IMailService
         Connection connection, string query, int top = 25, CancellationToken ct = default);
 
     Task SendAsync(Connection connection, OutgoingMail mail, CancellationToken ct = default);
+
+    Task<IReadOnlyList<MailAttachment>> ListAttachmentsAsync(
+        Connection connection, string messageId, CancellationToken ct = default);
+
+    /// <summary>Downloads one attachment's bytes. Null when it has none to give.</summary>
+    Task<Stream?> OpenAttachmentAsync(
+        Connection connection, string messageId, string attachmentId, CancellationToken ct = default);
 }
 
 public sealed class MailService(
@@ -158,6 +165,62 @@ public sealed class MailService(
 
         static object Recipient(string address) => new { emailAddress = new { address } };
     }
+
+    public async Task<IReadOnlyList<MailAttachment>> ListAttachmentsAsync(
+        Connection connection, string messageId, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+
+        var q = $"me/messages/{Uri.EscapeDataString(messageId)}/attachments" +
+                "?$select=id,name,contentType,size,isInline";
+
+        var page = await http.GetFromJsonAsync<GraphList<GraphAttachment>>(q, ct);
+
+        return (page?.Value ?? [])
+            // Inline images are attachments as far as Graph is concerned. Listing them
+            // would make every HTML newsletter look like it has fourteen attachments.
+            .Where(a => !a.IsInline)
+            .Select(a => new MailAttachment
+            {
+                Id = a.Id,
+                Name = a.Name ?? "(unnamed)",
+                ContentType = a.ContentType ?? "application/octet-stream",
+                SizeBytes = a.Size,
+
+                // A reference attachment is a OneDrive/SharePoint LINK with no bytes behind
+                // it. Downloading it the normal way returns nothing useful, so it has to be
+                // distinguished rather than failing mysteriously.
+                IsLink = a.ODataType?.Contains("referenceAttachment", StringComparison.OrdinalIgnoreCase) == true,
+                IsEmbeddedItem = a.ODataType?.Contains("itemAttachment", StringComparison.OrdinalIgnoreCase) == true,
+            })
+            .ToList();
+    }
+
+    public async Task<Stream?> OpenAttachmentAsync(
+        Connection connection, string messageId, string attachmentId, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+
+        var q = $"me/messages/{Uri.EscapeDataString(messageId)}/attachments/" +
+                $"{Uri.EscapeDataString(attachmentId)}/$value";
+
+        var resp = await http.GetAsync(q, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!resp.IsSuccessStatusCode) return null;
+
+        // Copy out before the HttpClient is disposed by the using above.
+        var ms = new MemoryStream();
+        await resp.Content.CopyToAsync(ms, ct);
+        ms.Position = 0;
+        return ms;
+    }
+
+    private sealed record GraphAttachment(
+        [property: JsonPropertyName("id")] string Id,
+        [property: JsonPropertyName("name")] string? Name,
+        [property: JsonPropertyName("contentType")] string? ContentType,
+        [property: JsonPropertyName("size")] long Size,
+        [property: JsonPropertyName("isInline")] bool IsInline,
+        [property: JsonPropertyName("@odata.type")] string? ODataType);
 
     private static string Describe(System.Net.HttpStatusCode status, string body)
     {

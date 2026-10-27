@@ -50,6 +50,8 @@ builder.Services.AddHttpClient("graph").ConfigureHttpClient(c => c.Timeout = Tim
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMicrosoftConnectionServiceAccessor>(
     sp => sp.GetRequiredService<IMicrosoftConnectionService>());
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailService, OutPost2.Infrastructure.Mail.MailService>();
+builder.Services.AddSingleton<OutPost2.Infrastructure.Mail.IAttachmentExtractor,
+                              OutPost2.Infrastructure.Mail.AttachmentExtractor>();
 builder.Services.AddSingleton<OutPost2.Infrastructure.Files.IObjectStore, OutPost2.Infrastructure.Files.S3ObjectStore>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Files.IStagingService, OutPost2.Infrastructure.Files.StagingService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.ILargeAttachmentSender,

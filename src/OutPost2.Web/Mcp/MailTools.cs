@@ -29,7 +29,8 @@ public sealed class MailTools(
     IHttpContextAccessor http,
     IConnectionStore connections,
     IMailService mail,
-    IMessageIndex index)
+    IMessageIndex index,
+    OutPost2.Infrastructure.Mail.IAttachmentExtractor extractor)
 {
     private Guid UserId => http.HttpContext?.User.UserId()
         ?? throw new InvalidOperationException("No authenticated user on this MCP request.");
@@ -221,6 +222,74 @@ public sealed class MailTools(
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "list_attachments")]
+    [Description("List the attachments on a message, using the number from the last listing.")]
+    public async Task<string> ListAttachments(
+        [Description("The number shown in the last listing.")] int number,
+        CancellationToken ct = default)
+    {
+        var remembered = index.Resolve(UserId, number);
+        if (remembered is null) return "I don't have that one — list your messages first.";
+
+        var (messageId, label) = remembered.Value;
+        var c = await connections.FindByLabelAsync(UserId, label, ct);
+        if (c is null) return $"The {label} connection has gone.";
+
+        var items = await mail.ListAttachmentsAsync(c, messageId, ct);
+        if (items.Count == 0) return "That message has no attachments.";
+
+        var sb = new StringBuilder($"{items.Count} attachment{(items.Count == 1 ? "" : "s")}:\n");
+        var n = 1;
+        foreach (var a in items)
+        {
+            sb.Append($"{n++}. {a.Name} ({a.HumanSize})");
+            if (a.IsLink) sb.Append(" — a cloud link, not a file");
+            else if (a.IsEmbeddedItem) sb.Append(" — an embedded message");
+            else if (extractor.CanExtract(a.Name, a.ContentType)) sb.Append(" — I can read this");
+            sb.AppendLine();
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    [McpServerTool(Name = "read_attachment")]
+    [Description("Read the text content of an attachment — PDF, Word, Excel, PowerPoint or plain text. Use the message number and the attachment number.")]
+    public async Task<string> ReadAttachment(
+        [Description("The message number from the last listing.")] int messageNumber,
+        [Description("Which attachment, from list_attachments. Defaults to the first.")] int attachmentNumber = 1,
+        CancellationToken ct = default)
+    {
+        var remembered = index.Resolve(UserId, messageNumber);
+        if (remembered is null) return "I don't have that message — list your messages first.";
+
+        var (messageId, label) = remembered.Value;
+        var c = await connections.FindByLabelAsync(UserId, label, ct);
+        if (c is null) return $"The {label} connection has gone.";
+
+        var items = await mail.ListAttachmentsAsync(c, messageId, ct);
+        if (items.Count == 0) return "That message has no attachments.";
+
+        var i = attachmentNumber - 1;
+        if (i < 0 || i >= items.Count)
+            return $"There {(items.Count == 1 ? "is only 1 attachment" : $"are only {items.Count} attachments")}.";
+
+        var a = items[i];
+
+        // Saying why is better than failing: a cloud link genuinely has no bytes to read,
+        // and the user can act on knowing that.
+        if (a.IsLink)
+            return $"\"{a.Name}\" is a cloud link rather than a file, so there is nothing to read directly.";
+        if (a.IsEmbeddedItem)
+            return $"\"{a.Name}\" is an embedded message rather than a document.";
+        if (!extractor.CanExtract(a.Name, a.ContentType))
+            return $"I can't read {a.Name} ({a.ContentType}). I handle PDF, Word, Excel, PowerPoint and text.";
+
+        await using var bytes = await mail.OpenAttachmentAsync(c, messageId, a.Id, ct);
+        if (bytes is null) return $"Couldn't download {a.Name}.";
+
+        var text = await extractor.ExtractAsync(a.Name, bytes, ct);
+        return $"{a.Name}:{Environment.NewLine}{Environment.NewLine}{HtmlToText.Clamp(text, 12000)}";
     }
 
     private static List<string> Split(string? csv) =>
