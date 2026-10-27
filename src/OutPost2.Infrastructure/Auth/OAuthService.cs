@@ -141,12 +141,20 @@ public sealed class OAuthService(OutPostDbContext db) : IOAuthService
     public async Task<OAuthToken?> ValidateAsync(string accessToken, CancellationToken ct = default)
     {
         var hash = Hash(accessToken);
-        var token = await db.OAuthTokens.FirstOrDefaultAsync(t => t.TokenHash == hash, ct);
+
+        // AsNoTracking is load-bearing, not an optimisation. RevokeAsync writes via
+        // ExecuteUpdateAsync, which bypasses the change tracker — so a tracked read would
+        // hand back a cached entity with RevokedAt still null and a revoked token would
+        // keep working. Revocation must be observed on the very next call.
+        var token = await db.OAuthTokens.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.TokenHash == hash, ct);
 
         if (token is null || !token.IsUsable(DateTimeOffset.UtcNow)) return null;
 
-        token.LastUsedAt = DateTimeOffset.UtcNow;
-        await db.SaveChangesAsync(ct);
+        // Set-based for the same reason, and because this runs on every MCP request.
+        await db.OAuthTokens.Where(t => t.TokenHash == hash)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.LastUsedAt, DateTimeOffset.UtcNow), ct);
+
         return token;
     }
 
