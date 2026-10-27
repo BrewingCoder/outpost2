@@ -4,6 +4,9 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OAuth.Claims;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.EntityFrameworkCore;
+using OutPost2.Infrastructure.Data;
+using OutPost2.Infrastructure.Users;
 using OutPost2.Web.Auth;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -13,6 +16,10 @@ builder.Services.AddRazorPages();
 var gh = builder.Configuration.GetSection(GitHubOptions.SectionName).Get<GitHubOptions>()
          ?? new GitHubOptions();
 builder.Services.AddSingleton(gh);
+
+builder.Services.AddDbContext<OutPostDbContext>(o =>
+    o.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
+builder.Services.AddScoped<IUserStore, UserStore>();
 
 // The app sits behind the Cloudflare tunnel, which terminates TLS and forwards plain HTTP
 // to the container. Without honouring X-Forwarded-Proto, ASP.NET Core believes the request
@@ -66,7 +73,7 @@ if (gh.IsConfigured)
         // The allowlist gate. Enforced here, at ticket creation, so an unauthorised identity
         // never reaches the cookie-issuing path: access is ASSIGNED, and the endpoint being
         // public must not imply the product is.
-        o.Events.OnCreatingTicket = ctx =>
+        o.Events.OnCreatingTicket = async ctx =>
         {
             var idClaim = ctx.Identity?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             var login = ctx.Identity?.FindFirst(ClaimTypes.Name)?.Value ?? "(unknown)";
@@ -80,9 +87,18 @@ if (gh.IsConfigured)
                                 login, idClaim ?? "null");
 
                 ctx.Fail($"GitHub user {login} is not authorised to use OutPost2.");
+                return;
             }
 
-            return Task.CompletedTask;
+            // Allowlisted: materialise the product user. Done after the gate, so an
+            // unauthorised identity never creates a row.
+            var store = ctx.HttpContext.RequestServices.GetRequiredService<IUserStore>();
+            var user = await store.UpsertOnSignInAsync(
+                githubId, login, ctx.Identity?.FindFirst("urn:github:avatar")?.Value);
+
+            // Carry our own user id, so nothing downstream has to re-derive identity from
+            // the GitHub claim. Every connection lookup is scoped by this.
+            ctx.Identity?.AddClaim(new Claim("op2:uid", user.Id.ToString()));
         };
 
         o.Events.OnRemoteFailure = ctx =>
@@ -99,6 +115,14 @@ builder.Services.AddAuthorization();
 var app = builder.Build();
 
 app.UseForwardedHeaders();
+
+// Dev convenience only. Production applies migrations as a deliberate deploy step, not on
+// boot — concurrent replicas racing to migrate is a good way to corrupt a schema.
+if (app.Environment.IsDevelopment())
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    await scope.ServiceProvider.GetRequiredService<OutPostDbContext>().Database.MigrateAsync();
+}
 
 if (!app.Environment.IsDevelopment())
 {
