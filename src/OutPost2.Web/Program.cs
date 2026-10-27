@@ -10,6 +10,8 @@ using OutPost2.Infrastructure.Users;
 using OutPost2.Infrastructure.Connections;
 using OutPost2.Web.Auth;
 using OutPost2.Web.Connections;
+using OutPost2.Web.Files;
+using OutPost2.Web.Jobs;
 using OutPost2.Web.Mcp;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -52,6 +54,9 @@ builder.Services.AddSingleton<OutPost2.Infrastructure.Files.IObjectStore, OutPos
 builder.Services.AddScoped<OutPost2.Infrastructure.Files.IStagingService, OutPost2.Infrastructure.Files.StagingService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.ILargeAttachmentSender,
                            OutPost2.Infrastructure.Mail.LargeAttachmentSender>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Jobs.IJobService, OutPost2.Infrastructure.Jobs.JobService>();
+builder.Services.AddHostedService<JobRunner>();
+builder.Services.AddHostedService<HousekeepingService>();
 builder.Services.AddHttpClient("youtrack").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<IYouTrackConnectionService, YouTrackConnectionService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Issues.IYouTrackService,
@@ -172,6 +177,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapRazorPages();
 app.MapConnectionEndpoints();
+app.MapFileEndpoints();
 var publicBaseUrl = builder.Configuration["OutPost2:PublicBaseUrl"] ?? "https://outpost.brewingcoder.com";
 app.MapMcpOAuth(publicBaseUrl);
 

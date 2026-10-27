@@ -1,0 +1,63 @@
+@page "/files"
+@model OutPost2.Web.Pages.FilesModel
+@{ ViewData["Title"] = "Files"; }
+
+<h1 class="display-6">Files</h1>
+<p class="text-muted">
+    Upload here, then refer to a file by its name in conversation &mdash;
+    "attach the signed contract". You name it now, while you have a screen,
+    so you never have to spell anything out later.
+</p>
+
+@if (Model.Error is not null)
+{
+    <div class="alert alert-danger">@Model.Error</div>
+}
+@if (Model.Added is not null)
+{
+    <div class="alert alert-success">Uploaded <strong>@Model.Added</strong>.</div>
+}
+
+<form method="post" action="/files/upload" enctype="multipart/form-data"
+      class="row g-2 align-items-end mb-4" style="max-width:46rem">
+    <div class="col-sm-5">
+        <label class="form-label" for="file">File</label>
+        <input class="form-control" type="file" id="file" name="file" required />
+    </div>
+    <div class="col-sm-5">
+        <label class="form-label" for="name">Call it</label>
+        <input class="form-control" id="name" name="name" placeholder="signed contract" maxlength="200" />
+        <div class="form-text">Optional &mdash; defaults to the filename.</div>
+    </div>
+    <div class="col-sm-2">
+        <button class="btn btn-primary w-100" type="submit">Upload</button>
+    </div>
+</form>
+
+@if (Model.Files.Count == 0)
+{
+    <div class="alert alert-light border">Nothing staged.</div>
+}
+else
+{
+    <table class="table align-middle">
+        <thead><tr><th>Name</th><th>File</th><th>Size</th><th>Expires</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var f in Model.Files)
+        {
+            <tr>
+                <td><strong>@f.Name</strong></td>
+                <td><code class="small">@f.FileName</code></td>
+                <td>@f.HumanSize</td>
+                <td class="small text-muted">@f.ExpiresAt.ToLocalTime().ToString("d MMM HH:mm")</td>
+                <td class="text-nowrap">
+                    <a class="btn btn-sm btn-outline-secondary" href="/files/@f.Id/download">Download</a>
+                    <form method="post" action="/files/@f.Id/delete" class="d-inline">
+                        <button class="btn btn-sm btn-outline-danger">Remove</button>
+                    </form>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}

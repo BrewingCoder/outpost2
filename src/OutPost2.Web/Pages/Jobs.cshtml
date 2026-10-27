@@ -1,0 +1,74 @@
+@page "/jobs"
+@model OutPost2.Web.Pages.JobsModel
+@using OutPost2.Core.Jobs
+@{ ViewData["Title"] = "Queue"; }
+
+<h1 class="display-6">Queue</h1>
+<p class="text-muted">
+    Things in flight, things waiting for your approval, and what already happened.
+    Anything proposed by voice that needs a second look lands here, so you can
+    read it properly on a screen before it goes.
+</p>
+
+@if (Model.Items.Count == 0)
+{
+    <div class="alert alert-light border">Nothing in the queue.</div>
+}
+else
+{
+    <table class="table align-middle">
+        <thead><tr><th>What</th><th>Where</th><th>Status</th><th>When</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var j in Model.Items)
+        {
+            <tr>
+                <td>@j.Description</td>
+                <td>@(j.ConnectionLabel ?? "—")</td>
+                <td>
+                    @switch (j.State)
+                    {
+                        case JobState.Sent:
+                            <span class="badge text-bg-success">sent</span>
+                            break;
+                        case JobState.Failed:
+                            <span class="badge text-bg-danger">failed</span>
+                            <div class="small text-muted">@j.Error</div>
+                            break;
+                        case JobState.Cancelled:
+                            <span class="badge text-bg-secondary">cancelled</span>
+                            break;
+                        case JobState.AwaitingApproval:
+                            <span class="badge text-bg-warning">needs approval</span>
+                            break;
+                        default:
+                            <span class="badge text-bg-info">@j.State.ToString().ToLower()</span>
+                            @if (j.PercentComplete > 0)
+                            {
+                                <div class="progress mt-1" style="height:4px;width:8rem">
+                                    <div class="progress-bar" style="width:@(j.PercentComplete)%"></div>
+                                </div>
+                                <div class="small text-muted">@j.Detail</div>
+                            }
+                            break;
+                    }
+                </td>
+                <td class="small text-muted">@j.CreatedAt.ToLocalTime().ToString("d MMM HH:mm")</td>
+                <td class="text-nowrap">
+                    @if (j.State == JobState.AwaitingApproval)
+                    {
+                        <form method="post" action="/jobs/@j.Id/approve" class="d-inline">
+                            <button class="btn btn-sm btn-primary">Approve</button>
+                        </form>
+                    }
+                    @if (!j.IsTerminal)
+                    {
+                        <form method="post" action="/jobs/@j.Id/cancel" class="d-inline">
+                            <button class="btn btn-sm btn-outline-danger">Cancel</button>
+                        </form>
+                    }
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
