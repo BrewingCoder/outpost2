@@ -105,9 +105,17 @@ public sealed class YouTrackConnectionService(
         log.LogInformation("Connecting YouTrack {Instance} as {Login} (label {Label}).",
             instance, probe.Login, label);
 
-        return await connections.UpsertAsync(
+        var connection = await connections.UpsertAsync(
             userId, ProviderKind.YouTrack, instance, probe.Login,
             label, AuthKind.PersonalAccessToken, token, capabilities, ct);
+
+        // Record WHO the token authenticates as, so the UI can show it. A label alone does
+        // not tell you which identity is behind a connection, and a Microsoft connection
+        // showing only an opaque tenant GUID is exactly how the wrong mailbox got attached
+        // once already. A tracker reached with an admin PAT deserves the same scrutiny.
+        await connections.SetAccountIdentityAsync(connection, probe.Login, isPersonal: false, ct);
+
+        return connection;
     }
 
     public async Task<bool> CheckHealthAsync(Connection connection, CancellationToken ct = default)
