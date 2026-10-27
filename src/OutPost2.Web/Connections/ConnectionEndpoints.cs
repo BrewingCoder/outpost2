@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using OutPost2.Core.Connections;
@@ -24,8 +25,8 @@ public static class ConnectionEndpoints
             IPendingConnectionStore pendings,
             IMicrosoftConnectionService microsoft,
             IConnectionStore connections,
-            string label,
-            string? tenantHint) =>
+            [FromForm] string label,
+            [FromForm] string? tenantHint) =>
         {
             var userId = ctx.User.UserId();
             label = label.Trim();
@@ -39,7 +40,12 @@ public static class ConnectionEndpoints
                 return Results.Redirect($"/connections?error={Uri.EscapeDataString($"You already have a connection called '{label}'.")}");
 
             var pending = await pendings.CreateAsync(userId, ProviderKind.Microsoft, label, tenantHint);
+
+            // BuildAuthorizeUrlAsync replaces the verifier with MSAL's own, so the record
+            // must be saved again afterwards or redemption will present the wrong one.
             var url = await microsoft.BuildAuthorizeUrlAsync(pending);
+            await pendings.SaveAsync(pending);
+
             return Results.Redirect(url.ToString());
         });
 
@@ -96,7 +102,7 @@ public static class ConnectionEndpoints
             HttpContext ctx,
             IYouTrackConnectionService youtrack,
             IConnectionStore connections,
-            string label, string baseUrl, string token) =>
+            [FromForm] string label, [FromForm] string baseUrl, [FromForm] string token) =>
         {
             var userId = ctx.User.UserId();
             label = label.Trim();
@@ -143,7 +149,7 @@ public static class ConnectionEndpoints
             return Results.Redirect("/connections");
         });
 
-        group.MapPost("/{id:guid}/rename", async (HttpContext ctx, IConnectionStore s, Guid id, string label) =>
+        group.MapPost("/{id:guid}/rename", async (HttpContext ctx, IConnectionStore s, Guid id, [FromForm] string label) =>
         {
             try { await s.RenameAsync(ctx.User.UserId(), id, label.Trim()); return Results.Redirect("/connections"); }
             catch (InvalidOperationException ex) { return Results.Redirect($"/connections?error={Uri.EscapeDataString(ex.Message)}"); }

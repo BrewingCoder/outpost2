@@ -10,6 +10,7 @@
 </p>
 
 <form method="post" action="/oauth/approve">
+    @Html.AntiForgeryToken()
     <input type="hidden" name="client_id" value="@Model.ClientId" />
     <input type="hidden" name="redirect_uri" value="@Model.RedirectUri" />
     <input type="hidden" name="code_challenge" value="@Model.CodeChallenge" />

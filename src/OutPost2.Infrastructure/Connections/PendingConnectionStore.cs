@@ -17,6 +17,9 @@ public interface IPendingConnectionStore
     /// </summary>
     Task<PendingConnection?> ConsumeAsync(string state, Guid userId, CancellationToken ct = default);
 
+    /// <summary>Persists changes to a pending record, notably the PKCE verifier MSAL assigns.</summary>
+    Task SaveAsync(PendingConnection pending, CancellationToken ct = default);
+
     Task<int> PurgeExpiredAsync(CancellationToken ct = default);
 }
 
@@ -66,6 +69,9 @@ public sealed class PendingConnectionStore(OutPostDbContext db) : IPendingConnec
         await db.SaveChangesAsync(ct);
         return pending;
     }
+
+    public Task SaveAsync(PendingConnection pending, CancellationToken ct = default) =>
+        db.SaveChangesAsync(ct);
 
     public Task<int> PurgeExpiredAsync(CancellationToken ct = default) =>
         db.PendingConnections

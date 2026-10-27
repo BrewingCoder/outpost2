@@ -27,10 +27,14 @@ public sealed class PendingConnection
     public required string Label { get; init; }
 
     /// <summary>
-    /// PKCE verifier. Protects the authorization code even if it leaks in transit —
-    /// cheap, and expected of a modern OAuth client.
+    /// PKCE verifier. Protects the authorization code even if it leaks in transit.
+    /// <para>
+    /// Settable because MSAL generates the pair itself when building the authorize URL,
+    /// and the verifier it produces is the one Entra will expect back at redemption —
+    /// ours would be rejected.
+    /// </para>
     /// </summary>
-    public required string CodeVerifier { get; init; }
+    public required string CodeVerifier { get; set; }
 
     /// <summary>Optional tenant hint, so a user can target a specific directory.</summary>
     public string? TenantHint { get; init; }

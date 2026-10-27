@@ -177,6 +177,11 @@ app.UseStaticFiles();
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Required by [FromForm] in minimal APIs, and wanted anyway: these forms change
+// connections and post credentials. SameSite=Lax already blocks cross-site POSTs, but
+// an app custodying other people's mailboxes should not rely on one mechanism.
+app.UseAntiforgery();
 app.MapRazorPages();
 app.MapConnectionEndpoints();
 app.MapFileEndpoints();

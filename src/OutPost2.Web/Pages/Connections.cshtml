@@ -68,6 +68,7 @@ else
                     @foreach (var cap in c.Capabilities)
                     {
                         <form method="post" action="/connections/@c.Id/capability?capability=@cap.Name&enabled=@((!cap.Enabled).ToString().ToLower())" class="d-inline">
+    @Html.AntiForgeryToken()
                             <button type="submit"
                                     class="btn btn-sm @(cap.Usable ? "btn-success" : "btn-outline-secondary") me-1"
                                     title="@(cap.Granted ? (cap.Enabled ? "On - click to switch off" : "Granted but off - click to switch on") : "Not granted. Reconnect to request it.")"
@@ -85,11 +86,13 @@ else
                     @if (!c.IsDefaultForProvider)
                     {
                         <form method="post" action="/connections/@c.Id/default" class="d-inline">
+    @Html.AntiForgeryToken()
                             <button class="btn btn-sm btn-outline-primary">Make default</button>
                         </form>
                     }
                     <form method="post" action="/connections/@c.Id/delete" class="d-inline"
                           onsubmit="return confirm('Remove @c.Label? OutPost2 will lose access until you reconnect.');">
+    @Html.AntiForgeryToken()
                         <button class="btn btn-sm btn-outline-danger">Remove</button>
                     </form>
                 </td>
@@ -103,6 +106,7 @@ else
 
 <h2 class="h5">Add a Microsoft account</h2>
 <form method="post" action="/connections/microsoft/start" class="row g-2 align-items-end" style="max-width:40rem">
+    @Html.AntiForgeryToken()
     <div class="col-sm-5">
         <label class="form-label" for="label">Name it</label>
         <input class="form-control" id="label" name="label" placeholder="work" required maxlength="60" />
@@ -122,6 +126,7 @@ else
 
 <h2 class="h5">Add a YouTrack server</h2>
 <form method="post" action="/connections/youtrack/add" class="row g-2 align-items-end" style="max-width:52rem">
+    @Html.AntiForgeryToken()
     <div class="col-sm-3">
         <label class="form-label" for="ytlabel">Name it</label>
         <input class="form-control" id="ytlabel" name="label" placeholder="lab tickets" required maxlength="60" />

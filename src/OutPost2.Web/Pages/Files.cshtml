@@ -20,6 +20,7 @@
 
 <form method="post" action="/files/upload" enctype="multipart/form-data"
       class="row g-2 align-items-end mb-4" style="max-width:46rem">
+    @Html.AntiForgeryToken()
     <div class="col-sm-5">
         <label class="form-label" for="file">File</label>
         <input class="form-control" type="file" id="file" name="file" required />
@@ -53,6 +54,7 @@ else
                 <td class="text-nowrap">
                     <a class="btn btn-sm btn-outline-secondary" href="/files/@f.Id/download">Download</a>
                     <form method="post" action="/files/@f.Id/delete" class="d-inline">
+    @Html.AntiForgeryToken()
                         <button class="btn btn-sm btn-outline-danger">Remove</button>
                     </form>
                 </td>

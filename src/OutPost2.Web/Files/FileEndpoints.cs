@@ -34,7 +34,7 @@ public static class FileEndpoints
             {
                 return Results.Redirect($"/files?error={Uri.EscapeDataString(ex.Message)}");
             }
-        }).DisableAntiforgery();
+        });
 
         files.MapPost("/{id:guid}/delete", async (HttpContext ctx, IStagingService staging, Guid id) =>
         {

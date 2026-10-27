@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Microsoft.AspNetCore.Mvc;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -108,8 +109,9 @@ public static class OAuthEndpoints
         // The consent form posts here.
         app.MapPost("/oauth/approve", async (
             HttpContext ctx, IOAuthService oauth,
-            string client_id, string redirect_uri, string code_challenge, string? state,
-            string? connections) =>
+            [FromForm] string client_id, [FromForm] string redirect_uri,
+            [FromForm] string code_challenge, [FromForm] string? state,
+            [FromForm] string? connections) =>
         {
             var client = await oauth.FindClientAsync(client_id);
             if (client is null || !client.Redirects().Contains(redirect_uri, StringComparer.Ordinal))

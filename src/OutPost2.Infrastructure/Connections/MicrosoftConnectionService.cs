@@ -108,12 +108,20 @@ public sealed class MicrosoftConnectionService(
             .WithExtraQueryParameters(new Dictionary<string, string>
             {
                 ["state"] = pending.State,
-                // Force an account picker. Without it, a second connection silently reuses
-                // the browser's existing Microsoft session, so a user trying to add "home"
-                // gets a duplicate of "work" and no indication why.
-                ["prompt"] = "select_account",
             })
-            .WithPkce(out _);
+            // WithPrompt, NOT an extra query parameter: MSAL emits `prompt` itself and
+            // throws MsalClientException("Duplicate query parameter 'prompt'") if it is
+            // also supplied by hand.
+            .WithPrompt(Prompt.SelectAccount)
+            // Force an account picker, or a second connection silently reuses the
+            // browser's Microsoft session and a user adding "home" gets a duplicate of
+            // "work" with no indication why.
+            .WithPkce(out var codeVerifier);
+
+        // MSAL generated this pair, so ITS verifier is the one Entra will expect back.
+        // Discarding it (WithPkce(out _)) sends a challenge we cannot answer, and the
+        // code redemption fails after the user has already consented.
+        pending.CodeVerifier = codeVerifier;
 
         // A tenant hint sends the user straight to the right directory; /common otherwise.
         if (!string.IsNullOrWhiteSpace(pending.TenantHint))
@@ -126,7 +134,9 @@ public sealed class MicrosoftConnectionService(
     {
         var (app, _) = await BuildAppAsync(null, ct);
 
-        var result = await app.AcquireTokenByAuthorizationCode(_o.Scopes, code).ExecuteAsync(ct);
+        var result = await app.AcquireTokenByAuthorizationCode(_o.Scopes, code)
+            .WithPkceCodeVerifier(pending.CodeVerifier)
+            .ExecuteAsync(ct);
 
         var account = result.Account
             ?? throw new InvalidOperationException("Microsoft returned no account for the authorization code.");

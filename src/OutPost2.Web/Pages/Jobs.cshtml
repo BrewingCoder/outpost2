@@ -57,12 +57,14 @@ else
                     @if (j.State == JobState.AwaitingApproval)
                     {
                         <form method="post" action="/jobs/@j.Id/approve" class="d-inline">
+    @Html.AntiForgeryToken()
                             <button class="btn btn-sm btn-primary">Approve</button>
                         </form>
                     }
                     @if (!j.IsTerminal)
                     {
                         <form method="post" action="/jobs/@j.Id/cancel" class="d-inline">
+    @Html.AntiForgeryToken()
                             <button class="btn btn-sm btn-outline-danger">Cancel</button>
                         </form>
                     }
