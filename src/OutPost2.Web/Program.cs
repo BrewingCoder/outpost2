@@ -14,6 +14,12 @@ using OutPost2.Web.Connections;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddRazorPages();
+builder.Services.AddHttpContextAccessor();
+
+// MCP: the tool surface IS the product (D1). Streamable HTTP, protected by the same
+// cookie/auth pipeline as the rest of the app for now.
+builder.Services.AddSingleton<OutPost2.Web.Mcp.IMessageIndex, OutPost2.Web.Mcp.MessageIndex>();
+builder.Services.AddMcpServer().WithHttpTransport().WithToolsFromAssembly();
 
 var gh = builder.Configuration.GetSection(GitHubOptions.SectionName).Get<GitHubOptions>()
          ?? new GitHubOptions();
@@ -156,6 +162,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapRazorPages();
 app.MapConnectionEndpoints();
+app.MapMcp("/mcp").RequireAuthorization();
 
 app.MapGet("/signin", (HttpContext ctx, GitHubOptions o) =>
     o.IsConfigured
