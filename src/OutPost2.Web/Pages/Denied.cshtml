@@ -1,0 +1,22 @@
+@page "/denied"
+@{
+    ViewData["Title"] = "Not authorised";
+    var unconfigured = Request.Query["reason"] == "unconfigured";
+}
+
+<h1 class="display-6">Not authorised</h1>
+
+@if (unconfigured)
+{
+    <p>GitHub sign-in has not been configured on this instance yet.</p>
+}
+else
+{
+    <p>
+        That GitHub account is not on the allowlist for this instance.
+        OutPost2 is invitation-only — the address being public does not make the product open.
+    </p>
+    <p class="text-muted">If you believe this is a mistake, ask the owner to add your account.</p>
+}
+
+<a class="btn btn-outline-secondary" href="/">Back</a>

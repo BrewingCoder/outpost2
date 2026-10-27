@@ -1,10 +1,46 @@
-﻿@page
-@model IndexModel
+@page
+@using System.Security.Claims
+@using OutPost2.Web.Auth
+@inject GitHubOptions GitHub
 @{
-    ViewData["Title"] = "Home page";
+    ViewData["Title"] = "OutPost2";
+    var signedIn = User.Identity?.IsAuthenticated == true;
 }
 
 <div class="text-center">
-    <h1 class="display-4">Welcome</h1>
-    <p>Learn about <a href="https://learn.microsoft.com/aspnet/core">building Web apps with ASP.NET Core</a>.</p>
+    <h1 class="display-5">OutPost2</h1>
+    <p class="lead">Named service connections across unrelated tenants — from anywhere.</p>
 </div>
+
+<hr />
+
+@if (signedIn)
+{
+    <h2>Signed in</h2>
+    <dl class="row">
+        <dt class="col-sm-3">GitHub login</dt>
+        <dd class="col-sm-9">@User.FindFirstValue(ClaimTypes.Name)</dd>
+        <dt class="col-sm-3">GitHub id</dt>
+        <dd class="col-sm-9"><code>@User.FindFirstValue(ClaimTypes.NameIdentifier)</code></dd>
+    </dl>
+    <p class="text-muted">
+        This is your <strong>product</strong> identity only. It grants no access to any
+        mailbox or tracker — that comes from the connections you add.
+    </p>
+    <form method="post" action="/signout">
+        <button type="submit" class="btn btn-outline-secondary">Sign out</button>
+    </form>
+}
+else if (!GitHub.IsConfigured)
+{
+    <div class="alert alert-warning">
+        <strong>GitHub sign-in is not configured.</strong>
+        Set <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> in
+        <code>.env</code>, then <code>docker compose up -d web</code>.
+    </div>
+}
+else
+{
+    <p>Access is by invitation. Sign in to continue.</p>
+    <a class="btn btn-dark" href="/signin">Sign in with GitHub</a>
+}
