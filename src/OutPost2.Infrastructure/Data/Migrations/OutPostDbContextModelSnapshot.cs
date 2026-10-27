@@ -92,6 +92,50 @@ namespace OutPost2.Infrastructure.Data.Migrations
                     b.ToTable("connections", (string)null);
                 });
 
+            modelBuilder.Entity("OutPost2.Core.Connections.PendingConnection", b =>
+                {
+                    b.Property<string>("State")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("CodeVerifier")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<DateTimeOffset?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("TenantHint")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("State");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("pending_connections", (string)null);
+                });
+
             modelBuilder.Entity("OutPost2.Core.Users.User", b =>
                 {
                     b.Property<Guid>("Id")

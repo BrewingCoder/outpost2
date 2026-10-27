@@ -132,6 +132,9 @@ services:
       OutPost2__Storage__StagingBucket: "op2-staging"
       OutPost2__Storage__Region: "garage"
       OutPost2__Storage__ForcePathStyle: "true"
+      OutPost2__Entra__ClientId: ${ENTRA_CLIENT_ID:-}
+      OutPost2__Entra__ClientSecret: ${ENTRA_CLIENT_SECRET:-}
+      OutPost2__Entra__RedirectUri: "https://outpost.brewingcoder.com/signin-microsoft"
       OutPost2__GitHub__ClientId: ${GITHUB_CLIENT_ID:-}
       OutPost2__GitHub__ClientSecret: ${GITHUB_CLIENT_SECRET:-}
       OutPost2__GitHub__AllowedUserIds: ${GITHUB_ALLOWED_USER_IDS:-}

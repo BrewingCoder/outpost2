@@ -7,7 +7,9 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using OutPost2.Infrastructure.Data;
 using OutPost2.Infrastructure.Users;
+using OutPost2.Infrastructure.Connections;
 using OutPost2.Web.Auth;
+using OutPost2.Web.Connections;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -20,6 +22,18 @@ builder.Services.AddSingleton(gh);
 builder.Services.AddDbContext<OutPostDbContext>(o =>
     o.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
 builder.Services.AddScoped<IUserStore, UserStore>();
+
+builder.Services.Configure<OutPost2.Infrastructure.Security.VaultOptions>(
+    builder.Configuration.GetSection(OutPost2.Infrastructure.Security.VaultOptions.SectionName));
+builder.Services.Configure<EntraOptions>(builder.Configuration.GetSection(EntraOptions.SectionName));
+
+builder.Services.AddSingleton<OutPost2.Infrastructure.Security.IVaultTransitClient,
+                              OutPost2.Infrastructure.Security.VaultTransitClient>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Security.ICredentialProtector,
+                           OutPost2.Infrastructure.Security.CredentialProtector>();
+builder.Services.AddScoped<IConnectionStore, ConnectionStore>();
+builder.Services.AddScoped<IPendingConnectionStore, PendingConnectionStore>();
+builder.Services.AddScoped<IMicrosoftConnectionService, MicrosoftConnectionService>();
 
 // The app sits behind the Cloudflare tunnel, which terminates TLS and forwards plain HTTP
 // to the container. Without honouring X-Forwarded-Proto, ASP.NET Core believes the request
@@ -135,6 +149,7 @@ app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapRazorPages();
+app.MapConnectionEndpoints();
 
 app.MapGet("/signin", (HttpContext ctx, GitHubOptions o) =>
     o.IsConfigured

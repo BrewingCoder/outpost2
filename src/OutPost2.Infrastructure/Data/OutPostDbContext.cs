@@ -9,6 +9,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
 {
     public DbSet<User> Users => Set<User>();
     public DbSet<Connection> Connections => Set<Connection>();
+    public DbSet<PendingConnection> PendingConnections => Set<PendingConnection>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -67,6 +68,21 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
                 cap.ToJson();
                 cap.Property(x => x.Name).HasMaxLength(60);
             });
+        });
+
+        b.Entity<PendingConnection>(e =>
+        {
+            e.ToTable("pending_connections");
+            e.HasKey(p => p.State);
+
+            e.Property(p => p.State).HasMaxLength(64);
+            e.Property(p => p.CodeVerifier).HasMaxLength(128);
+            e.Property(p => p.Label).HasMaxLength(60);
+            e.Property(p => p.TenantHint).HasMaxLength(100);
+            e.Property(p => p.Provider).HasConversion<string>().HasMaxLength(40);
+
+            // Expired rows are swept; index the column the sweep scans.
+            e.HasIndex(p => p.ExpiresAt);
         });
     }
 }

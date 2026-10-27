@@ -1,0 +1,119 @@
+@page "/connections"
+@model OutPost2.Web.Pages.ConnectionsModel
+@using OutPost2.Core.Connections
+@{ ViewData["Title"] = "Connections"; }
+
+<h1 class="display-6">Connections</h1>
+<p class="text-muted">
+    Each connection is one account on one service, with a name you choose.
+    Say the name and OutPost2 knows which one you mean.
+</p>
+
+@if (Model.Error is not null)
+{
+    <div class="alert alert-danger">@Model.Error</div>
+}
+@if (Model.Added is not null)
+{
+    <div class="alert alert-success">Connected <strong>@Model.Added</strong>.</div>
+}
+
+@if (Model.Connections.Count == 0)
+{
+    <div class="alert alert-light border">No connections yet. Add one below.</div>
+}
+else
+{
+    <table class="table align-middle">
+        <thead>
+        <tr>
+            <th>Name</th><th>Service</th><th>Account</th><th>Status</th>
+            <th>Capabilities</th><th></th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var c in Model.Connections)
+        {
+            <tr>
+                <td>
+                    <strong>@c.Label</strong>
+                    @if (c.IsDefaultForProvider)
+                    {
+                        <span class="badge text-bg-secondary ms-1">default</span>
+                    }
+                </td>
+                <td>@c.Provider</td>
+                <td><code class="small">@c.Instance</code></td>
+                <td>
+                    @switch (c.State)
+                    {
+                        case ConnectionState.Active:
+                            <span class="badge text-bg-success">active</span>
+                            break;
+                        case ConnectionState.NeedsAdminApproval:
+                            <span class="badge text-bg-warning">awaiting admin</span>
+                            break;
+                        case ConnectionState.Expired:
+                            <span class="badge text-bg-warning">needs re-auth</span>
+                            break;
+                        case ConnectionState.Revoked:
+                            <span class="badge text-bg-danger">revoked</span>
+                            break;
+                        default:
+                            <span class="badge text-bg-light">@c.State</span>
+                            break;
+                    }
+                </td>
+                <td>
+                    @foreach (var cap in c.Capabilities)
+                    {
+                        <form method="post" action="/connections/@c.Id/capability?capability=@cap.Name&enabled=@((!cap.Enabled).ToString().ToLower())" class="d-inline">
+                            <button type="submit"
+                                    class="btn btn-sm @(cap.Usable ? "btn-success" : "btn-outline-secondary") me-1"
+                                    title="@(cap.Granted ? (cap.Enabled ? "On - click to switch off" : "Granted but off - click to switch on") : "Not granted. Reconnect to request it.")"
+                                    @(cap.Granted ? "" : "disabled")>
+                                @cap.Name @(cap.Usable ? "on" : "off")
+                            </button>
+                        </form>
+                    }
+                    @if (c.Capabilities.Any(x => !x.Granted))
+                    {
+                        <div class="form-text">Greyed-out capabilities were not granted. Reconnect to request them.</div>
+                    }
+                </td>
+                <td class="text-nowrap">
+                    @if (!c.IsDefaultForProvider)
+                    {
+                        <form method="post" action="/connections/@c.Id/default" class="d-inline">
+                            <button class="btn btn-sm btn-outline-primary">Make default</button>
+                        </form>
+                    }
+                    <form method="post" action="/connections/@c.Id/delete" class="d-inline"
+                          onsubmit="return confirm('Remove @c.Label? OutPost2 will lose access until you reconnect.');">
+                        <button class="btn btn-sm btn-outline-danger">Remove</button>
+                    </form>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+<hr />
+
+<h2 class="h5">Add a Microsoft account</h2>
+<form method="post" action="/connections/microsoft/start" class="row g-2 align-items-end" style="max-width:40rem">
+    <div class="col-sm-5">
+        <label class="form-label" for="label">Name it</label>
+        <input class="form-control" id="label" name="label" placeholder="work" required maxlength="60" />
+        <div class="form-text">What you'll call it out loud: "check <em>work</em> email".</div>
+    </div>
+    <div class="col-sm-5">
+        <label class="form-label" for="tenantHint">Tenant (optional)</label>
+        <input class="form-control" id="tenantHint" name="tenantHint" placeholder="contoso.com or a tenant id" />
+        <div class="form-text">Leave blank to pick an account at sign-in.</div>
+    </div>
+    <div class="col-sm-2">
+        <button class="btn btn-primary w-100" type="submit">Connect</button>
+    </div>
+</form>
