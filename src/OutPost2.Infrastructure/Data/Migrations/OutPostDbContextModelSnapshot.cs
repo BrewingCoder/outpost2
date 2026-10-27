@@ -139,6 +139,10 @@ namespace OutPost2.Infrastructure.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("AccountIdentifier")
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)");
+
                     b.Property<DateTimeOffset>("AddedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -157,6 +161,9 @@ namespace OutPost2.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(500)");
 
                     b.Property<bool>("IsDefaultForProvider")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsPersonalAccount")
                         .HasColumnType("boolean");
 
                     b.Property<string>("Label")

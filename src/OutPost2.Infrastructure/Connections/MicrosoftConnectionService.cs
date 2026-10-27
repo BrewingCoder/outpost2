@@ -171,10 +171,20 @@ public sealed class MicrosoftConnectionService(
             "Completed Microsoft connection for {Username} in tenant {Tenant}; granted {Scopes}.",
             account.Username, tenantId, string.Join(" ", granted));
 
-        return await connections.UpsertAsync(
+        var created = await connections.UpsertAsync(
             pending.UserId, ProviderKind.Microsoft, tenantId,
             account.HomeAccountId?.Identifier, pending.Label,
             AuthKind.OAuth2, cacheBlob, capabilities, ct);
+
+        // Record WHO this is, not just which tenant. A personal Microsoft account can
+        // carry a work email address, so the tenant is the only thing that distinguishes
+        // them — and a raw GUID tells a human nothing.
+        await connections.SetAccountIdentityAsync(created,
+            account.Username,
+            isPersonal: string.Equals(tenantId, Connection.ConsumerTenantId, StringComparison.OrdinalIgnoreCase),
+            ct);
+
+        return created;
     }
 
     public async Task<string?> GetAccessTokenAsync(Connection connection, CancellationToken ct = default)

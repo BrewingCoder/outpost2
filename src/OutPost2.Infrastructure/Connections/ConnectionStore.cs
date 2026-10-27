@@ -24,6 +24,9 @@ public interface IConnectionStore
     Task SetCapabilityEnabledAsync(Guid userId, Guid connectionId, string capability, bool enabled, CancellationToken ct = default);
     Task RenameAsync(Guid userId, Guid connectionId, string label, CancellationToken ct = default);
     Task DeleteAsync(Guid userId, Guid connectionId, CancellationToken ct = default);
+    Task SetAccountIdentityAsync(Connection connection, string? accountIdentifier, bool isPersonal,
+        CancellationToken ct = default);
+
     Task TouchAsync(Guid connectionId, CancellationToken ct = default);
 }
 
@@ -193,6 +196,14 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
             survivor.IsDefaultForProvider = true;
             await db.SaveChangesAsync(ct);
         }
+    }
+
+    public async Task SetAccountIdentityAsync(
+        Connection connection, string? accountIdentifier, bool isPersonal, CancellationToken ct = default)
+    {
+        connection.AccountIdentifier = accountIdentifier;
+        connection.IsPersonalAccount = isPersonal;
+        await db.SaveChangesAsync(ct);
     }
 
     public async Task TouchAsync(Guid connectionId, CancellationToken ct = default) =>

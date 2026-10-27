@@ -26,4 +26,12 @@
     <ProjectReference Include="..\..\src\OutPost2.Web\OutPost2.Web.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Integration suites share one Postgres, Vault and Garage, and each creates and
+         drops its own database. Running collections in parallel produced an intermittent
+         two-test failure; serialising removes the race rather than leaving a flake that
+         would later be dismissed as noise. -->
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

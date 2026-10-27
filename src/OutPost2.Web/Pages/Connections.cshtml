@@ -43,7 +43,28 @@ else
                     }
                 </td>
                 <td>@c.Provider</td>
-                <td><code class="small">@c.Instance</code></td>
+                <td>
+                    @if (!string.IsNullOrWhiteSpace(c.AccountIdentifier))
+                    {
+                        <div>@c.AccountIdentifier</div>
+                    }
+                    @if (c.Provider == ProviderKind.Microsoft)
+                    {
+                        @if (c.IsPersonalAccount)
+                        {
+                            <span class="badge text-bg-warning">personal account</span>
+                            <div class="form-text">
+                                A personal Microsoft account, not your organisation's.
+                                The same address can exist as both.
+                            </div>
+                        }
+                        else
+                        {
+                            <span class="badge text-bg-light">work or school</span>
+                        }
+                    }
+                    <div class="form-text"><code>@c.Instance</code></div>
+                </td>
                 <td>
                     @switch (c.State)
                     {
@@ -115,7 +136,12 @@ else
     <div class="col-sm-5">
         <label class="form-label" for="tenantHint">Tenant (optional)</label>
         <input class="form-control" id="tenantHint" name="tenantHint" placeholder="contoso.com or a tenant id" />
-        <div class="form-text">Leave blank to pick an account at sign-in.</div>
+        <div class="form-text">
+            Leave blank to pick an account at sign-in. <strong>Give a tenant</strong>
+            (e.g. <code>contoso.com</code>) to force the work directory &mdash; a
+            personal Microsoft account can share your work email address, and the picker
+            shows both.
+        </div>
     </div>
     <div class="col-sm-2">
         <button class="btn btn-primary w-100" type="submit">Connect</button>

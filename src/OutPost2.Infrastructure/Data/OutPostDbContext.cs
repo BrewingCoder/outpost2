@@ -48,6 +48,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             // No length cap: this holds the sealed blob, and an MSAL token cache is kilobytes.
             e.Property(c => c.SealedCredential).IsRequired();
             e.Property(c => c.HomeAccountId).HasMaxLength(200);
+            e.Property(c => c.AccountIdentifier).HasMaxLength(320);
 
             e.Property(c => c.Provider).HasConversion<string>().HasMaxLength(40);
             e.Property(c => c.AuthKind).HasConversion<string>().HasMaxLength(40);

@@ -45,6 +45,26 @@ public sealed class Connection
     /// </summary>
     public string? HomeAccountId { get; set; }
 
+    /// <summary>
+    /// The signed-in account as a human reads it — a UPN or login, not a GUID.
+    /// <para>
+    /// Showing only the tenant id hid a real mistake: a PERSONAL Microsoft account can be
+    /// registered under a work email address, so the account picker offers two entries
+    /// that look identical. Without this, a connection to the wrong one is invisible.
+    /// </para>
+    /// </summary>
+    public string? AccountIdentifier { get; set; }
+
+    /// <summary>
+    /// True when this is a consumer Microsoft account rather than an organisational one.
+    /// Worth surfacing: the mailbox behind it is a different mailbox entirely, even when
+    /// the address is the same.
+    /// </summary>
+    public bool IsPersonalAccount { get; set; }
+
+    /// <summary>Microsoft's well-known tenant id for consumer accounts.</summary>
+    public const string ConsumerTenantId = "9188040d-6c67-4c5b-b112-36a304b66dad";
+
     public ConnectionState State { get; set; } = ConnectionState.Unconnected;
 
     /// <summary>
