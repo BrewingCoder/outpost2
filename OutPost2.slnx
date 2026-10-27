@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OutPost2.Core/OutPost2.Core.csproj" />
+    <Project Path="src/OutPost2.Infrastructure/OutPost2.Infrastructure.csproj" />
+    <Project Path="src/OutPost2.Web/OutPost2.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OutPost2.Tests/OutPost2.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,25 @@
+# Build output
+**/bin/
+**/obj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+*.user
+
+# IDE
+.vs/
+.idea/
+*.swp
+
+# Secrets and local config
+.env
+.mcp.json
+appsettings.*.Local.json
+*.pfx
+*.crt
+*.key
+
+# Test output
+TestResults/
+*.trx
+coverage*

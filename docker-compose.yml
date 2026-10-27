@@ -1,0 +1,155 @@
+name: outpost2
+
+# Dev stack. Host ports are shifted off the defaults because 5432 and 8080 are
+# already taken on this workstation.
+#
+#   postgres   5435 -> 5432  (5433 taken by dotrack-pg-dev)
+#   garage     3900 (s3 api) / 3903 (admin)
+#   vault-dev  8200
+#   web        5080 -> 8080   (also reached publicly via the cloudflared tunnel)
+#
+# The tunnel reaches the app at http://web:8080 on the compose network, so the
+# public URL works even though the host port is 5080.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: op2-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-outpost2}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-outpost2-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-outpost2}
+    ports:
+      - "5435:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-outpost2} -d ${POSTGRES_DB:-outpost2}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # S3-compatible object store. We depend on RANGED READS (GetObject with Range):
+  # large mail attachments stream to Graph in 320 KiB-multiple chunks and must never be
+  # buffered whole (OP2-10). Garage rather than MinIO because MinIO's images are no longer
+  # pullable from Docker Hub or quay.io, and cluster-ops flagged Garage as the better fit for
+  # the NFS-backed cluster - so dev and prod share an implementation, not just an API.
+  garage:
+    image: dxflrs/garage:v2.1.0
+    container_name: op2-garage
+    restart: unless-stopped
+    volumes:
+      - ./docker/garage/garage.toml:/etc/garage.toml:ro
+      - garagemeta:/var/lib/garage/meta
+      - garagedata:/var/lib/garage/data
+    ports:
+      - "3900:3900"   # S3 API
+      - "3903:3903"   # admin
+
+  # One-shot: single-node layout, fixed dev key, buckets. Idempotent.
+  garage-init:
+    image: dxflrs/garage:v2.1.0
+    container_name: op2-garage-init
+    depends_on:
+      - garage
+    environment:
+      GARAGE_RPC_HOST: garage:3901
+      OP2_S3_ACCESS_KEY: ${OP2_S3_ACCESS_KEY:-GK0000000000000000000op2}
+      OP2_S3_SECRET_KEY: ${OP2_S3_SECRET_KEY:-0000000000000000000000000000000000000000000000000000000000op2dev}
+    volumes:
+      - ./docker/garage/garage.toml:/etc/garage.toml:ro
+      - ./docker/garage/init.sh:/init.sh:ro
+    entrypoint: ["/bin/sh", "/init.sh"]
+    restart: "no"
+
+  # Local throwaway Vault. Dev mode only - in-memory, auto-unsealed, root token known.
+  # Production uses the cluster Vault (namespace `vault`) via the op2-transit/ mount.
+  # Address, auth and mount path are all config-driven so no code changes between them.
+  vault-dev:
+    image: hashicorp/vault:2.0.4
+    container_name: op2-vault
+    restart: unless-stopped
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_TOKEN:-op2-dev-root}
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    ports:
+      - "8200:8200"
+    command: server -dev
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Enables the transit engine and creates the OP2 key, mirroring what cluster-ops
+  # will provision in the cluster as `op2-transit/`.
+  vault-init:
+    image: hashicorp/vault:2.0.4
+    container_name: op2-vault-init
+    depends_on:
+      vault-dev:
+        condition: service_healthy
+    environment:
+      VAULT_ADDR: http://vault-dev:8200
+      VAULT_TOKEN: ${VAULT_DEV_TOKEN:-op2-dev-root}
+    entrypoint: >
+      /bin/sh -c "
+      vault secrets enable -path=op2-transit transit || true &&
+      vault write -f op2-transit/keys/op2-kek || true &&
+      echo 'vault ready: op2-transit/keys/op2-kek'
+      "
+    restart: "no"
+
+  web:
+    build:
+      context: .
+      dockerfile: src/OutPost2.Web/Dockerfile
+    container_name: op2-web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      garage:
+        condition: service_started
+      vault-dev:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: "8080"
+      OutPost2__PublicBaseUrl: "https://outpost.brewingcoder.com"
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-outpost2};Username=${POSTGRES_USER:-outpost2};Password=${POSTGRES_PASSWORD:-outpost2-dev}"
+      OutPost2__Vault__Address: "http://vault-dev:8200"
+      OutPost2__Vault__AuthMethod: "Token"
+      OutPost2__Vault__Token: ${VAULT_DEV_TOKEN:-op2-dev-root}
+      OutPost2__Vault__TransitMount: "op2-transit"
+      OutPost2__Vault__KeyName: "op2-kek"
+      OutPost2__Storage__ServiceUrl: "http://garage:3900"
+      OutPost2__Storage__AccessKey: ${OP2_S3_ACCESS_KEY:-GK0000000000000000000op2}
+      OutPost2__Storage__SecretKey: ${OP2_S3_SECRET_KEY:-0000000000000000000000000000000000000000000000000000000000op2dev}
+      OutPost2__Storage__StagingBucket: "op2-staging"
+      OutPost2__Storage__Region: "garage"
+      OutPost2__Storage__ForcePathStyle: "true"
+      OutPost2__GitHub__ClientId: ${GITHUB_CLIENT_ID:-}
+      OutPost2__GitHub__ClientSecret: ${GITHUB_CLIENT_SECRET:-}
+      OutPost2__GitHub__AllowedUserIds: ${GITHUB_ALLOWED_USER_IDS:-}
+    ports:
+      - "5080:8080"
+
+  # Publishes https://outpost.brewingcoder.com -> http://web:8080
+  # Tunnel `outpost2-dev` (00000000-0000-0000-0000-000000000000), ingress managed
+  # in Cloudflare, not in a local config file.
+  cloudflared:
+    image: cloudflare/cloudflared:2025.4.0
+    container_name: op2-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - web
+
+volumes:
+  pgdata:
+  garagemeta:
+  garagedata:
