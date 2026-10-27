@@ -32,7 +32,8 @@ public sealed class PendingConnectionStore(OutPostDbContext db) : IPendingConnec
     private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(15);
 
     public async Task<PendingConnection> CreateAsync(
-        Guid userId, ProviderKind provider, string label, string? tenantHint, CancellationToken ct = default)
+        Guid userId, ProviderKind provider, string label, string? tenantHint,
+        CancellationToken ct = default)
     {
         var pending = new PendingConnection
         {

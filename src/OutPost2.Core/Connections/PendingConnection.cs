@@ -39,6 +39,7 @@ public sealed class PendingConnection
     /// <summary>Optional tenant hint, so a user can target a specific directory.</summary>
     public string? TenantHint { get; init; }
 
+
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public required DateTimeOffset ExpiresAt { get; init; }
 

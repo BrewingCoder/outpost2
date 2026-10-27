@@ -13,10 +13,20 @@ public sealed class EntraOptions
     public string ClientSecret { get; set; } = "";
 
     /// <summary>
-    /// Always <c>/common</c> in normal operation. The app is multi-tenant, so the authority
-    /// must not be pinned to the home tenant or no other tenant could ever connect.
+    /// <c>/organizations</c>, not <c>/common</c>.
+    /// <para>
+    /// OutPost2 connects real Entra tenants only. <c>/common</c> also offers consumer
+    /// accounts, and because a personal Microsoft account can be registered under a work
+    /// email address, the picker shows two entries that read identically — which is how
+    /// the first real connection ended up on the wrong mailbox. <c>/organizations</c>
+    /// removes them at the identity provider, so the wrong one is never offered.
+    /// </para>
+    /// <para>
+    /// Still multi-tenant: the authority must not be pinned to the home tenant or no
+    /// other tenant could ever connect.
+    /// </para>
     /// </summary>
-    public string Authority { get; set; } = "https://login.microsoftonline.com/common";
+    public string Authority { get; set; } = "https://login.microsoftonline.com/organizations";
 
     public string RedirectUri { get; set; } = "https://outpost.brewingcoder.com/signin-microsoft";
 
@@ -166,6 +176,13 @@ public sealed class MicrosoftConnectionService(
                     Granted = granted.Contains("Mail.Send"),
                     Enabled = true },
         };
+
+        // Unreachable via /organizations, but a silently-wrong mailbox is bad enough to
+        // be worth a second check that does not depend on the IdP behaving.
+        if (string.Equals(tenantId, Connection.ConsumerTenantId, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"{account.Username} is a personal Microsoft account. OutPost2 connects " +
+                "organisational tenants only — pick the work or school account with the same address.");
 
         log.LogInformation(
             "Completed Microsoft connection for {Username} in tenant {Tenant}; granted {Scopes}.",
