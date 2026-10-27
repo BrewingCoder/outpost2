@@ -1,0 +1,54 @@
+@page "/authorize"
+@model OutPost2.Web.Pages.AuthorizeModel
+@{ ViewData["Title"] = "Authorise"; Layout = "_Layout"; }
+
+<h1 class="h3">Authorise <strong>@Model.ClientName</strong>?</h1>
+
+<p>
+    It will be able to read and send mail through the connections you allow below,
+    acting as you, until you revoke it.
+</p>
+
+<form method="post" action="/oauth/approve">
+    <input type="hidden" name="client_id" value="@Model.ClientId" />
+    <input type="hidden" name="redirect_uri" value="@Model.RedirectUri" />
+    <input type="hidden" name="code_challenge" value="@Model.CodeChallenge" />
+    <input type="hidden" name="state" value="@Model.State" />
+
+    <fieldset class="mb-3">
+        <legend class="h6">Which connections may it use?</legend>
+
+        @if (Model.Connections.Count == 0)
+        {
+            <div class="alert alert-warning">
+                You have no connections yet. You can authorise now and add them later,
+                but it will have nothing to reach.
+            </div>
+        }
+        else
+        {
+            <div class="form-text mb-2">
+                Leave all unticked to grant access to <strong>every</strong> connection,
+                including ones you add later.
+            </div>
+            @foreach (var c in Model.Connections)
+            {
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="connections"
+                           value="@c.Label" id="c-@c.Id" />
+                    <label class="form-check-label" for="c-@c.Id">
+                        <strong>@c.Label</strong>
+                        <span class="text-muted">— @c.Provider, @c.Instance</span>
+                    </label>
+                </div>
+            }
+            <div class="form-text mt-2">
+                Ticking only some is the safer choice: a connector on your phone can be
+                limited to personal accounts, leaving work mail out of its reach.
+            </div>
+        }
+    </fieldset>
+
+    <button class="btn btn-primary" type="submit">Authorise</button>
+    <a class="btn btn-outline-secondary" href="/connections">Cancel</a>
+</form>

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using OutPost2.Core.Auth;
 using OutPost2.Core.Connections;
 using OutPost2.Core.Users;
 
@@ -10,6 +11,9 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
     public DbSet<User> Users => Set<User>();
     public DbSet<Connection> Connections => Set<Connection>();
     public DbSet<PendingConnection> PendingConnections => Set<PendingConnection>();
+    public DbSet<OAuthClient> OAuthClients => Set<OAuthClient>();
+    public DbSet<OAuthAuthCode> OAuthAuthCodes => Set<OAuthAuthCode>();
+    public DbSet<OAuthToken> OAuthTokens => Set<OAuthToken>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -84,6 +88,40 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
 
             // Expired rows are swept; index the column the sweep scans.
             e.HasIndex(p => p.ExpiresAt);
+        });
+
+        b.Entity<OAuthClient>(e =>
+        {
+            e.ToTable("oauth_clients");
+            e.HasKey(c => c.ClientId);
+            e.Property(c => c.ClientId).HasMaxLength(64);
+            e.Property(c => c.ClientName).HasMaxLength(200);
+            e.Property(c => c.RedirectUris).IsRequired();
+        });
+
+        b.Entity<OAuthAuthCode>(e =>
+        {
+            e.ToTable("oauth_auth_codes");
+            e.HasKey(c => c.Code);
+            e.Property(c => c.Code).HasMaxLength(64);
+            e.Property(c => c.ClientId).HasMaxLength(64);
+            e.Property(c => c.RedirectUri).HasMaxLength(500);
+            e.Property(c => c.CodeChallenge).HasMaxLength(128);
+            e.HasIndex(c => c.ExpiresAt);
+        });
+
+        b.Entity<OAuthToken>(e =>
+        {
+            e.ToTable("oauth_tokens");
+            e.HasKey(t => t.TokenHash);
+            e.Property(t => t.TokenHash).HasMaxLength(64);
+            e.Property(t => t.RefreshTokenHash).HasMaxLength(64);
+            e.Property(t => t.ClientId).HasMaxLength(64);
+            e.Property(t => t.Label).HasMaxLength(120);
+
+            // Refresh lookups hit this on every renewal.
+            e.HasIndex(t => t.RefreshTokenHash);
+            e.HasIndex(t => new { t.UserId, t.RevokedAt });
         });
     }
 }

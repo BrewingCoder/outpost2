@@ -10,6 +10,7 @@ using OutPost2.Infrastructure.Users;
 using OutPost2.Infrastructure.Connections;
 using OutPost2.Web.Auth;
 using OutPost2.Web.Connections;
+using OutPost2.Web.Mcp;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,6 +29,7 @@ builder.Services.AddSingleton(gh);
 builder.Services.AddDbContext<OutPostDbContext>(o =>
     o.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
 builder.Services.AddScoped<IUserStore, UserStore>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Auth.IOAuthService, OutPost2.Infrastructure.Auth.OAuthService>();
 
 builder.Services.Configure<OutPost2.Infrastructure.Security.VaultOptions>(
     builder.Configuration.GetSection(OutPost2.Infrastructure.Security.VaultOptions.SectionName));
@@ -162,7 +164,18 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapRazorPages();
 app.MapConnectionEndpoints();
-app.MapMcp("/mcp").RequireAuthorization();
+var publicBaseUrl = builder.Configuration["OutPost2:PublicBaseUrl"] ?? "https://outpost.brewingcoder.com";
+app.MapMcpOAuth(publicBaseUrl);
+
+// Bearer-only on /mcp. The cookie pipeline's 302-to-a-login-page is unusable by an MCP
+// client, which needs a 401 plus WWW-Authenticate to discover where to authenticate.
+app.MapWhen(c => c.Request.Path.StartsWithSegments("/mcp"),
+    branch =>
+    {
+        branch.UseMiddleware<McpBearerMiddleware>(publicBaseUrl);
+        branch.UseRouting();
+        branch.UseEndpoints(e => e.MapMcp("/mcp"));
+    });
 
 app.MapGet("/signin", (HttpContext ctx, GitHubOptions o) =>
     o.IsConfigured
