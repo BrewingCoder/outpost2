@@ -32,7 +32,7 @@ public sealed class EntraOptions
     public bool IsConfigured => !string.IsNullOrWhiteSpace(ClientId) && !string.IsNullOrWhiteSpace(ClientSecret);
 }
 
-public interface IMicrosoftConnectionService
+public interface IMicrosoftConnectionService : OutPost2.Infrastructure.Mail.IMicrosoftConnectionServiceAccessor
 {
     Task<Uri> BuildAuthorizeUrlAsync(PendingConnection pending, CancellationToken ct = default);
 

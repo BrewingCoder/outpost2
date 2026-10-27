@@ -34,6 +34,10 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Security.ICredentialProtector
 builder.Services.AddScoped<IConnectionStore, ConnectionStore>();
 builder.Services.AddScoped<IPendingConnectionStore, PendingConnectionStore>();
 builder.Services.AddScoped<IMicrosoftConnectionService, MicrosoftConnectionService>();
+builder.Services.AddHttpClient("graph").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(60));
+builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMicrosoftConnectionServiceAccessor>(
+    sp => sp.GetRequiredService<IMicrosoftConnectionService>());
+builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailService, OutPost2.Infrastructure.Mail.MailService>();
 builder.Services.AddHttpClient("youtrack").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<IYouTrackConnectionService, YouTrackConnectionService>();
 
