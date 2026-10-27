@@ -114,11 +114,22 @@ public sealed class MicrosoftConnectionService(
     {
         var (app, _) = await BuildAppAsync(null, ct);
 
+        var extra = new Dictionary<string, string> { ["state"] = pending.State };
+
+        // domain_hint skips home-realm discovery and sends the user straight to the named
+        // organisation's identity provider.
+        //
+        // Without it, a cached live.com (MSA) session for the SAME email address is
+        // carried into the tenant-scoped request, and Entra then correctly reports
+        // AADSTS50020 - "user from identity provider live.com does not exist in tenant" -
+        // which reads like a permissions problem but is really the wrong identity
+        // provider. prompt=select_account does not help, because federation engages
+        // before any picker is shown.
+        if (!string.IsNullOrWhiteSpace(pending.TenantHint) && pending.TenantHint.Contains('.'))
+            extra["domain_hint"] = pending.TenantHint.Trim();
+
         var builder = app.GetAuthorizationRequestUrl(_o.Scopes)
-            .WithExtraQueryParameters(new Dictionary<string, string>
-            {
-                ["state"] = pending.State,
-            })
+            .WithExtraQueryParameters(extra)
             // WithPrompt, NOT an extra query parameter: MSAL emits `prompt` itself and
             // throws MsalClientException("Duplicate query parameter 'prompt'") if it is
             // also supplied by hand.
