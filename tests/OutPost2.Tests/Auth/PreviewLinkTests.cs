@@ -214,9 +214,12 @@ public sealed class PreviewReadOnlyMiddlewareTests
     [InlineData("/connections")]
     [InlineData("/jobs")]
     [InlineData("/preview-links")]
+    [InlineData("/files")]
     [InlineData("/")]
     public async Task A_preview_session_may_read_pages(string path)
     {
+        // /files is in here deliberately. Blocking the whole prefix to protect the one
+        // route that serves bytes also broke the Files PAGE, which is just UI.
         var (_, continued) = await RunAsync("GET", path, preview: true);
         Assert.True(continued, $"GET {path} should have been allowed");
     }
@@ -243,14 +246,14 @@ public sealed class PreviewReadOnlyMiddlewareTests
     [InlineData("POST", "/mcp")]
     [InlineData("GET", "/mcp")]
     [InlineData("POST", "/preview/mint")]
-    [InlineData("GET", "/files/abc")]
+    [InlineData("GET", "/files/abc/download")]
     public async Task A_preview_session_cannot_reach_the_paths_that_would_escalate_it(
         string method, string path)
     {
         // The OAuth ones are the point. Without this a read-only, expiring design link
         // could walk the consent flow and mint itself a permanent MCP bearer token —
-        // turning a window into a door. /preview/mint would let it extend itself, and
-        // /files serves attachment bytes rather than UI.
+        // turning a window into a door. /preview/mint would let it extend itself, and a
+        // file download hands over bytes rather than UI.
         var (status, continued) = await RunAsync(method, path, preview: true);
         Assert.Equal(StatusCodes.Status403Forbidden, status);
         Assert.False(continued);

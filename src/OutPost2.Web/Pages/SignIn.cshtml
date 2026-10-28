@@ -1,0 +1,33 @@
+@page "/signin"
+@using OutPost2.Web.Pages
+@model SignInModel
+@{
+    ViewData["Title"] = "Sign in";
+    Layout = "_AuthLayout";
+}
+
+<div>
+    <h2 class="op-h1">Sign in</h2>
+    <p class="op-lede">Outpost is invitation only. Your GitHub account has to be on the list.</p>
+</div>
+
+@if (Model.Configured)
+{
+    <a class="op-btn op-btn--gh" href="/signin/github">@Icons.GitHub() Continue with GitHub</a>
+}
+else
+{
+    <div class="op-note op-note--warn">
+        @Icons.Warn()
+        <span>GitHub sign-in has not been configured on this instance yet.</span>
+    </div>
+}
+
+<div class="op-note op-note--info">
+    @Icons.Lock()
+    <span>
+        GitHub only proves who you are. Outpost asks for no access to your repositories,
+        and signing in here gives it none of your mail or trackers. Those are connected
+        afterwards, one at a time, and you can see exactly what each one allows.
+    </span>
+</div>

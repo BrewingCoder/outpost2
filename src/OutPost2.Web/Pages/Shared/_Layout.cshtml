@@ -1,64 +1,74 @@
-﻿<!DOCTYPE html>
+@using System.Security.Claims
+@using OutPost2.Core.Jobs
+@using OutPost2.Infrastructure.Jobs
+@using OutPost2.Web.Auth
+@using OutPost2.Web.Connections
+@inject IJobService Jobs
+@{
+    var signedIn = User.Identity?.IsAuthenticated == true;
+    var isPreview = signedIn && User.IsPreview();
+    var login = User.FindFirst(ClaimTypes.Name)?.Value;
+
+    // The badge has to be right on every page, so it is counted here rather than left to
+    // each page to remember. Cheap: one indexed query against a table that stays small.
+    var waiting = 0;
+    if (signedIn)
+    {
+        var all = await Jobs.ListAsync(User.UserId());
+        waiting = all.Count(j => j.State == JobState.AwaitingApproval);
+    }
+
+    var page = (ViewContext.RouteData.Values["page"] as string ?? "").ToLowerInvariant();
+    string Current(string p) => page == p ? "page" : null!;
+}
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>@ViewData["Title"] - OutPost2.Web</title>
-    <script type="importmap"></script>
-    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
-    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/OutPost2.Web.styles.css" asp-append-version="true" />
+    <title>@ViewData["Title"] &middot; Outpost</title>
+    <link rel="stylesheet" href="~/css/fonts.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/outpost.css" asp-append-version="true" />
+    <link rel="icon" href="~/favicon.ico" />
 </head>
 <body>
-    <header>
-        <nav class="navbar navbar-expand-sm navbar-toggleable-sm navbar-light bg-white border-bottom box-shadow mb-3">
-            <div class="container">
-                <a class="navbar-brand" asp-area="" asp-page="/Index">OutPost2.Web</a>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target=".navbar-collapse" aria-controls="navbarSupportedContent"
-                        aria-expanded="false" aria-label="Toggle navigation">
-                    <span class="navbar-toggler-icon"></span>
-                </button>
-                <div class="navbar-collapse collapse d-sm-inline-flex justify-content-between">
-                    <ul class="navbar-nav flex-grow-1">
-                        <li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-page="/Index">Home</a>
-                        </li>
-                                                <li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-page="/Connections">Connections</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-page="/Files">Files</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-page="/Jobs">Queue</a>
-                        </li>
-<li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-page="/PreviewLinks">Preview links</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-page="/Privacy">Privacy</a>
-                        </li>
-                    </ul>
-                </div>
-            </div>
+<div class="op-app">
+@if (signedIn)
+{
+    <header class="op-top">
+        <a class="op-brand" asp-page="/Index">
+            <partial name="_Mark" />Outpost
+        </a>
+        <nav class="op-nav" aria-label="Main">
+            <a asp-page="/Index" aria-current="@Current("/index")">Home</a>
+            <a asp-page="/Connections" aria-current="@Current("/connections")">Connections</a>
+            @* The @@if must not butt up against the preceding text: Razor only treats it
+               as a transition at the start of a markup node, so "Approvals@@if" renders
+               the literal source. Wrapping the word in its own element fixes it. *@
+            <a asp-page="/Jobs" aria-current="@Current("/jobs")">
+                <span>Approvals</span>
+                @if (waiting > 0)
+                {
+                    <span class="op-badge">@waiting</span>
+                }
+            </a>
+            <a asp-page="/Files" aria-current="@Current("/files")">Files</a>
+            <a asp-page="/PreviewLinks" aria-current="@Current("/previewlinks")">Preview links</a>
         </nav>
+        <span class="op-me"><span>Signed in as</span> <b>@login</b></span>
     </header>
-    <div class="container">
-        <main role="main" class="pb-3">
-            @RenderBody()
-        </main>
-    </div>
-
-    <footer class="border-top footer text-muted">
-        <div class="container">
-            &copy; 2026 - OutPost2.Web - <a asp-area="" asp-page="/Privacy">Privacy</a>
+    @if (isPreview)
+    {
+        <div class="op-preview-bar" role="status">
+            @Icons.Lock()
+            <span><strong>Preview session.</strong> You can look at every page. Nothing here can be changed.</span>
         </div>
-    </footer>
-
-    <script src="~/lib/jquery/dist/jquery.min.js"></script>
-    <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="~/js/site.js" asp-append-version="true"></script>
-
-    @await RenderSectionAsync("Scripts", required: false)
+    }
+}
+<main class="op-page">
+    @RenderBody()
+</main>
+</div>
+@await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

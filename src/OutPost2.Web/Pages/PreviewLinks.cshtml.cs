@@ -31,4 +31,6 @@ public class PreviewLinksModel(IPreviewLinkService links) : PageModel
             JustMintedExpires = expires;
         }
     }
+
+    public static string Ago(DateTimeOffset t) => ConnectionsModel.Ago(t);
 }

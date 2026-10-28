@@ -42,6 +42,13 @@ public sealed class YouTrackService(
 
         // Cloudflare 1010-blocks unfamiliar agents; the default .NET one is refused.
         http.DefaultRequestHeaders.UserAgent.ParseAdd("OutPost2/1.0");
+
+        // Recorded here rather than per-operation: everything that talks to the service
+        // goes through this method, so one call covers them all and none can be missed.
+        // Without it "Last used" stays blank forever and the UI cannot tell a live
+        // connection from one nobody has touched since the day it was added.
+        await connections.TouchAsync(c.Id, ct);
+
         return http;
     }
 

@@ -16,7 +16,8 @@ public interface IGitHubConnectionService
     Task<bool> CheckHealthAsync(Connection connection, CancellationToken ct = default);
 }
 
-public sealed record GitHubProbe(bool Ok, string? Login, string? Name, string? Error);
+public sealed record GitHubProbe(
+    bool Ok, string? Login, string? Name, string? Error, DateTimeOffset? TokenExpiresAt = null);
 
 public sealed class GitHubConnectionService(
     IHttpClientFactory httpFactory,
@@ -89,7 +90,7 @@ public sealed class GitHubConnectionService(
             if (me is null || string.IsNullOrWhiteSpace(me.Login))
                 return new GitHubProbe(false, null, null, "GitHub returned an unreadable response.");
 
-            return new GitHubProbe(true, me.Login, me.Name, null);
+            return new GitHubProbe(true, me.Login, me.Name, null, ReadExpiry(resp));
         }
         catch (Exception ex)
         {
@@ -122,6 +123,7 @@ public sealed class GitHubConnectionService(
             label, AuthKind.PersonalAccessToken, token, capabilities, ct);
 
         await connections.SetAccountIdentityAsync(connection, probe.Login, isPersonal: false, ct);
+        await connections.SetCredentialExpiryAsync(connection, probe.TokenExpiresAt, ct);
 
         return connection;
     }
@@ -133,12 +135,40 @@ public sealed class GitHubConnectionService(
 
         var probe = await ProbeAsync(connection.Instance, token, ct);
 
+        // Refreshed on every health check: a token can be rotated or shortened on
+        // GitHub's side, and a stale date is worse than none because it reads as fact.
+        if (probe.Ok) await connections.SetCredentialExpiryAsync(connection, probe.TokenExpiresAt, ct);
+
         // A PAT has no refresh and no advance warning before it expires, so the stored
         // state is the only thing that can tell the user it has lapsed.
         await connections.SetStateAsync(connection.UserId, connection.Id,
             probe.Ok ? ConnectionState.Active : ConnectionState.Expired, ct);
 
         return probe.Ok;
+    }
+
+    /// <summary>
+    /// GitHub states a token's expiry on every response, so this costs nothing and is the
+    /// only provider here that can be truthful about it. Classic tokens created without an
+    /// expiry simply omit the header, which correctly reads as "not known".
+    /// </summary>
+    private static DateTimeOffset? ReadExpiry(HttpResponseMessage resp)
+    {
+        if (!resp.Headers.TryGetValues("github-authentication-token-expiration", out var values))
+            return null;
+
+        var raw = values.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+
+        // Sent as "2027-03-10 12:18:17 UTC", which no standard parser accepts as-is.
+        raw = raw.Trim();
+        if (raw.EndsWith(" UTC", StringComparison.OrdinalIgnoreCase))
+            raw = raw[..^4] + "Z";
+
+        return DateTimeOffset.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed)
+            ? parsed
+            : null;
     }
 
     private sealed record UserResponse(

@@ -193,10 +193,45 @@ public static class ConnectionEndpoints
         });
 
         group.MapPost("/{id:guid}/capability", async (
-            HttpContext ctx, IConnectionStore s, Guid id, string capability, bool enabled) =>
+            HttpContext ctx, IConnectionStore s, Guid id,
+            [FromForm] string capability, [FromForm] bool enabled) =>
         {
             try { await s.SetCapabilityEnabledAsync(ctx.User.UserId(), id, capability, enabled); return Results.Redirect("/connections"); }
             catch (InvalidOperationException ex) { return Results.Redirect($"/connections?error={Uri.EscapeDataString(ex.Message)}"); }
+        });
+
+        // Swapping a lapsed or rotated token without losing the connection, its name or
+        // its capability choices. Re-running "add" would work at the storage layer, since
+        // upsert matches on identity, but the add endpoint rejects a name already in use —
+        // so from the user's side the only route was delete and start again.
+        group.MapPost("/{id:guid}/replace-token", async (
+            HttpContext ctx, IConnectionStore s,
+            IYouTrackConnectionService yt, IGitHubConnectionService gh,
+            Guid id, [FromForm] string token) =>
+        {
+            var userId = ctx.User.UserId();
+            var c = await s.GetAsync(userId, id);
+            if (c is null) return Results.Redirect("/connections?error=No+such+connection.");
+
+            if (string.IsNullOrWhiteSpace(token))
+                return Results.Redirect("/connections?error=Paste+a+token+first.");
+
+            try
+            {
+                _ = c.Provider switch
+                {
+                    ProviderKind.YouTrack => await yt.ConnectAsync(userId, c.Instance, token, c.Label),
+                    ProviderKind.GitHub => await gh.ConnectAsync(userId, c.Instance, token, c.Label),
+                    _ => throw new InvalidOperationException(
+                        "That connection signs in through its provider. Reconnect it instead."),
+                };
+
+                return Results.Redirect($"/connections?replaced={Uri.EscapeDataString(c.Label)}");
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Redirect($"/connections?error={Uri.EscapeDataString(ex.Message)}");
+            }
         });
 
         group.MapPost("/{id:guid}/delete", async (HttpContext ctx, IConnectionStore s, Guid id) =>

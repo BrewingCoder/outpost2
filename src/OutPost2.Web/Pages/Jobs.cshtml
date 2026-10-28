@@ -1,76 +1,167 @@
 @page "/jobs"
-@model OutPost2.Web.Pages.JobsModel
 @using OutPost2.Core.Jobs
-@{ ViewData["Title"] = "Queue"; }
-
-<h1 class="display-6">Queue</h1>
-<p class="text-muted">
-    Things in flight, things waiting for your approval, and what already happened.
-    Anything proposed by voice that needs a second look lands here, so you can
-    read it properly on a screen before it goes.
-</p>
-
-@if (Model.Items.Count == 0)
-{
-    <div class="alert alert-light border">Nothing in the queue.</div>
+@using OutPost2.Web.Pages
+@model JobsModel
+@{
+    ViewData["Title"] = "Approvals";
 }
-else
-{
-    <table class="table align-middle">
-        <thead><tr><th>What</th><th>Where</th><th>Status</th><th>When</th><th></th></tr></thead>
-        <tbody>
-        @foreach (var j in Model.Items)
+
+<div class="op-pagehead">
+    <div>
+        <h1 class="op-h1">Approvals</h1>
+        <p class="op-lede">
+            Anything proposed by voice that needs a second look lands here, so you can read
+            it properly on a screen before it goes.
+        </p>
+    </div>
+</div>
+
+@* ── waiting ───────────────────────────────────────────────────────────── *@
+<section class="op-group" aria-labelledby="h-wait">
+    <div class="op-group__head">
+        <h2 class="op-h2" id="h-wait">Waiting for you</h2>
+        <span class="op-count">@(Model.Waiting.Count == 0 ? "nothing" : $"{Model.Waiting.Count}")</span>
+    </div>
+
+    @if (Model.Waiting.Count == 0)
+    {
+        <div class="op-panel">
+            <p class="op-muted" style="margin:0">
+                Nothing is waiting. Outpost sends straight away unless something is set to
+                need approval first, so an empty list here is the normal state.
+            </p>
+        </div>
+    }
+    else
+    {
+        @foreach (var j in Model.Waiting)
         {
-            <tr>
-                <td>@j.Description</td>
-                <td>@(j.ConnectionLabel ?? "—")</td>
-                <td>
-                    @switch (j.State)
-                    {
-                        case JobState.Sent:
-                            <span class="badge text-bg-success">sent</span>
-                            break;
-                        case JobState.Failed:
-                            <span class="badge text-bg-danger">failed</span>
-                            <div class="small text-muted">@j.Error</div>
-                            break;
-                        case JobState.Cancelled:
-                            <span class="badge text-bg-secondary">cancelled</span>
-                            break;
-                        case JobState.AwaitingApproval:
-                            <span class="badge text-bg-warning">needs approval</span>
-                            break;
-                        default:
-                            <span class="badge text-bg-info">@j.State.ToString().ToLower()</span>
-                            @if (j.PercentComplete > 0)
+            <article class="op-channel op-approval" aria-label="@j.Description">
+                <div class="op-channel__head">
+                    <div class="op-channel__who">
+                        <span class="op-h2">@j.Description</span>
+                        <span class="op-say">@Icons.Mic() Asked for @JobsModel.Ago(j.CreatedAt)</span>
+                    </div>
+                    <span class="op-tag op-tag--pending">Waiting for you</span>
+                </div>
+
+                <div class="op-approval__what">
+                    <dl class="op-approval__field">
+                        <dt>Kind</dt>
+                        <dd>@j.Kind</dd>
+                        @if (j.ConnectionLabel is not null)
+                        {
+                            <dt>Connection</dt>
+                            <dd><b class="op-mono">@j.ConnectionLabel</b></dd>
+                        }
+                        @if (j.Detail is not null)
+                        {
+                            <dt>Detail</dt>
+                            <dd>@j.Detail</dd>
+                        }
+                    </dl>
+                </div>
+
+                <div class="op-channel__foot">
+                    <form method="post" action="/jobs/@j.Id/cancel"
+                          data-confirm-submit="Discard this? It will not be sent.">
+                        @Html.AntiForgeryToken()
+                        <button class="op-btn op-btn--secondary op-btn--sm">Discard</button>
+                    </form>
+                    <form method="post" action="/jobs/@j.Id/approve">
+                        @Html.AntiForgeryToken()
+                        <button class="op-btn op-btn--primary op-btn--sm">
+                            @if (j.ConnectionLabel is not null)
                             {
-                                <div class="progress mt-1" style="height:4px;width:8rem">
-                                    <div class="progress-bar" style="width:@(j.PercentComplete)%"></div>
-                                </div>
-                                <div class="small text-muted">@j.Detail</div>
+                                <text>Send from @j.ConnectionLabel</text>
                             }
-                            break;
-                    }
-                </td>
-                <td class="small text-muted">@j.CreatedAt.ToLocalTime().ToString("d MMM HH:mm")</td>
-                <td class="text-nowrap">
-                    @if (j.State == JobState.AwaitingApproval)
-                    {
-                        <form method="post" action="/jobs/@j.Id/approve" class="d-inline">
-    @Html.AntiForgeryToken()
-                            <button class="btn btn-sm btn-primary">Approve</button>
-                        </form>
-                    }
-                    @if (!j.IsTerminal)
-                    {
-                        <form method="post" action="/jobs/@j.Id/cancel" class="d-inline">
-    @Html.AntiForgeryToken()
-                            <button class="btn btn-sm btn-outline-danger">Cancel</button>
-                        </form>
-                    }
-                </td>
-            </tr>
+                            else
+                            {
+                                <text>Approve</text>
+                            }
+                        </button>
+                    </form>
+                </div>
+            </article>
         }
-        </tbody>
-    </table>
+    }
+</section>
+
+@* ── running ───────────────────────────────────────────────────────────── *@
+@if (Model.Running.Count > 0)
+{
+    <section class="op-group" aria-labelledby="h-run">
+        <div class="op-group__head">
+            <h2 class="op-h2" id="h-run">Running</h2>
+            <span class="op-count">@Model.Running.Count</span>
+        </div>
+        <div class="op-panel">
+            <ul class="op-list">
+                @foreach (var j in Model.Running)
+                {
+                    var s = JobsModel.Status(j.State);
+                    <li>
+                        <span class="op-grow">
+                            @j.Description
+                            @if (j.Detail is not null)
+                            {
+                                <span class="op-field__help">@j.Detail</span>
+                            }
+                        </span>
+                        <span class="op-tag op-tag--@s.Class">@s.Word</span>
+                        @if (j.PercentComplete > 0)
+                        {
+                            <span class="op-muted" style="font-size:13px">@j.PercentComplete%</span>
+                        }
+                        <form method="post" action="/jobs/@j.Id/cancel">
+                            @Html.AntiForgeryToken()
+                            <button class="op-btn op-btn--quiet op-btn--sm">Cancel</button>
+                        </form>
+                    </li>
+                }
+            </ul>
+        </div>
+    </section>
+}
+
+@* ── history ───────────────────────────────────────────────────────────── *@
+<section class="op-group" aria-labelledby="h-done">
+    <div class="op-group__head">
+        <h2 class="op-h2" id="h-done">Done in the last 7 days</h2>
+        <span class="op-count">@Model.Recent.Count</span>
+    </div>
+    <div class="op-panel">
+        @if (Model.Recent.Count == 0)
+        {
+            <p class="op-muted" style="margin:0">Nothing in the last week.</p>
+        }
+        else
+        {
+            <ul class="op-list">
+                @foreach (var j in Model.Recent)
+                {
+                    var s = JobsModel.Status(j.State);
+                    <li>
+                        <span class="op-grow">
+                            @j.Description
+                            @if (j.State == JobState.Failed && j.Error is not null)
+                            {
+                                <span class="op-field__help" style="color:var(--state-revoked)">@j.Error</span>
+                            }
+                        </span>
+                        @if (j.ConnectionLabel is not null)
+                        {
+                            <span class="op-mono op-muted" style="font-size:13px">@j.ConnectionLabel</span>
+                        }
+                        <span class="op-tag op-tag--@s.Class">@s.Word</span>
+                        <span class="op-muted" style="font-size:13px">@JobsModel.Ago(j.CompletedAt ?? j.CreatedAt)</span>
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+</section>
+
+@section Scripts {
+    <script src="~/js/outpost.js" asp-append-version="true"></script>
 }

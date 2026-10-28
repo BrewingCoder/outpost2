@@ -253,12 +253,45 @@ public sealed class FormBindingTests : IClassFixture<FormBindingTests.Factory>, 
         var html = await resp.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-        Assert.Contains("Add a Microsoft account", html);
-        Assert.Contains("Add a YouTrack server", html);
+
+        // Asserted on the form ACTIONS rather than on headings. Copy is the most likely
+        // thing to be reworded, and a test that breaks on wording teaches people to edit
+        // the test without reading it. An endpoint disappearing is the real regression.
+        Assert.Contains("/connections/microsoft/start", html);
+        Assert.Contains("/connections/youtrack/add", html);
+        Assert.Contains("/connections/github/add", html);
 
         // Without this the POST fails antiforgery validation, which is how the page
         // would silently stop working.
         Assert.Contains("__RequestVerificationToken", html);
+    }
+
+    [SkippableTheory]
+    [InlineData("/")]
+    [InlineData("/connections")]
+    [InlineData("/jobs")]
+    [InlineData("/files")]
+    [InlineData("/preview-links")]
+    [InlineData("/connected-apps")]
+    [InlineData("/signin")]
+    [InlineData("/denied")]
+    public async Task Every_page_renders_without_leaking_its_own_source(string path)
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        var resp = await _client.GetAsync(path);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+
+        var html = await resp.Content.ReadAsStringAsync();
+
+        // Razor only treats @@if as a transition at the start of a markup node, so
+        // "Approvals@@if (n > 0)" renders the literal source into the nav of every page.
+        // It did, and nothing failed, because no test ever looked at the output.
+        foreach (var leak in (string[]) ["@if", "@foreach", "@Model.", "@Html.", "@await"])
+            Assert.DoesNotContain(leak, html);
+
+        // The shell, so a page that silently lost its layout is caught too.
+        Assert.Contains("op-app", html);
     }
 
     [SkippableFact]

@@ -19,4 +19,6 @@ public class FilesModel(IStagingService staging) : PageModel
         Added = added;
         Files = await staging.ListAsync(User.UserId());
     }
+
+    public static string Ago(DateTimeOffset t) => ConnectionsModel.Ago(t);
 }

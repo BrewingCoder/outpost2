@@ -53,6 +53,14 @@ public sealed class Connection
     /// that look identical. Without this, a connection to the wrong one is invisible.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// When the stored credential stops working, where the provider says so. GitHub
+    /// returns it on every response; YouTrack permanent tokens genuinely never expire;
+    /// Microsoft refresh is opaque and renews itself. Null therefore means "not
+    /// applicable or not known", and the UI must say which rather than imply a date.
+    /// </summary>
+    public DateTimeOffset? CredentialExpiresAt { get; set; }
+
     public string? AccountIdentifier { get; set; }
 
     /// <summary>

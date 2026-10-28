@@ -1,13 +1,50 @@
 @page "/authorize"
-@model OutPost2.Web.Pages.AuthorizeModel
-@{ ViewData["Title"] = "Authorise"; Layout = "_Layout"; }
+@using OutPost2.Core.Connections
+@using OutPost2.Web.Pages
+@model AuthorizeModel
+@{
+    ViewData["Title"] = "Allow access";
+}
 
-<h1 class="h3">Authorise <strong>@Model.ClientName</strong>?</h1>
+<div class="op-pagehead">
+    <div>
+        <h1 class="op-h1">Allow <b class="op-mono">@Model.ClientName</b>?</h1>
+        <p class="op-lede">
+            This grants standing access to the connections you choose, acting as you, until
+            you revoke it.
+        </p>
+    </div>
+</div>
 
-<p>
-    It will be able to read and send mail through the connections you allow below,
-    acting as you, until you revoke it.
-</p>
+@*
+    The highest-stakes page in the app. Everything a person needs in order to spot a
+    request they did not start is above the buttons: who is asking, where the answer will
+    be sent, and when. The redirect host especially — that is the one field an attacker
+    cannot fake and the one most likely to look wrong.
+*@
+<div class="op-panel">
+    <dl class="op-approval__field">
+        <dt>Application</dt>
+        <dd><b>@Model.ClientName</b></dd>
+
+        <dt>Sends the result to</dt>
+        <dd><b class="op-mono">@Model.RedirectHost</b><span class="op-field__help op-mono">@Model.RedirectUri</span></dd>
+
+        <dt>Requested</dt>
+        <dd>@Model.RequestedAt.ToLocalTime().ToString("d MMM yyyy, HH:mm")</dd>
+
+        <dt>Signed in as</dt>
+        <dd><b class="op-mono">@Model.SignedInAs</b></dd>
+    </dl>
+</div>
+
+<div class="op-note op-note--warn">
+    @Icons.Warn()
+    <span>
+        Only allow this if you just connected Outpost from Claude yourself. If this page
+        appeared on its own, close it.
+    </span>
+</div>
 
 <form method="post" action="/oauth/approve">
     @Html.AntiForgeryToken()
@@ -16,40 +53,94 @@
     <input type="hidden" name="code_challenge" value="@Model.CodeChallenge" />
     <input type="hidden" name="state" value="@Model.State" />
 
-    <fieldset class="mb-3">
-        <legend class="h6">Which connections may it use?</legend>
+    <section class="op-group" aria-labelledby="h-what">
+        <div class="op-group__head"><h2 class="op-h2" id="h-what">If you allow, Claude can</h2></div>
 
         @if (Model.Connections.Count == 0)
         {
-            <div class="alert alert-warning">
-                You have no connections yet. You can authorise now and add them later,
-                but it will have nothing to reach.
+            <div class="op-note op-note--warn">
+                @Icons.Warn()
+                <span>
+                    You have no connections yet. You can allow this now and add them later,
+                    but there is nothing for it to reach.
+                </span>
             </div>
         }
         else
         {
-            <div class="form-text mb-2">
-                Leave all unticked to grant access to <strong>every</strong> connection,
-                including ones you add later.
+            <div class="op-rule">
+                <span class="op-rule__value">@Icons.Ask() Tick nothing to allow every connection</span>
+                <span class="op-rule__why">
+                    Including ones you add later. Ticking only some is the safer choice: a
+                    connector on your phone can be limited, leaving work mail out of reach.
+                </span>
             </div>
+
             @foreach (var c in Model.Connections)
             {
-                <div class="form-check">
-                    <input class="form-check-input" type="checkbox" name="connections"
-                           value="@c.Label" id="c-@c.Id" />
-                    <label class="form-check-label" for="c-@c.Id">
-                        <strong>@c.Label</strong>
-                        <span class="text-muted">— @c.Provider, @c.Instance</span>
-                    </label>
-                </div>
-            }
-            <div class="form-text mt-2">
-                Ticking only some is the safer choice: a connector on your phone can be
-                limited to personal accounts, leaving work mail out of its reach.
-            </div>
-        }
-    </fieldset>
+                <article class="op-channel">
+                    <div class="op-channel__head">
+                        <div class="op-channel__who">
+                            <span class="op-callsign">@c.Label</span>
+                            <span class="op-channel__acct">@ConnectionsModel.AccountLine(c)</span>
+                        </div>
+                        <label class="op-row" style="gap:8px;cursor:pointer">
+                            <input type="checkbox" name="connections" value="@c.Label" id="c-@c.Id"
+                                   style="width:20px;height:20px" />
+                            <span>Limit to this one</span>
+                        </label>
+                    </div>
 
-    <button class="btn btn-primary" type="submit">Authorise</button>
-    <a class="btn btn-outline-secondary" href="/connections">Cancel</a>
+                    @foreach (var band in ConnectionsModel.CapabilityBands(c))
+                    {
+                        var usable = band.Where(x => x.Usable).ToList();
+                        if (usable.Count == 0) { continue; }
+
+                        <div class="op-caps @(band.Key ? "op-caps--honor" : "op-caps--enforced")">
+                            <div class="op-caps__band">
+                                @(band.Key ? Icons.Unlock() : Icons.Lock())
+                                @if (band.Key)
+                                {
+                                    <span><strong>Honor system.</strong> The token behind this can do more than the list below.</span>
+                                }
+                                else
+                                {
+                                    <span><strong>Enforced by @c.Provider.</strong> Nothing beyond this list is possible.</span>
+                                }
+                            </div>
+                            @foreach (var cap in usable)
+                            {
+                                <div class="op-cap">
+                                    <span class="op-cap__text">
+                                        <span class="op-cap__verb">
+                                            @CapabilityCatalog.Verb(cap.Name)
+                                            @if (CapabilityCatalog.RiskLabel(cap.Name) is { } risk)
+                                            {
+                                                <span class="op-cap__risk">@risk</span>
+                                            }
+                                        </span>
+                                        <span class="op-cap__scope">@cap.Name</span>
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </article>
+            }
+        }
+    </section>
+
+    <div class="op-note op-note--info">
+        @Icons.Lock()
+        <span>
+            You can take this back at any time from <a asp-page="/ConnectedApps">Connected apps</a>.
+            Revoking stops it on the very next request, and kills its refresh so it cannot
+            quietly mint another token.
+        </span>
+    </div>
+
+    <div class="op-grid2" style="margin-top:24px">
+        <a class="op-btn op-btn--secondary" href="/connections">Deny</a>
+        <button class="op-btn op-btn--primary" type="submit">Allow access</button>
+    </div>
 </form>

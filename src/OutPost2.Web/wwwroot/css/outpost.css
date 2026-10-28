@@ -1,0 +1,346 @@
+/* Outpost. Ported from the design system handoff (design-system/tokens.css +
+   components.css + the mockup shell). Values are tokens; do not introduce new
+   colours here without adding them to the token block first. */
+/* Outpost tokens + components (from the Outpost design system) */
+:root, [data-theme="light"] {
+  --ground: #f3eee3;
+  --ground-raised: #fbf9f4;
+  --ground-sunk: #e9e2d3;
+  --ink: #1e1c18;
+  --ink-muted: #5c5549;
+  --rule: #d8cfbd;
+  --rule-strong: #857a66;
+  --signal: #dc5814;
+  --on-signal: #0e0c09;
+  --signal-ink: #a8420c;
+  --signal-wash: #fbe3d3;
+  --enforced: #1f5e4a;
+  --enforced-wash: #dcefe6;
+  --honor: #7a4d00;
+  --honor-wash: #f8e9c8;
+  --state-active: #1f5e4a;
+  --state-expired: #7a4d00;
+  --state-revoked: #b02a1f;
+  --state-pending: #2753a0;
+  --state-revoked-wash: #f8dcd8;
+  --state-pending-wash: #dfe7f6;
+  --focus: var(--signal-ink);
+  --shadow-sheet: 0 12px 32px rgba(30,28,24,0.18);
+}
+[data-theme="dark"] {
+  --ground: #14130f;
+  --ground-raised: #1d1b16;
+  --ground-sunk: #0d0c0a;
+  --ink: #f0eadc;
+  --ink-muted: #a69d8d;
+  --rule: #322e27;
+  --rule-strong: #7a7163;
+  --signal: #ff7d33;
+  --on-signal: #14130f;
+  --signal-ink: #ff9a5c;
+  --signal-wash: #3a2214;
+  --enforced: #6fcfa8;
+  --enforced-wash: #15342a;
+  --honor: #f0b84a;
+  --honor-wash: #3a2c10;
+  --state-active: #6fcfa8;
+  --state-expired: #f0b84a;
+  --state-revoked: #ff8a7a;
+  --state-pending: #8fb4ff;
+  --state-revoked-wash: #3b1a16;
+  --state-pending-wash: #18233a;
+  --focus: var(--signal-ink);
+  --shadow-sheet: 0 12px 32px rgba(0,0,0,0.55);
+}
+
+/* Follow the OS unless the page has explicitly asked for light. The guard matters:
+   without it a user who chose light would be overridden by their system at night. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  --ground: #14130f;
+  --ground-raised: #1d1b16;
+  --ground-sunk: #0d0c0a;
+  --ink: #f0eadc;
+  --ink-muted: #a69d8d;
+  --rule: #322e27;
+  --rule-strong: #7a7163;
+  --signal: #ff7d33;
+  --on-signal: #14130f;
+  --signal-ink: #ff9a5c;
+  --signal-wash: #3a2214;
+  --enforced: #6fcfa8;
+  --enforced-wash: #15342a;
+  --honor: #f0b84a;
+  --honor-wash: #3a2c10;
+  --state-active: #6fcfa8;
+  --state-expired: #f0b84a;
+  --state-revoked: #ff8a7a;
+  --state-pending: #8fb4ff;
+  --state-revoked-wash: #3b1a16;
+  --state-pending-wash: #18233a;
+  --focus: var(--signal-ink);
+  --shadow-sheet: 0 12px 32px rgba(0,0,0,0.55);
+  }
+}
+
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-pill: 999px;
+  --border-hair: 1px;
+  --border-control: 1.5px;
+  --border-honor: 1.5px;
+  --font-display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --font-sans: "Archivo", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+
+/* Outpost components. Every value comes from tokens.css custom properties. */
+.op, .op * { box-sizing: border-box; }
+.op { font-family: var(--font-sans); color: var(--ink); font-size: 16px; line-height: 24px; }
+.op :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* ---------- Icons ---------- */
+.op-ico { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.op-ico--fill { fill: currentColor; stroke: none; }
+
+/* ---------- Buttons ---------- */
+.op-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); min-height: 44px; padding: 0 var(--space-4); border-radius: var(--radius-md); font: 600 15px/20px var(--font-sans); border: var(--border-control) solid transparent; cursor: pointer; text-decoration: none; white-space: nowrap; }
+.op-btn--primary { background: var(--signal); color: var(--on-signal); }
+.op-btn--primary:hover { filter: brightness(1.06); }
+.op-btn--secondary { background: transparent; color: var(--ink); border-color: var(--rule-strong); }
+.op-btn--secondary:hover { background: var(--ground-sunk); }
+.op-btn--quiet { background: transparent; color: var(--signal-ink); padding: 0 var(--space-2); }
+.op-btn--danger { background: transparent; color: var(--state-revoked); border-color: var(--state-revoked); }
+.op-btn--sm { min-height: 36px; font-size: 14px; padding: 0 var(--space-3); }
+.op-btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+/* ---------- Status tag ---------- */
+.op-tag { display: inline-flex; align-items: center; gap: 6px; font: 700 12px/16px var(--font-sans); letter-spacing: .08em; text-transform: uppercase; }
+.op-tag--active { color: var(--state-active); }
+.op-tag--expired { color: var(--state-expired); }
+.op-tag--revoked { color: var(--state-revoked); }
+.op-tag--pending { color: var(--state-pending); }
+.op-tag--default { color: var(--signal-ink); }
+.op-live { width: 8px; height: 8px; border-radius: var(--radius-pill); background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent); }
+
+/* ---------- Call sign ---------- */
+.op-callsign { font: 600 28px/32px var(--font-mono); letter-spacing: -0.01em; color: var(--ink); }
+.op-callsign--inline { font: 600 15px/20px var(--font-mono); background: var(--signal-wash); padding: 1px 6px; border-radius: var(--radius-sm); }
+.op-say { display: inline-flex; align-items: center; gap: var(--space-2); font-size: 14px; line-height: 20px; color: var(--ink-muted); }
+.op-say q { color: var(--ink); quotes: "\201C" "\201D"; }
+.op-say q::before, .op-say q::after { color: var(--signal-ink); font-weight: 700; }
+.op-say b { font-family: var(--font-mono); font-weight: 600; color: var(--ink); background: var(--signal-wash); padding: 0 4px; border-radius: var(--radius-sm); }
+
+/* ---------- Switch ---------- */
+.op-switch { position: relative; display: inline-flex; width: 44px; height: 26px; flex: none; border-radius: var(--radius-pill); border: var(--border-control) solid var(--rule-strong); background: var(--ground-sunk); cursor: pointer; padding: 0; }
+.op-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: var(--radius-pill); background: var(--rule-strong); transition: transform .15s; }
+.op-switch[aria-checked="true"] { background: var(--signal); border-color: var(--signal); }
+.op-switch[aria-checked="true"]::after { transform: translateX(18px); background: var(--on-signal); }
+
+/* ---------- Capability list ---------- */
+.op-caps { border-radius: var(--radius-md); overflow: hidden; }
+.op-caps__band { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-2) var(--space-3); font-size: 13px; line-height: 18px; }
+.op-caps__band strong { font-weight: 700; }
+.op-caps--enforced { border: var(--border-hair) solid var(--rule); }
+.op-caps--enforced .op-caps__band { background: var(--enforced-wash); color: var(--enforced); }
+.op-caps--honor { border: var(--border-honor) dashed var(--honor); }
+.op-caps--honor .op-caps__band { background: var(--honor-wash); color: var(--honor); }
+.op-cap { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border-top: var(--border-hair) solid var(--rule); background: var(--ground-raised); }
+.op-cap__text { flex: 1; min-width: 0; }
+.op-cap__verb { display: block; font-weight: 600; }
+.op-cap__scope { display: block; font: 400 12px/16px var(--font-mono); color: var(--ink-muted); }
+.op-cap__risk { display: inline-block; white-space: nowrap; vertical-align: 1px; font: 700 11px/14px var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--state-revoked); margin-left: 6px; }
+.op-cap--na .op-cap__verb { color: var(--ink-muted); font-weight: 400; }
+.op-cap__na { font-size: 13px; color: var(--ink-muted); }
+
+/* ---------- Connection card (a channel) ---------- */
+.op-channel { background: var(--ground-raised); border: var(--border-hair) solid var(--rule); border-radius: var(--radius-md); padding: var(--space-6); display: grid; gap: var(--space-4); }
+.op-channel__head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-4); flex-wrap: wrap; }
+.op-channel__who { display: grid; gap: 2px; }
+.op-channel__acct { font-size: 14px; line-height: 20px; color: var(--ink-muted); overflow-wrap: anywhere; }
+.op-channel__acct code { font: 400 13px/18px var(--font-mono); }
+.op-channel__meta { display: flex; gap: var(--space-4); flex-wrap: wrap; font-size: 13px; color: var(--ink-muted); }
+.op-channel__foot { display: flex; gap: var(--space-2); flex-wrap: wrap; justify-content: flex-end; border-top: var(--border-hair) solid var(--rule); padding-top: var(--space-4); }
+.op-channel__alert { display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-3); border-radius: var(--radius-sm); font-size: 14px; line-height: 20px; }
+.op-channel__alert--expired { background: var(--honor-wash); color: var(--ink); }
+.op-channel__alert--revoked { background: var(--state-revoked-wash); color: var(--ink); }
+.op-channel__alert--pending { background: var(--state-pending-wash); color: var(--ink); }
+.op-channel__alert .op-btn { margin-left: auto; }
+
+/* ---------- Unnamed-request rule (per provider) ---------- */
+.op-rule { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-3) var(--space-4); background: var(--ground-sunk); border-radius: var(--radius-md); font-size: 14px; line-height: 20px; }
+.op-rule__label { font: 700 12px/16px var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-muted); }
+.op-rule__value { display: inline-flex; align-items: center; gap: var(--space-2); font-weight: 600; }
+.op-rule__why { color: var(--ink-muted); flex-basis: 100%; }
+.op-rule .op-btn { margin-left: auto; }
+
+/* ---------- Fields ---------- */
+.op-field { display: grid; gap: 6px; }
+.op-field__label { font-weight: 600; font-size: 15px; }
+.op-field__help { font-size: 14px; line-height: 20px; color: var(--ink-muted); }
+.op-input { min-height: 44px; width: 100%; padding: 0 var(--space-3); border-radius: var(--radius-sm); border: var(--border-control) solid var(--rule-strong); background: var(--ground-raised); color: var(--ink); font: 400 16px/24px var(--font-sans); }
+.op-input--mono { font-family: var(--font-mono); font-size: 15px; }
+.op-input::placeholder { color: var(--ink-muted); opacity: .55; font-style: italic; }
+.op-input-wrap { display: flex; align-items: center; border-radius: var(--radius-sm); border: var(--border-control) solid var(--rule-strong); background: var(--ground-raised); }
+.op-input-wrap .op-input { border: 0; }
+.op-input-wrap__pre { padding-left: var(--space-3); color: var(--ink-muted); font-size: 15px; white-space: nowrap; }
+
+/* ---------- App shell (mockup) ---------- */
+.op-app, .op-app * { box-sizing: border-box; }
+.op-app { position: relative; min-height: 100%; background: var(--ground); color: var(--ink); font-family: var(--font-sans); font-size: 16px; line-height: 24px; }
+.op-app a { color: var(--signal-ink); }
+.op-app a.op-btn--primary { color: var(--on-signal); }
+.op-app a.op-btn--secondary { color: var(--ink); }
+.op-app a.op-btn--gh { color: var(--ground); }
+.op-top { display: flex; align-items: center; gap: var(--space-4); padding: 12px 24px; border-bottom: var(--border-hair) solid var(--rule); flex-wrap: wrap; }
+.op-brand { display: inline-flex; align-items: center; gap: 10px; font: 800 22px/28px var(--font-display); letter-spacing: -0.01em; color: var(--ink) !important; text-decoration: none; }
+.op-brand img { width: 32px; height: 32px; display: block; }
+.op-nav { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
+.op-nav a { display: inline-flex; align-items: center; min-height: 40px; padding: 0 12px; border-radius: var(--radius-sm); color: var(--ink-muted); text-decoration: none; font-weight: 600; font-size: 15px; white-space: nowrap; }
+.op-nav a:hover { color: var(--ink); }
+.op-nav a[aria-current="page"] { color: var(--ink); background: var(--ground-sunk); }
+.op-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; margin-left: 6px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--signal); color: var(--on-signal); font: 700 12px/20px var(--font-sans); }
+.op-me { display: inline-flex; align-items: center; gap: var(--space-2); font-size: 14px; color: var(--ink-muted); }
+.op-me b { color: var(--ink); font-family: var(--font-mono); font-weight: 600; }
+.op-page { max-width: 880px; margin: 0 auto; padding: 48px 24px 96px; display: grid; gap: 32px; }
+.op-pagehead { display: flex; justify-content: space-between; align-items: flex-end; gap: var(--space-4); flex-wrap: wrap; }
+.op-h1 { margin: 0; font: 700 32px/36px var(--font-display); letter-spacing: -0.01em; }
+.op-h2 { margin: 0; font: 700 20px/26px var(--font-display); }
+.op-lede { margin: 8px 0 0; max-width: 60ch; font-size: 17px; line-height: 26px; color: var(--ink-muted); }
+.op-eyebrow { font: 700 12px/16px var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-muted); }
+.op-legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-3); }
+.op-legend__item { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border: var(--border-hair) solid var(--rule); border-radius: var(--radius-md); background: var(--ground-raised); font-size: 14px; line-height: 20px; color: var(--ink-muted); }
+.op-legend__item strong { display: block; color: var(--ink); font-weight: 600; }
+.op-legend__item .op-ico { margin-top: 2px; }
+.op-group { display: grid; gap: var(--space-4); }
+.op-group__head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); padding-bottom: var(--space-2); border-bottom: 2px solid var(--ink); }
+.op-count { font-size: 14px; color: var(--ink-muted); }
+.op-panel { background: var(--ground-raised); border: var(--border-hair) solid var(--rule); border-radius: var(--radius-md); padding: var(--space-6); display: grid; gap: var(--space-4); }
+.op-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.op-list > li { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; padding: var(--space-3) 0; border-top: var(--border-hair) solid var(--rule); }
+.op-list > li:first-child { border-top: 0; }
+.op-grow { flex: 1; min-width: 0; }
+.op-muted { color: var(--ink-muted); }
+.op-mono { font-family: var(--font-mono); }
+.op-note { display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-4); border-radius: var(--radius-md); font-size: 15px; line-height: 22px; }
+.op-note--warn { background: var(--honor-wash); color: var(--ink); border: var(--border-honor) dashed var(--honor); }
+.op-note--info { background: var(--state-pending-wash); color: var(--ink); }
+.op-note .op-ico { margin-top: 3px; }
+.op-row { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; }
+.op-row--end { justify-content: flex-end; }
+.op-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-4); }
+.op-scrim { position: absolute; inset: 0; z-index: 20; display: flex; justify-content: center; align-items: flex-start; padding: 96px 16px 32px; background: rgba(14, 12, 9, 0.5); }
+.op-sheet { width: 100%; max-width: 560px; background: var(--ground-raised); border-radius: var(--radius-md); box-shadow: var(--shadow-sheet); padding: var(--space-6); display: grid; gap: 20px; }
+.op-sheet__head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); }
+.op-x { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: var(--radius-sm); border: 0; background: transparent; color: var(--ink-muted); cursor: pointer; }
+.op-pick { display: grid; gap: 4px; width: 100%; padding: var(--space-4); text-align: left; border: var(--border-control) solid var(--rule-strong); border-radius: var(--radius-md); background: var(--ground-raised); color: var(--ink); font: inherit; cursor: pointer; }
+.op-pick:hover { border-color: var(--signal); }
+.op-pick__name { font: 700 18px/24px var(--font-display); }
+.op-pick__how { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; line-height: 18px; font-weight: 600; }
+.op-pick__how--enf { color: var(--enforced); }
+.op-pick__how--hon { color: var(--honor); }
+.op-steps { display: flex; gap: var(--space-2); font: 700 12px/16px var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-muted); }
+.op-steps b { color: var(--signal-ink); }
+.op-utter { display: grid; gap: 2px; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--ground-sunk); }
+.op-utter q { font-size: 17px; font-weight: 600; quotes: "\201C" "\201D"; }
+.op-utter q::before, .op-utter q::after { color: var(--signal-ink); }
+.op-utter q b { font-family: var(--font-mono); background: var(--signal-wash); padding: 0 4px; border-radius: var(--radius-sm); }
+.op-stat { display: grid; gap: 4px; }
+.op-stat__n { font: 800 40px/44px var(--font-display); }
+
+/* Sign-in shell */
+.op-auth { min-height: 100%; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+.op-auth__hero { position: relative; overflow: hidden; background: var(--ink); color: var(--ground); padding: 56px; display: flex; flex-direction: column; justify-content: space-between; gap: 48px; }
+.op-auth__hero .op-brand { color: var(--ground) !important; }
+.op-auth__word { font: 800 88px/0.92 var(--font-display); letter-spacing: -0.02em; margin: 0; }
+.op-auth__tag { margin: 16px 0 0; max-width: 34ch; font-size: 19px; line-height: 28px; opacity: .82; }
+.op-auth__arcs { position: absolute; right: -60px; top: 60px; width: 420px; height: 420px; }
+.op-auth__arcs path { fill: none; stroke: var(--signal); stroke-width: 14px; stroke-linecap: round; }
+.op-auth__arcs circle { fill: var(--signal); }
+.op-auth__main { display: flex; align-items: center; justify-content: center; padding: 48px 24px; }
+.op-auth__card { width: 100%; max-width: 420px; display: grid; gap: 24px; }
+.op-btn--gh { background: var(--ink); color: var(--ground); width: 100%; min-height: 52px; font-size: 16px; }
+@media (max-width: 760px) {
+  .op-auth { grid-template-columns: minmax(0, 1fr); }
+  .op-auth__arcs { display: none; }
+  .op-auth__hero { padding: 32px 20px; gap: 24px; }
+  .op-auth__word { font-size: 48px; }
+  .op-auth__arcs { width: 220px; height: 220px; right: -40px; top: 20px; }
+}
+@media (max-width: 600px) {
+  .op-top { padding: 10px 16px; gap: 8px; }
+  .op-nav { order: 3; flex-basis: 100%; flex-wrap: nowrap; overflow-x: auto; margin: 0 -16px; padding: 0 16px; }
+  .op-page { padding: 24px 16px 64px; gap: 24px; }
+  .op-h1 { font-size: 28px; line-height: 32px; }
+  .op-channel { padding: var(--space-4); }
+  .op-callsign { font-size: 24px; line-height: 28px; }
+  .op-pagehead .op-btn { width: 100%; }
+  .op-me span { display: none; }
+}
+
+/* Mark, drawn inline so it follows the theme */
+.op-mark { width: 32px; height: 32px; display: block; flex: none; }
+.op-mark .m-bg { fill: var(--ink); }
+.op-mark .m-mast { fill: none; stroke: var(--ground); stroke-width: 5px; stroke-linecap: round; }
+.op-mark .m-sig { fill: var(--signal); }
+.op-mark .m-arc { fill: none; stroke: var(--signal); stroke-width: 4px; stroke-linecap: round; }
+.op-mark--inv .m-bg { fill: var(--ground); }
+.op-mark--inv .m-mast { stroke: var(--ink); }
+
+/* ---------- Dialogs ----------
+   Hidden only once JS has confirmed <dialog> works (html.has-dialog). Without that class
+   every dialog renders inline as an ordinary section of the page, which is ugly but
+   completely usable — the forms inside post to the same endpoints either way. */
+.op-dialog { border: 0; padding: 0; background: transparent; max-width: 640px; width: calc(100% - 32px); }
+.op-dialog::backdrop { background: rgba(14, 12, 9, 0.55); }
+.op-dialog .op-sheet { box-shadow: var(--shadow-sheet); }
+html.has-dialog .op-dialog:not([open]) { display: none; }
+html:not(.has-dialog) .op-dialog { display: block; margin: var(--space-6) auto; max-width: 640px; }
+.op-dialog .op-pick__how .op-ico { vertical-align: -2px; }
+
+/* The name-is-hard-to-say warning. Amber rather than red: it is advice, not a refusal. */
+[data-name-warning] { color: var(--honor); font-size: 14px; line-height: 20px; }
+
+/* ---------- Read-only preview banner ---------- */
+.op-preview-bar { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-6);
+  background: var(--state-pending-wash); color: var(--ink); font-size: 14px; line-height: 20px;
+  border-bottom: var(--border-hair) solid var(--rule); }
+@media (max-width: 600px) { .op-preview-bar { padding: var(--space-2) var(--space-4); } }
+
+/* ---------- Approvals ---------- */
+.op-approval { display: grid; gap: var(--space-4); }
+.op-approval__what { padding: var(--space-4); border-radius: var(--radius-md); background: var(--ground-sunk);
+  display: grid; gap: var(--space-2); }
+.op-approval__field { display: grid; grid-template-columns: 120px 1fr; gap: var(--space-3); font-size: 15px; }
+.op-approval__field dt { color: var(--ink-muted); }
+.op-approval__field dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .op-approval__field { grid-template-columns: 1fr; gap: 2px; } }
+
+/* ---------- Tables that must survive a phone ---------- */
+.op-cards { display: grid; gap: var(--space-4); }
+
+/* ---------- Touch target for the capability switch ----------
+   The switch reads best at 26px tall, but 26px is not a touch target. The control keeps
+   its size and gains an invisible 44px-tall hit area around it, so a thumb on a phone
+   lands on it without the row growing. */
+.op-switch { position: relative; }
+.op-switch::before {
+  content: ""; position: absolute; left: 0; right: 0;
+  top: 50%; transform: translateY(-50%); height: 44px;
+}
+.op-cap form { display: inline-flex; align-items: center; min-height: 44px; }
+
+/* ---------- The page itself ----------
+   .op-app paints the background, but it only covers what it contains. Anything shorter
+   than the viewport would show the browser's white through underneath — fine in light,
+   a bright flash in dark. The body carries the colour so there is nothing to show. */
+html, body { height: 100%; }
+body { margin: 0; background: var(--ground); color: var(--ink); }

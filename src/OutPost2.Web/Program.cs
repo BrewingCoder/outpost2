@@ -135,7 +135,12 @@ if (gh.IsConfigured)
                     .LogWarning("Denied sign-in for GitHub user {Login} (id {Id}) — not on the allowlist.",
                                 login, idClaim ?? "null");
 
-                ctx.Fail($"GitHub user {login} is not authorised to use OutPost2.");
+                // Stashed for OnRemoteFailure, which is where the redirect happens and
+                // which can no longer see the identity. Naming the refused account is the
+                // difference between "not authorised" and "you used the wrong login".
+                ctx.HttpContext.Items["op2:denied-login"] = login;
+
+                ctx.Fail($"GitHub user {login} is not authorised to use Outpost.");
                 return;
             }
 
@@ -152,7 +157,10 @@ if (gh.IsConfigured)
 
         o.Events.OnRemoteFailure = ctx =>
         {
-            ctx.Response.Redirect("/denied");
+            var denied = ctx.HttpContext.Items["op2:denied-login"] as string;
+            ctx.Response.Redirect(denied is null
+                ? "/denied"
+                : "/denied?login=" + Uri.EscapeDataString(denied));
             ctx.HandleResponse();
             return Task.CompletedTask;
         };
@@ -210,7 +218,7 @@ app.MapWhen(c => c.Request.Path.StartsWithSegments("/mcp"),
         branch.UseEndpoints(e => e.MapMcp("/mcp"));
     });
 
-app.MapGet("/signin", (HttpContext ctx, GitHubOptions o) =>
+app.MapGet("/signin/github", (HttpContext ctx, GitHubOptions o) =>
     o.IsConfigured
         ? Results.Challenge(
             new() { RedirectUri = "/" },

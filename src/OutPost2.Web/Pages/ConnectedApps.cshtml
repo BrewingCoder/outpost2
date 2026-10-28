@@ -1,0 +1,86 @@
+@page "/connected-apps"
+@using OutPost2.Web.Pages
+@model ConnectedAppsModel
+@{
+    ViewData["Title"] = "Connected apps";
+}
+
+<div class="op-pagehead">
+    <div>
+        <h1 class="op-h1">Connected apps</h1>
+        <p class="op-lede">
+            Anything holding a token to this account. Revoking takes effect on the next
+            request, not at the end of a session.
+        </p>
+    </div>
+</div>
+
+@if (Model.Tokens.Count == 0)
+{
+    <div class="op-panel">
+        <p class="op-muted" style="margin:0">
+            Nothing is connected. When you add Outpost as a connector in Claude, it appears here.
+        </p>
+    </div>
+}
+else
+{
+    <div class="op-cards">
+        @foreach (var t in Model.Tokens)
+        {
+            <article class="op-channel" aria-label="@(t.Label ?? t.ClientId)">
+                <div class="op-channel__head">
+                    <div class="op-channel__who">
+                        <span class="op-h2">@(t.Label ?? "MCP client")</span>
+                        <span class="op-channel__acct"><code>@t.ClientId</code></span>
+                    </div>
+                    <span class="op-tag op-tag--active"><span class="op-live" aria-hidden="true"></span>Active</span>
+                </div>
+
+                <div class="op-channel__acct">
+                    @if (t.Connections().Count == 0)
+                    {
+                        <text>Can reach <b>every connection</b>.</text>
+                    }
+                    else
+                    {
+                        <text>Limited to @string.Join(", ", t.Connections().Select(x => $"“{x}”")).</text>
+                    }
+                </div>
+
+                <div class="op-channel__meta">
+                    <span>Authorised @t.IssuedAt.ToLocalTime().ToString("d MMM yyyy")</span>
+                    @if (t.LastUsedAt is { } used)
+                    {
+                        <span>Last used @ConnectedAppsModel.Ago(used)</span>
+                    }
+                    else
+                    {
+                        <span>Not used yet</span>
+                    }
+                    <span>Access expires @t.ExpiresAt.ToLocalTime().ToString("d MMM HH:mm")</span>
+                </div>
+
+                <div class="op-channel__foot">
+                    <form method="post" action="/oauth/revoke-token?hash=@Uri.EscapeDataString(t.TokenHash)"
+                          data-confirm-submit="Revoke this app's access? It stops working immediately and has to be connected again.">
+                        @Html.AntiForgeryToken()
+                        <button class="op-btn op-btn--danger op-btn--sm">Revoke access</button>
+                    </form>
+                </div>
+            </article>
+        }
+    </div>
+}
+
+<div class="op-note op-note--info">
+    @Icons.Lock()
+    <span>
+        An access token is short-lived and renews itself quietly in the background. Revoking
+        here kills the refresh as well, so the app cannot simply mint another one.
+    </span>
+</div>
+
+@section Scripts {
+    <script src="~/js/outpost.js" asp-append-version="true"></script>
+}

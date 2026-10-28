@@ -1,217 +1,310 @@
-@page "/connections"
-@model OutPost2.Web.Pages.ConnectionsModel
+@page
 @using OutPost2.Core.Connections
-@{ ViewData["Title"] = "Connections"; }
+@using OutPost2.Web.Pages
+@model ConnectionsModel
+@{
+    ViewData["Title"] = "Connections";
+}
 
-<h1 class="display-6">Connections</h1>
-<p class="text-muted">
-    Each connection is one account on one service, with a name you choose.
-    Say the name and OutPost2 knows which one you mean.
-</p>
+<div class="op-pagehead">
+    <div>
+        <h1 class="op-h1">Connections</h1>
+        <p class="op-lede">
+            Each connection is one account with a name you say out loud. Claude routes your
+            request by that name.
+        </p>
+    </div>
+    <button class="op-btn op-btn--primary" type="button" data-open="dlg-add">@Icons.Plus() Add connection</button>
+</div>
 
 @if (Model.Error is not null)
 {
-    <div class="alert alert-danger">@Model.Error</div>
+    <div class="op-note op-note--warn" role="alert">@Icons.Warn()<span>@Model.Error</span></div>
 }
 @if (Model.Added is not null)
 {
-    <div class="alert alert-success">Connected <strong>@Model.Added</strong>.</div>
+    <div class="op-note op-note--info" role="status">
+        @Icons.Check()<span>Connected <b class="op-mono">@Model.Added</b>. Say its name to use it.</span>
+    </div>
+}
+@if (Model.Replaced is not null)
+{
+    <div class="op-note op-note--info" role="status">
+        @Icons.Check()<span>New token stored for <b class="op-mono">@Model.Replaced</b>.</span>
+    </div>
 }
 
-@if (Model.Connections.Count == 0)
+<section class="op-legend" aria-label="How to read this page">
+    <div class="op-legend__item">
+        @Icons.Mic()
+        <span><strong>The name is the command</strong>Say &ldquo;check <b class="op-mono">work</b> email&rdquo; and Claude uses <b class="op-mono">work</b>.</span>
+    </div>
+    <div class="op-legend__item" style="color: var(--enforced);">
+        @Icons.Lock()
+        <span><strong>Lock: enforced</strong><span style="color: var(--ink-muted);">The provider blocks anything switched off.</span></span>
+    </div>
+    <div class="op-legend__item" style="color: var(--honor);">
+        @Icons.Unlock()
+        <span><strong>Open lock: honor system</strong><span style="color: var(--ink-muted);">The token can do more. Outpost just won&rsquo;t.</span></span>
+    </div>
+</section>
+
+@foreach (var g in Model.Groups)
 {
-    <div class="alert alert-light border">No connections yet. Add one below.</div>
-}
-else
-{
-    <table class="table align-middle">
-        <thead>
-        <tr>
-            <th>Name</th><th>Service</th><th>Account</th><th>Status</th>
-            <th>Capabilities</th><th></th>
-        </tr>
-        </thead>
-        <tbody>
-        @foreach (var c in Model.Connections)
+    var gid = "g-" + g.Provider.ToString().ToLowerInvariant();
+    <section class="op-group" aria-labelledby="@gid">
+        <div class="op-group__head">
+            <h2 class="op-h2" id="@gid">@g.Heading</h2>
+            <span class="op-count">@(g.Connections.Count == 1 ? "1 connection" : $"{g.Connections.Count} connections")</span>
+        </div>
+
+        @if (g.Connections.Count == 0)
         {
-            <tr>
-                <td>
-                    <strong>@c.Label</strong>
-                    @if (c.IsDefaultForProvider)
-                    {
-                        <span class="badge text-bg-secondary ms-1">default</span>
-                    }
-                </td>
-                <td>@c.Provider</td>
-                <td>
-                    @if (!string.IsNullOrWhiteSpace(c.AccountIdentifier))
-                    {
-                        <div>@c.AccountIdentifier</div>
-                    }
-                    @if (c.Provider == ProviderKind.Microsoft)
-                    {
-                        @if (c.IsPersonalAccount)
+            <div class="op-rule"><span class="op-rule__why" style="flex-basis:auto">Nothing connected yet.</span></div>
+        }
+        else
+        {
+            <div class="op-rule">
+                <span class="op-rule__label">Unnamed requests</span>
+                @if (g.Default is not null)
+                {
+                    <span class="op-rule__value">@Icons.Arrow() go to <span class="op-callsign--inline">@g.Default.Label</span></span>
+                }
+                else
+                {
+                    <span class="op-rule__value">@Icons.Ask() Claude asks which one</span>
+                }
+                <button class="op-btn op-btn--quiet op-btn--sm" type="button" data-open="dlg-default-@g.Provider">Change</button>
+                @if (g.NoDefaultReason is not null)
+                {
+                    <span class="op-rule__why">@g.NoDefaultReason</span>
+                }
+            </div>
+
+            @foreach (var c in g.Connections)
+            {
+                <article class="op-channel" aria-label="Connection @c.Label">
+                    <div class="op-channel__head">
+                        <div class="op-channel__who">
+                            <span class="op-callsign">@c.Label</span>
+                            <span class="op-say">
+                                @Icons.Mic() Say <q>@Html.Raw(ConnectionsModel.SpokenExampleHtml(c))</q>
+                            </span>
+                        </div>
+                        <span class="op-tag op-tag--@ConnectionsModel.StatusClass(c.State)">
+                            @if (c.State is ConnectionState.Active or ConnectionState.Consented)
+                            {
+                                <span class="op-live" aria-hidden="true"></span>
+                            }
+                            @ConnectionsModel.StatusWord(c.State)
+                        </span>
+                    </div>
+
+                    <div class="op-channel__acct">
+                        @ConnectionsModel.AccountLine(c)
+                        @if (ConnectionsModel.TenantShort(c) is { } tenant)
                         {
-                            <span class="badge text-bg-warning">personal account</span>
-                            <div class="form-text">
-                                A personal Microsoft account, not your organisation's.
-                                The same address can exist as both.
+                            <text>&middot; tenant <code>@tenant</code></text>
+                        }
+                    </div>
+
+                    @if (ConnectionsModel.Alert(c) is { } a)
+                    {
+                        <div class="op-channel__alert op-channel__alert--@ConnectionsModel.StatusClass(c.State)">
+                            @Icons.Clock()
+                            <span>@a.Text</span>
+                            @if (c.AuthKind == AuthKind.PersonalAccessToken)
+                            {
+                                <button class="op-btn op-btn--primary op-btn--sm" type="button" data-open="dlg-replace-@c.Id">@a.Action</button>
+                            }
+                            else
+                            {
+                                <form method="post" action="/connections/microsoft/start">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="label" value="@c.Label" />
+                                    <button class="op-btn op-btn--primary op-btn--sm">@a.Action</button>
+                                </form>
+                            }
+                        </div>
+                    }
+
+                    @foreach (var band in ConnectionsModel.CapabilityBands(c))
+                    {
+                        var honor = band.Key;
+                        <div class="op-caps @(honor ? "op-caps--honor" : "op-caps--enforced")">
+                            <div class="op-caps__band">
+                                @(honor ? Icons.Unlock() : Icons.Lock())
+                                @if (honor)
+                                {
+                                    <span><strong>Honor system.</strong> This token can do everything below even when it&rsquo;s off. The switches are your promise, not a lock.</span>
+                                }
+                                else
+                                {
+                                    <span><strong>Enforced by @c.Provider.</strong> Switching off removes the permission from the sign-in.</span>
+                                }
                             </div>
+
+                            @foreach (var cap in band)
+                            {
+                                <div class="op-cap @(cap.Granted ? "" : "op-cap--na")">
+                                    <span class="op-cap__text">
+                                        <span class="op-cap__verb">
+                                            @CapabilityCatalog.Verb(cap.Name)
+                                            @if (CapabilityCatalog.RiskLabel(cap.Name) is { } risk)
+                                            {
+                                                <span class="op-cap__risk">@risk</span>
+                                            }
+                                        </span>
+                                        <span class="op-cap__scope">@cap.Name</span>
+                                    </span>
+                                    @if (!cap.Granted)
+                                    {
+                                        <span class="op-cap__na">Not granted by this token</span>
+                                    }
+                                    else
+                                    {
+                                        <form method="post" action="/connections/@c.Id/capability">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="capability" value="@cap.Name" />
+                                            <input type="hidden" name="enabled" value="@((!cap.Enabled).ToString().ToLowerInvariant())" />
+                                            <button class="op-switch" type="submit" role="switch"
+                                                    aria-checked="@cap.Enabled.ToString().ToLowerInvariant()"
+                                                    aria-label="@CapabilityCatalog.Verb(cap.Name)"
+                                                    data-confirm="@ConnectionsModel.EnableConfirm(c, cap)"></button>
+                                        </form>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    <div class="op-channel__meta">
+                        <span>Connected @c.AddedAt.ToLocalTime().ToString("d MMM yyyy")</span>
+                        @if (c.LastUsedAt is { } used)
+                        {
+                            <span>Last used @ConnectionsModel.Ago(used)</span>
                         }
                         else
                         {
-                            <span class="badge text-bg-light">work or school</span>
+                            <span>Not used yet</span>
                         }
-                    }
-                    <div class="form-text"><code>@c.Instance</code></div>
-                </td>
-                <td>
-                    @switch (c.State)
-                    {
-                        case ConnectionState.Active:
-                            <span class="badge text-bg-success">active</span>
-                            break;
-                        case ConnectionState.NeedsAdminApproval:
-                            <span class="badge text-bg-warning">awaiting admin</span>
-                            break;
-                        case ConnectionState.Expired:
-                            <span class="badge text-bg-warning">needs re-auth</span>
-                            break;
-                        case ConnectionState.Revoked:
-                            <span class="badge text-bg-danger">revoked</span>
-                            break;
-                        default:
-                            <span class="badge text-bg-light">@c.State</span>
-                            break;
-                    }
-                </td>
-                <td>
-                    @foreach (var cap in c.Capabilities)
-                    {
-                        <form method="post" action="/connections/@c.Id/capability?capability=@cap.Name&enabled=@((!cap.Enabled).ToString().ToLower())" class="d-inline">
-    @Html.AntiForgeryToken()
-                            <button type="submit"
-                                    class="btn btn-sm @(cap.Usable ? "btn-success" : "btn-outline-secondary") me-1"
-                                    title="@(cap.Granted ? (cap.Enabled ? "On - click to switch off" : "Granted but off - click to switch on") : "Not granted. Reconnect to request it.")"
-                                    @(cap.Granted ? "" : "disabled")>
-                                @cap.Name @(cap.Usable ? "on" : "off")
-                            </button>
+                        @if (ConnectionsModel.Lifetime(c) is { } life)
+                        {
+                            <span>@life</span>
+                        }
+                    </div>
+
+                    <div class="op-channel__foot">
+                        <button class="op-btn op-btn--secondary op-btn--sm" type="button" data-open="dlg-rename-@c.Id">Rename</button>
+                        @if (c.AuthKind == AuthKind.PersonalAccessToken)
+                        {
+                            <button class="op-btn op-btn--secondary op-btn--sm" type="button" data-open="dlg-replace-@c.Id">Replace token</button>
+                        }
+                        <form method="post" action="/connections/@c.Id/delete" data-confirm-submit="Remove @c.Label? Outpost loses access until you connect it again.">
+                            @Html.AntiForgeryToken()
+                            <button class="op-btn op-btn--danger op-btn--sm">Remove @c.Label</button>
                         </form>
-                    }
-                    @if (c.Capabilities.Any(x => !x.Granted))
-                    {
-                        <div class="form-text">Greyed-out capabilities were not granted. Reconnect to request them.</div>
-                    }
-                </td>
-                <td class="text-nowrap">
-                    @if (!c.IsDefaultForProvider)
-                    {
-                        <form method="post" action="/connections/@c.Id/default" class="d-inline">
-    @Html.AntiForgeryToken()
-                            <button class="btn btn-sm btn-outline-primary"
-                                    title="Unnamed requests for @c.Provider will use this one.">Make default</button>
-                        </form>
-                    }
-                    else
-                    {
-                        <form method="post" action="/connections/@c.Id/undefault" class="d-inline">
-    @Html.AntiForgeryToken()
-                            <button class="btn btn-sm btn-outline-secondary"
-                                    title="Unnamed requests for @c.Provider will ask which connection to use.">Clear default</button>
-                        </form>
-                    }
-                    <form method="post" action="/connections/@c.Id/delete" class="d-inline"
-                          onsubmit="return confirm('Remove @c.Label? OutPost2 will lose access until you reconnect.');">
-    @Html.AntiForgeryToken()
-                        <button class="btn btn-sm btn-outline-danger">Remove</button>
+                    </div>
+                </article>
+
+                @* ── per-connection dialogs ────────────────────────────── *@
+                <dialog class="op-dialog" id="dlg-rename-@c.Id">
+                    <form method="post" action="/connections/@c.Id/rename" class="op-sheet">
+                        @Html.AntiForgeryToken()
+                        <div class="op-sheet__head">
+                            <h2 class="op-h2">Rename @c.Label</h2>
+                            <button class="op-x" type="button" data-close aria-label="Close">@Icons.Close()</button>
+                        </div>
+                        <div class="op-field">
+                            <label class="op-field__label" for="rn-@c.Id">New name</label>
+                            <input class="op-input op-input--mono" id="rn-@c.Id" name="label" value="@c.Label"
+                                   required maxlength="60" autocomplete="off" data-callsign data-say="@c.Provider" />
+                            <span class="op-field__help">You&rsquo;ll say: <span data-say-preview></span></span>
+                <span data-name-warning hidden></span>
+                        </div>
+                        <div class="op-row op-row--end">
+                            <button class="op-btn op-btn--secondary" type="button" data-close>Cancel</button>
+                            <button class="op-btn op-btn--primary">Rename</button>
+                        </div>
                     </form>
-                </td>
-            </tr>
+                </dialog>
+
+                @if (c.AuthKind == AuthKind.PersonalAccessToken)
+                {
+                    <dialog class="op-dialog" id="dlg-replace-@c.Id">
+                        <form method="post" action="/connections/@c.Id/replace-token" class="op-sheet">
+                            @Html.AntiForgeryToken()
+                            <div class="op-sheet__head">
+                                <h2 class="op-h2">Replace the token for @c.Label</h2>
+                                <button class="op-x" type="button" data-close aria-label="Close">@Icons.Close()</button>
+                            </div>
+                            <p class="op-muted">
+                                The name, the capability switches and anything referring to
+                                <b class="op-mono">@c.Label</b> stay as they are. Only the credential changes.
+                            </p>
+                            <div class="op-field">
+                                <label class="op-field__label" for="rt-@c.Id">New token</label>
+                                <input class="op-input op-input--mono" id="rt-@c.Id" name="token" type="password"
+                                       required autocomplete="off" placeholder="paste it here" />
+                            </div>
+                            <div class="op-note op-note--warn">
+                                @Icons.Unlock()
+                                <span>Outpost can&rsquo;t shrink a token. Whatever you paste is what it holds, and the switches above are its own restraint.</span>
+                            </div>
+                            <div class="op-row op-row--end">
+                                <button class="op-btn op-btn--secondary" type="button" data-close>Cancel</button>
+                                <button class="op-btn op-btn--primary">Store it</button>
+                            </div>
+                        </form>
+                    </dialog>
+                }
+            }
+
+            @* ── which connection answers an unnamed request ───────────── *@
+            <dialog class="op-dialog" id="dlg-default-@g.Provider">
+                <div class="op-sheet">
+                    <div class="op-sheet__head">
+                        <h2 class="op-h2">Unnamed requests for @g.Heading.ToLowerInvariant()</h2>
+                        <button class="op-x" type="button" data-close aria-label="Close">@Icons.Close()</button>
+                    </div>
+                    <p class="op-muted">When you don&rsquo;t say a name, this is what happens.</p>
+
+                    <div class="op-list">
+                        @foreach (var c in g.Connections)
+                        {
+                            <form method="post" action="/connections/@c.Id/default" class="op-row" style="padding:12px 0">
+                                @Html.AntiForgeryToken()
+                                <span class="op-grow">
+                                    <b class="op-mono">@c.Label</b>
+                                    @if (c.IsDefaultForProvider)
+                                    {
+                                        <span class="op-tag op-tag--default" style="margin-left:8px">Current</span>
+                                    }
+                                </span>
+                                <button class="op-btn op-btn--secondary op-btn--sm" @(c.IsDefaultForProvider ? "disabled" : "")>Use @c.Label</button>
+                            </form>
+                        }
+                        <form method="post" action="/connections/@g.Connections[0].Id/undefault" class="op-row" style="padding:12px 0">
+                            @Html.AntiForgeryToken()
+                            <span class="op-grow">
+                                <b>Claude asks which one</b>
+                                @if (g.Default is null)
+                                {
+                                    <span class="op-tag op-tag--default" style="margin-left:8px">Current</span>
+                                }
+                                <span class="op-field__help">@CapabilityCatalog.NoDefaultReason(g.Provider)</span>
+                            </span>
+                            <button class="op-btn op-btn--secondary op-btn--sm" @(g.Default is null ? "disabled" : "")>Always ask</button>
+                        </form>
+                    </div>
+                </div>
+            </dialog>
         }
-        </tbody>
-    </table>
+    </section>
 }
 
-<hr />
+<partial name="_AddConnection" model="Model.Groups" />
 
-<h2 class="h5">Add a Microsoft account</h2>
-<form method="post" action="/connections/microsoft/start" class="row g-2 align-items-end" style="max-width:40rem">
-    @Html.AntiForgeryToken()
-    <div class="col-sm-5">
-        <label class="form-label" for="label">Name it</label>
-        <input class="form-control" id="label" name="label" placeholder="work" required maxlength="60" />
-        <div class="form-text">What you'll call it out loud: "check <em>work</em> email".</div>
-    </div>
-    <div class="col-sm-5">
-        <label class="form-label" for="tenantHint">Tenant (optional)</label>
-        <input class="form-control" id="tenantHint" name="tenantHint" placeholder="contoso.com or a tenant id" />
-        <div class="form-text">
-            Leave blank to pick an account at sign-in, or name a tenant (e.g.
-            <code>contoso.com</code>) to go straight there.
-            Work and school accounts only &mdash; personal Microsoft accounts are not offered.
-        </div>
-    </div>
-    <div class="col-sm-2">
-        <button class="btn btn-primary w-100" type="submit">Connect</button>
-    </div>
-</form>
-
-<hr />
-
-<h2 class="h5">Add a YouTrack server</h2>
-<form method="post" action="/connections/youtrack/add" class="row g-2 align-items-end" style="max-width:52rem">
-    @Html.AntiForgeryToken()
-    <div class="col-sm-3">
-        <label class="form-label" for="ytlabel">Name it</label>
-        <input class="form-control" id="ytlabel" name="label" placeholder="lab tickets" required maxlength="60" />
-    </div>
-    <div class="col-sm-4">
-        <label class="form-label" for="baseUrl">Server</label>
-        <input class="form-control" id="baseUrl" name="baseUrl" placeholder="yt.example.com" required />
-    </div>
-    <div class="col-sm-3">
-        <label class="form-label" for="token">Permanent token</label>
-        <input class="form-control" id="token" name="token" type="password" placeholder="perm-..." required
-               autocomplete="off" />
-    </div>
-    <div class="col-sm-2">
-        <button class="btn btn-primary w-100" type="submit">Connect</button>
-    </div>
-    <div class="col-12">
-        <div class="form-text">
-            The token is validated against the server before it is stored, then encrypted.
-            OutPost2 cannot narrow what a token is allowed to do &mdash; whatever you paste,
-            it holds. The capability switches above are our own restraint, not an enforced limit.
-        </div>
-    </div>
-</form>
-
-<h2 class="h5 mt-4">Add a GitHub account</h2>
-<form method="post" action="/connections/github/add" class="row g-2 align-items-end" style="max-width:52rem">
-    @Html.AntiForgeryToken()
-    <div class="col-sm-3">
-        <label class="form-label" for="ghlabel">Name it</label>
-        <input class="form-control" id="ghlabel" name="label" placeholder="github" required maxlength="60" />
-    </div>
-    <div class="col-sm-4">
-        <label class="form-label" for="ghBaseUrl">Server <span class="text-muted">(optional)</span></label>
-        <input class="form-control" id="ghBaseUrl" name="baseUrl" placeholder="github.com" />
-    </div>
-    <div class="col-sm-3">
-        <label class="form-label" for="ghToken">Personal access token</label>
-        <input class="form-control" id="ghToken" name="token" type="password" placeholder="github_pat_... or ghp_..."
-               required autocomplete="off" />
-    </div>
-    <div class="col-sm-2">
-        <button class="btn btn-primary w-100" type="submit">Connect</button>
-    </div>
-    <div class="col-12">
-        <div class="form-text">
-            Leave the server blank for github.com; enter a hostname only for GitHub Enterprise.
-            A fine-grained token needs <strong>read</strong> on Pull requests, Issues and Metadata
-            for the repositories you want to see, plus account <strong>Profile</strong> read.
-            Triage answers questions about <em>you</em> &mdash; reviews requested of you, issues
-            assigned to you &mdash; so the token has to belong to you rather than to an app.
-        </div>
-    </div>
-</form>
+@section Scripts {
+    <script src="~/js/outpost.js" asp-append-version="true"></script>
+}

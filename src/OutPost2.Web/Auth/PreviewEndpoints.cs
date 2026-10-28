@@ -121,8 +121,16 @@ public sealed class PreviewReadOnlyMiddleware(RequestDelegate next, ILogger<Prev
     /// </summary>
     private static readonly string[] Forbidden =
     [
-        "/oauth", "/mcp", "/preview/mint", "/preview/revoke", "/signin-github", "/files",
+        "/oauth", "/mcp", "/preview/mint", "/preview/revoke", "/signin-github",
     ];
+
+    /// <summary>
+    /// Paths that serve bytes rather than UI. Blocked by suffix because the Files PAGE and
+    /// the file API share the /files prefix — blanket-blocking it made the page itself 403,
+    /// which is worse than the thing the rule was guarding against.
+    /// </summary>
+    private static bool ServesBytes(string path) =>
+        path.EndsWith("/download", StringComparison.OrdinalIgnoreCase);
 
     public async Task InvokeAsync(HttpContext ctx)
     {
@@ -130,23 +138,45 @@ public sealed class PreviewReadOnlyMiddleware(RequestDelegate next, ILogger<Prev
         {
             var path = ctx.Request.Path.Value ?? "";
 
-            if (Forbidden.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+            if (Forbidden.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase))
+                || ServesBytes(path))
             {
                 log.LogWarning("Preview session blocked from {Method} {Path}.", ctx.Request.Method, path);
-                ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-                await ctx.Response.WriteAsync("This is a read-only preview session.");
+                await RefuseAsync(ctx, "That part of Outpost is not available in a preview session.");
                 return;
             }
 
             if (!HttpMethods.IsGet(ctx.Request.Method) && !HttpMethods.IsHead(ctx.Request.Method))
             {
                 log.LogWarning("Preview session blocked from {Method} {Path}.", ctx.Request.Method, path);
-                ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-                await ctx.Response.WriteAsync("This is a read-only preview session — no changes can be made.");
+                await RefuseAsync(ctx, "A preview session can look at everything and change nothing.");
                 return;
             }
         }
 
         await next(ctx);
+    }
+
+    /// <summary>
+    /// A readable page rather than a bare string. Something is driving this session
+    /// automatically, and a wall of plain text with a 403 looks like a broken app rather
+    /// than a deliberate boundary.
+    /// </summary>
+    private static async Task RefuseAsync(HttpContext ctx, string message)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        ctx.Response.ContentType = "text/html; charset=utf-8";
+
+        await ctx.Response.WriteAsync($"""
+            <!doctype html><html lang="en"><head><meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>Read-only &middot; Outpost</title>
+            <link rel="stylesheet" href="/css/fonts.css"><link rel="stylesheet" href="/css/outpost.css">
+            </head><body style="margin:0"><div class="op-app"><main class="op-page">
+            <h1 class="op-h1">Read-only</h1>
+            <p class="op-lede">{System.Net.WebUtility.HtmlEncode(message)}</p>
+            <p><a class="op-btn op-btn--secondary" href="/connections">Back to connections</a></p>
+            </main></div></body></html>
+            """);
     }
 }

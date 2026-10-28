@@ -1,0 +1,135 @@
+@using OutPost2.Core.Connections
+@using OutPost2.Web.Pages
+@model IReadOnlyList<ConnectionsModel.Group>
+@*
+    Two steps in one dialog. Step one is the choice that actually matters — enforced or
+    honor system — so it is stated on each option rather than discovered afterwards on the
+    connections page.
+
+    The whole thing is a plain <form> per provider inside a <dialog>. With JavaScript the
+    steps swap in place; without it the dialog is a normal block of the page and every
+    form still posts to the same endpoint it always did.
+*@
+
+<dialog class="op-dialog" id="dlg-add">
+    <div class="op-sheet">
+        <div class="op-sheet__head">
+            <div>
+                <div class="op-steps" data-step-label><b>Step 1</b> of 2 &middot; Choose a service</div>
+                <h2 class="op-h2">Add a connection</h2>
+            </div>
+            <button class="op-x" type="button" data-close aria-label="Close">@Icons.Close()</button>
+        </div>
+
+        @* ── step 1 ────────────────────────────────────────────────── *@
+        <div data-step="1" class="op-grid2">
+            <button class="op-pick" type="button" data-goto-step="ms">
+                <span class="op-pick__name">Microsoft mail</span>
+                <span class="op-pick__how op-pick__how--enf">@Icons.Lock() Enforced by Microsoft</span>
+                <span class="op-field__help">You sign in. Microsoft enforces exactly what you agree to.</span>
+            </button>
+            <button class="op-pick" type="button" data-goto-step="yt">
+                <span class="op-pick__name">YouTrack</span>
+                <span class="op-pick__how op-pick__how--hon">@Icons.Unlock() Honor system</span>
+                <span class="op-field__help">You paste a permanent token. Outpost can&rsquo;t narrow what it allows.</span>
+            </button>
+            <button class="op-pick" type="button" data-goto-step="gh">
+                <span class="op-pick__name">GitHub</span>
+                <span class="op-pick__how op-pick__how--hon">@Icons.Unlock() Honor system</span>
+                <span class="op-field__help">You paste a personal access token. Outpost can&rsquo;t narrow what it allows.</span>
+            </button>
+        </div>
+
+        @* ── step 2: Microsoft ──────────────────────────────────────── *@
+        <form method="post" action="/connections/microsoft/start" data-step="ms" hidden>
+            @Html.AntiForgeryToken()
+            <div class="op-field">
+                <label class="op-field__label" for="ms-label">Name it</label>
+                <input class="op-input op-input--mono" id="ms-label" name="label" required maxlength="60"
+                       autocomplete="off" placeholder="work" data-callsign data-say="Microsoft" />
+                <span class="op-field__help">You&rsquo;ll say: <span data-say-preview></span></span>
+                <span data-name-warning hidden></span>
+            </div>
+            <div class="op-field" style="margin-top:16px">
+                <label class="op-field__label" for="ms-tenant">Organisation domain <span class="op-muted">(optional)</span></label>
+                <input class="op-input" id="ms-tenant" name="tenantHint" autocomplete="off" placeholder="contoso.com" />
+                <span class="op-field__help">
+                    Worth filling in if your address also exists as a personal Microsoft account. It
+                    sends you straight to your organisation instead of letting Microsoft guess.
+                </span>
+            </div>
+            <div class="op-note op-note--info" style="margin-top:16px">
+                @Icons.Lock()
+                <span>Microsoft will ask you to agree to reading and sending mail. What you refuse there, Outpost cannot do.</span>
+            </div>
+            <div class="op-row op-row--end" style="margin-top:20px">
+                <button class="op-btn op-btn--secondary" type="button" data-goto-step="1">Back</button>
+                <button class="op-btn op-btn--primary">Continue to Microsoft</button>
+            </div>
+        </form>
+
+        @* ── step 2: YouTrack ───────────────────────────────────────── *@
+        <form method="post" action="/connections/youtrack/add" data-step="yt" hidden>
+            @Html.AntiForgeryToken()
+            <div class="op-field">
+                <label class="op-field__label" for="yt-label">Name it</label>
+                <input class="op-input op-input--mono" id="yt-label" name="label" required maxlength="60"
+                       autocomplete="off" placeholder="lab" data-callsign data-say="YouTrack" />
+                <span class="op-field__help">You&rsquo;ll say: <span data-say-preview></span></span>
+                <span data-name-warning hidden></span>
+            </div>
+            <div class="op-field" style="margin-top:16px">
+                <label class="op-field__label" for="yt-url">Server</label>
+                <input class="op-input" id="yt-url" name="baseUrl" required autocomplete="off"
+                       placeholder="youtrack.example.com" />
+            </div>
+            <div class="op-field" style="margin-top:16px">
+                <label class="op-field__label" for="yt-token">Permanent token</label>
+                <input class="op-input op-input--mono" id="yt-token" name="token" type="password" required
+                       autocomplete="off" placeholder="perm-..." />
+            </div>
+            <div class="op-note op-note--warn" style="margin-top:16px">
+                @Icons.Unlock()
+                <span>Outpost can&rsquo;t shrink a token. Whatever you paste is what it holds; the switches afterwards are its own restraint, not a lock.</span>
+            </div>
+            <div class="op-row op-row--end" style="margin-top:20px">
+                <button class="op-btn op-btn--secondary" type="button" data-goto-step="1">Back</button>
+                <button class="op-btn op-btn--primary">Connect</button>
+            </div>
+        </form>
+
+        @* ── step 2: GitHub ─────────────────────────────────────────── *@
+        <form method="post" action="/connections/github/add" data-step="gh" hidden>
+            @Html.AntiForgeryToken()
+            <div class="op-field">
+                <label class="op-field__label" for="gh-label">Name it</label>
+                <input class="op-input op-input--mono" id="gh-label" name="label" required maxlength="60"
+                       autocomplete="off" placeholder="github" data-callsign data-say="GitHub" />
+                <span class="op-field__help">You&rsquo;ll say: <span data-say-preview></span></span>
+                <span data-name-warning hidden></span>
+            </div>
+            <div class="op-field" style="margin-top:16px">
+                <label class="op-field__label" for="gh-url">Server <span class="op-muted">(optional)</span></label>
+                <input class="op-input" id="gh-url" name="baseUrl" autocomplete="off" placeholder="github.com" />
+                <span class="op-field__help">Leave blank for github.com. Enter a hostname only for GitHub Enterprise.</span>
+            </div>
+            <div class="op-field" style="margin-top:16px">
+                <label class="op-field__label" for="gh-token">Personal access token</label>
+                <input class="op-input op-input--mono" id="gh-token" name="token" type="password" required
+                       autocomplete="off" placeholder="github_pat_... or ghp_..." />
+                <span class="op-field__help">
+                    A fine-grained token needs read on Pull requests, Issues and Metadata, plus
+                    account Profile read.
+                </span>
+            </div>
+            <div class="op-note op-note--warn" style="margin-top:16px">
+                @Icons.Unlock()
+                <span>Outpost can&rsquo;t shrink a token. To genuinely limit it, edit the token on GitHub.</span>
+            </div>
+            <div class="op-row op-row--end" style="margin-top:20px">
+                <button class="op-btn op-btn--secondary" type="button" data-goto-step="1">Back</button>
+                <button class="op-btn op-btn--primary">Connect</button>
+            </div>
+        </form>
+    </div>
+</dialog>

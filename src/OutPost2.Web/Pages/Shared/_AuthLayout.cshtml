@@ -1,0 +1,48 @@
+@*
+    The shell for the two pages you can reach without being signed in. Deliberately
+    separate from _Layout: those pages have no nav, no identity and no approvals badge,
+    and bolting "hide everything" conditionals onto the main layout for two pages makes
+    both harder to read.
+*@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] &middot; Outpost</title>
+    <link rel="stylesheet" href="~/css/fonts.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/outpost.css" asp-append-version="true" />
+    <link rel="icon" href="~/favicon.ico" />
+</head>
+<body style="margin:0">
+<div class="op-app op-auth">
+    <div class="op-auth__hero">
+        <a class="op-brand" href="/"><partial name="_Mark" />Outpost</a>
+
+        <div>
+            <h1 class="op-auth__word">Outpost</h1>
+            <p class="op-auth__tag">
+                Your mail, trackers and pull requests, reachable from a conversation.
+                Each account gets a name you say out loud.
+            </p>
+        </div>
+
+        <svg class="op-auth__arcs" viewBox="0 0 420 420" aria-hidden="true">
+            <circle cx="120" cy="300" r="16"></circle>
+            <path d="M160 260a80 80 0 0 1 0 0"></path>
+            <path d="M150 270a60 60 0 0 1 60-60"></path>
+            <path d="M150 300a120 120 0 0 1 120-120"></path>
+            <path d="M150 330a180 180 0 0 1 180-180"></path>
+        </svg>
+
+        <span class="op-muted" style="opacity:.6;font-size:14px">Invitation only</span>
+    </div>
+
+    <div class="op-auth__main">
+        <div class="op-auth__card">
+            @RenderBody()
+        </div>
+    </div>
+</div>
+</body>
+</html>

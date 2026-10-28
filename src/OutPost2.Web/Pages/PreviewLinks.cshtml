@@ -1,95 +1,146 @@
 @page "/preview-links"
-@model OutPost2.Web.Pages.PreviewLinksModel
+@using OutPost2.Web.Pages
+@model PreviewLinksModel
 @{
     ViewData["Title"] = "Preview links";
 }
 
-<h1 class="h3">Preview links</h1>
+<div class="op-pagehead">
+    <div>
+        <h1 class="op-h1">Preview links</h1>
+        <p class="op-lede">
+            A way to let something that cannot sign in with GitHub &mdash; a design tool, a
+            reviewer &mdash; look at these pages.
+        </p>
+    </div>
+</div>
 
-<p class="text-muted" style="max-width:46rem">
-    A preview link lets something that cannot sign in with GitHub &mdash; a design tool, a
-    reviewer &mdash; open these pages. The session it creates is <strong>read-only</strong>:
-    it can look at every page, and it cannot change a connection, send anything, or reach
-    the OAuth or MCP endpoints.
-</p>
-
-<div class="alert alert-warning" style="max-width:46rem">
-    <strong>It is not anonymous.</strong> A preview session acts as you, so whoever holds the
-    link can see your connection names and the account addresses behind them. Treat it as
-    sharing your screen, not as a public demo.
+<div class="op-note op-note--warn">
+    @Icons.Warn()
+    <span>
+        <strong>A preview session acts as you.</strong> Whoever holds the link sees your
+        connection names and the account addresses behind them. It is closer to sharing your
+        screen than to a public demo. It cannot change anything, send anything, or reach the
+        OAuth or MCP endpoints.
+    </span>
 </div>
 
 @if (Model.JustMintedUrl is not null)
 {
-    <div class="alert alert-success" style="max-width:46rem">
-        <p class="mb-1"><strong>Copy this now &mdash; it is not shown again.</strong></p>
-        <input class="form-control font-monospace mb-2" readonly value="@Model.JustMintedUrl"
+    <section class="op-panel" aria-label="New link">
+        <h2 class="op-h2">Copy this now</h2>
+        <p class="op-muted" style="margin:0">
+            It is not stored anywhere and will not be shown again. Leaving this page loses it.
+        </p>
+        <input class="op-input op-input--mono" id="minted" readonly value="@Model.JustMintedUrl"
                onclick="this.select()" aria-label="Preview link" />
-        <div class="small text-muted">
-            Expires @Model.JustMintedExpires. Opening it signs the holder in and immediately
-            drops the token from the address bar.
+        <div class="op-row">
+            <button class="op-btn op-btn--primary op-btn--sm" type="button"
+                    data-copy="@Model.JustMintedUrl" data-copy-field="minted">
+                @Icons.Copy()<span data-copy-label>Copy link</span>
+            </button>
+            <span class="op-muted" style="font-size:14px">Expires @Model.JustMintedExpires</span>
         </div>
-    </div>
+    </section>
 }
 
-<h2 class="h5 mt-4">Create one</h2>
-<form method="post" action="/preview/mint" class="row g-2 align-items-end" style="max-width:46rem">
-    @Html.AntiForgeryToken()
-    <div class="col-sm-6">
-        <label class="form-label" for="plabel">What is it for</label>
-        <input class="form-control" id="plabel" name="label" placeholder="Claude design" required maxlength="120" />
-    </div>
-    <div class="col-sm-3">
-        <label class="form-label" for="phours">Hours</label>
-        <input class="form-control" id="phours" name="hours" type="number" min="1" max="168" value="12" />
-    </div>
-    <div class="col-sm-3">
-        <button class="btn btn-primary w-100" type="submit">Create link</button>
-    </div>
-    <div class="col-12">
-        <div class="form-text">Maximum a week. Anything needing standing access should be a GitHub account instead.</div>
-    </div>
-</form>
+<section class="op-panel" aria-label="Create a link">
+    <h2 class="op-h2">Create one</h2>
+    <form method="post" action="/preview/mint" class="op-grid2">
+        @Html.AntiForgeryToken()
+        <div class="op-field">
+            <label class="op-field__label" for="plabel">What is it for</label>
+            <input class="op-input" id="plabel" name="label" required maxlength="120"
+                   autocomplete="off" placeholder="Claude design" />
+            <span class="op-field__help">Shown in the list below, so you can tell two apart before revoking one.</span>
+        </div>
+        <div class="op-field">
+            <label class="op-field__label" for="phours">Expires after</label>
+            <select class="op-input" id="phours" name="hours">
+                <option value="1">1 hour</option>
+                <option value="12" selected>12 hours</option>
+                <option value="24">24 hours</option>
+                <option value="72">3 days</option>
+                <option value="168">7 days</option>
+            </select>
+            <span class="op-field__help">A week is the ceiling. Anything needing standing access should be a GitHub account.</span>
+        </div>
+        <div class="op-row op-row--end" style="grid-column:1/-1">
+            <button class="op-btn op-btn--primary">Create link</button>
+        </div>
+    </form>
+</section>
 
-<h2 class="h5 mt-4">Active links</h2>
-@if (Model.Links.Count == 0)
-{
-    <p class="text-muted">None.</p>
-}
-else
-{
-    <table class="table align-middle" style="max-width:62rem">
-        <thead>
-        <tr>
-            <th>Label</th><th>Expires</th><th>Used</th><th>First seen from</th><th></th>
-        </tr>
-        </thead>
-        <tbody>
-        @foreach (var l in Model.Links)
-        {
-            <tr>
-                <td>@l.Label</td>
-                <td class="text-nowrap">@l.ExpiresAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
-                <td>
-                    @if (l.UseCount == 0)
+<section class="op-group" aria-labelledby="h-active">
+    <div class="op-group__head">
+        <h2 class="op-h2" id="h-active">Active links</h2>
+        <span class="op-count">@(Model.Links.Count == 1 ? "1 link" : $"{Model.Links.Count} links")</span>
+    </div>
+
+    @if (Model.Links.Count == 0)
+    {
+        <div class="op-panel"><p class="op-muted" style="margin:0">None.</p></div>
+    }
+    else
+    {
+        <div class="op-cards">
+            @foreach (var l in Model.Links)
+            {
+                <article class="op-channel" aria-label="@l.Label">
+                    <div class="op-channel__head">
+                        <div class="op-channel__who">
+                            <span class="op-h2">@l.Label</span>
+                            <span class="op-channel__acct">
+                                Expires @l.ExpiresAt.ToLocalTime().ToString("d MMM yyyy, HH:mm")
+                            </span>
+                        </div>
+                        @if (l.UseCount == 0)
+                        {
+                            <span class="op-tag op-tag--pending">Never opened</span>
+                        }
+                        else
+                        {
+                            <span class="op-tag op-tag--active"><span class="op-live" aria-hidden="true"></span>Opened</span>
+                        }
+                    </div>
+
+                    <div class="op-channel__meta">
+                        <span>Created @l.CreatedAt.ToLocalTime().ToString("d MMM HH:mm")</span>
+                        @if (l.UseCount > 0)
+                        {
+                            <span>Used @l.UseCount @(l.UseCount == 1 ? "time" : "times")</span>
+                            @if (l.LastUsedAt is { } last)
+                            {
+                                <span>Last @PreviewLinksModel.Ago(last)</span>
+                            }
+                        }
+                    </div>
+
+                    @if (l.FirstUsedFrom is not null)
                     {
-                        <span class="text-muted">never opened</span>
+                        @*
+                            Worth surfacing rather than burying: if this was opened from
+                            somewhere unexpected, this line is the only place it shows.
+                        *@
+                        <div class="op-channel__acct">
+                            First opened from <code>@l.FirstUsedFrom</code>
+                        </div>
                     }
-                    else
-                    {
-                        <span>@l.UseCount time@(l.UseCount == 1 ? "" : "s"), last @l.LastUsedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
-                    }
-                </td>
-                <td class="small text-muted text-break">@(l.FirstUsedFrom ?? "—")</td>
-                <td class="text-nowrap">
-                    <form method="post" action="/preview/revoke" class="d-inline">
-                        @Html.AntiForgeryToken()
-                        <input type="hidden" name="hash" value="@l.TokenHash" />
-                        <button class="btn btn-sm btn-outline-danger">Revoke</button>
-                    </form>
-                </td>
-            </tr>
-        }
-        </tbody>
-    </table>
+
+                    <div class="op-channel__foot">
+                        <form method="post" action="/preview/revoke"
+                              data-confirm-submit="Revoke @l.Label? Whoever has the link loses access immediately.">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="hash" value="@l.TokenHash" />
+                            <button class="op-btn op-btn--danger op-btn--sm">Revoke now</button>
+                        </form>
+                    </div>
+                </article>
+            }
+        </div>
+    }
+</section>
+
+@section Scripts {
+    <script src="~/js/outpost.js" asp-append-version="true"></script>
 }

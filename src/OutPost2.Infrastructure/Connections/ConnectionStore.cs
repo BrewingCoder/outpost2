@@ -33,6 +33,10 @@ public interface IConnectionStore
     Task SetAccountIdentityAsync(Connection connection, string? accountIdentifier, bool isPersonal,
         CancellationToken ct = default);
 
+    /// <summary>Records when the stored credential lapses, or clears it when unknown.</summary>
+    Task SetCredentialExpiryAsync(Connection connection, DateTimeOffset? expiresAt,
+        CancellationToken ct = default);
+
     Task TouchAsync(Guid connectionId, CancellationToken ct = default);
 }
 
@@ -199,6 +203,15 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
         // exactly the silent substitution the whole resolver exists to prevent.
         db.Connections.Remove(c);
         await db.SaveChangesAsync(ct);
+    }
+
+    public async Task SetCredentialExpiryAsync(
+        Connection connection, DateTimeOffset? expiresAt, CancellationToken ct = default)
+    {
+        connection.CredentialExpiresAt = expiresAt;
+        await db.Connections
+            .Where(c => c.Id == connection.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.CredentialExpiresAt, expiresAt), ct);
     }
 
     public async Task SetAccountIdentityAsync(

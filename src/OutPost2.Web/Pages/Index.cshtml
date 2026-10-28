@@ -1,46 +1,127 @@
 @page
-@using System.Security.Claims
-@using OutPost2.Web.Auth
-@inject GitHubOptions GitHub
+@using OutPost2.Core.Connections
+@using OutPost2.Web.Pages
+@model IndexModel
 @{
-    ViewData["Title"] = "OutPost2";
-    var signedIn = User.Identity?.IsAuthenticated == true;
+    ViewData["Title"] = "Home";
 }
 
-<div class="text-center">
-    <h1 class="display-5">OutPost2</h1>
-    <p class="lead">Named service connections across unrelated tenants — from anywhere.</p>
+<div class="op-pagehead">
+    <div>
+        <h1 class="op-h1">Outpost</h1>
+        <p class="op-lede">What Claude can reach, and anything waiting on you.</p>
+    </div>
 </div>
 
-<hr />
+<section class="op-grid2" aria-label="Status">
+    <div class="op-panel">
+        <div class="op-stat">
+            <span class="op-stat__n">@Model.OnAir</span>
+            <span class="op-muted">@(Model.OnAir == 1 ? "connection on air" : "connections on air")</span>
+        </div>
+    </div>
+    <div class="op-panel">
+        <div class="op-stat">
+            <span class="op-stat__n" style="@(Model.NeedAttention.Count > 0 ? "color:var(--state-expired)" : "")">@Model.NeedAttention.Count</span>
+            <span class="op-muted">needing attention</span>
+        </div>
+    </div>
+    <div class="op-panel">
+        <div class="op-stat">
+            <span class="op-stat__n" style="@(Model.Waiting > 0 ? "color:var(--signal-ink)" : "")">@Model.Waiting</span>
+            <span class="op-muted">@(Model.Waiting == 1 ? "approval waiting" : "approvals waiting")</span>
+        </div>
+    </div>
+</section>
 
-@if (signedIn)
+@if (Model.NeedAttention.Count > 0)
 {
-    <h2>Signed in</h2>
-    <dl class="row">
-        <dt class="col-sm-3">GitHub login</dt>
-        <dd class="col-sm-9">@User.FindFirstValue(ClaimTypes.Name)</dd>
-        <dt class="col-sm-3">GitHub id</dt>
-        <dd class="col-sm-9"><code>@User.FindFirstValue(ClaimTypes.NameIdentifier)</code></dd>
-    </dl>
-    <p class="text-muted">
-        This is your <strong>product</strong> identity only. It grants no access to any
-        mailbox or tracker — that comes from the connections you add.
-    </p>
-    <form method="post" action="/signout">
-        <button type="submit" class="btn btn-outline-secondary">Sign out</button>
-    </form>
+    <section class="op-group" aria-labelledby="h-attn">
+        <div class="op-group__head">
+            <h2 class="op-h2" id="h-attn">Needs attention</h2>
+        </div>
+        <div class="op-panel">
+            <ul class="op-list">
+                @foreach (var c in Model.NeedAttention)
+                {
+                    <li>
+                        <span class="op-grow">
+                            <b class="op-mono">@c.Label</b>
+                            <span class="op-tag op-tag--@ConnectionsModel.StatusClass(c.State)" style="margin-left:8px">
+                                @ConnectionsModel.StatusWord(c.State)
+                            </span>
+                            @if (ConnectionsModel.Alert(c) is { } a)
+                            {
+                                <span class="op-field__help">@a.Text</span>
+                            }
+                        </span>
+                        <a class="op-btn op-btn--secondary op-btn--sm" asp-page="/Connections">Fix it</a>
+                    </li>
+                }
+            </ul>
+        </div>
+    </section>
 }
-else if (!GitHub.IsConfigured)
+
+@if (Model.Waiting > 0)
 {
-    <div class="alert alert-warning">
-        <strong>GitHub sign-in is not configured.</strong>
-        Set <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> in
-        <code>.env</code>, then <code>docker compose up -d web</code>.
+    <div class="op-note op-note--warn">
+        @Icons.Warn()
+        <span>
+            @Model.Waiting @(Model.Waiting == 1 ? "thing is" : "things are") waiting for you to approve.
+            <a asp-page="/Jobs">Open approvals</a>
+        </span>
     </div>
 }
-else
-{
-    <p>Access is by invitation. Sign in to continue.</p>
-    <a class="btn btn-dark" href="/signin">Sign in with GitHub</a>
-}
+
+<section class="op-group" aria-labelledby="h-say">
+    <div class="op-group__head">
+        <h2 class="op-h2" id="h-say">What you can say</h2>
+        <span class="op-count">built from your connections</span>
+    </div>
+
+    @if (Model.Phrases.Count == 0)
+    {
+        <div class="op-panel">
+            <p class="op-muted" style="margin:0">
+                Nothing is connected yet, so there is nothing to say.
+                <a asp-page="/Connections">Add a connection</a> and its name becomes the command.
+            </p>
+        </div>
+    }
+    else
+    {
+        <div class="op-panel">
+            <ul class="op-list">
+                @foreach (var p in Model.Phrases)
+                {
+                    <li>
+                        <span class="op-grow">
+                            <span class="op-utter" style="padding:8px 12px">
+                                <q>@Html.Raw(p.Sentence.Replace(p.Label, $"<b>{Html.Encode(p.Label)}</b>"))</q>
+                            </span>
+                        </span>
+                        @if (p.NeedsName)
+                        {
+                            <span class="op-muted" style="font-size:13px">the name is required &mdash; Claude asks without it</span>
+                        }
+                    </li>
+                }
+            </ul>
+        </div>
+    }
+</section>
+
+<section class="op-group" aria-labelledby="h-you">
+    <div class="op-group__head"><h2 class="op-h2" id="h-you">You</h2></div>
+    <div class="op-panel">
+        <div class="op-row">
+            <span class="op-grow">Signed in as <b class="op-mono">@Model.Login</b></span>
+            <a class="op-btn op-btn--secondary op-btn--sm" asp-page="/ConnectedApps">Connected apps</a>
+            <form method="post" action="/signout">
+                @Html.AntiForgeryToken()
+                <button class="op-btn op-btn--secondary op-btn--sm">Sign out</button>
+            </form>
+        </div>
+    </div>
+</section>

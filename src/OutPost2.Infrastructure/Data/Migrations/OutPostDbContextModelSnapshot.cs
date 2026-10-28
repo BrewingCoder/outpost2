@@ -194,6 +194,9 @@ namespace OutPost2.Infrastructure.Data.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)");
 
+                    b.Property<DateTimeOffset?>("CredentialExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("HomeAccountId")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");

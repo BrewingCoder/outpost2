@@ -1,22 +1,67 @@
 @page "/denied"
+@using OutPost2.Web.Pages
+@model DeniedModel
 @{
-    ViewData["Title"] = "Not authorised";
-    var unconfigured = Request.Query["reason"] == "unconfigured";
+    ViewData["Title"] = Model.Preview ? "Link not valid" : "Not authorised";
+    Layout = "_AuthLayout";
 }
 
-<h1 class="display-6">Not authorised</h1>
-
-@if (unconfigured)
+@if (Model.Unconfigured)
 {
-    <p>GitHub sign-in has not been configured on this instance yet.</p>
+    <div>
+        <h2 class="op-h1">Not configured</h2>
+        <p class="op-lede">GitHub sign-in has not been set up on this instance yet.</p>
+    </div>
+}
+else if (Model.Preview)
+{
+    <div>
+        <h2 class="op-h1">That link no longer works</h2>
+        <p class="op-lede">
+            Preview links expire, and they can be revoked at any time. This one is one or
+            the other.
+        </p>
+    </div>
+    <div class="op-note op-note--info">
+        @Icons.Check()
+        <span>Nothing was signed in and nothing was recorded against your browser. Ask whoever sent it for a fresh link.</span>
+    </div>
 }
 else
 {
-    <p>
-        That GitHub account is not on the allowlist for this instance.
-        OutPost2 is invitation-only — the address being public does not make the product open.
-    </p>
-    <p class="text-muted">If you believe this is a mistake, ask the owner to add your account.</p>
-}
+    <div>
+        <h2 class="op-h1">Not authorised</h2>
+        <p class="op-lede">
+            @if (Model.Login is not null)
+            {
+                <text>The GitHub account <b class="op-mono">@Model.Login</b> is not on the list for this instance.</text>
+            }
+            else
+            {
+                <text>That GitHub account is not on the list for this instance.</text>
+            }
+        </p>
+    </div>
 
-<a class="btn btn-outline-secondary" href="/">Back</a>
+    <div class="op-note op-note--info">
+        @Icons.Check()
+        <span>Nothing was stored. No account was created and nothing of yours was read.</span>
+    </div>
+
+    <div class="op-row">
+        <a class="op-btn op-btn--secondary" href="/signin/github?prompt=select_account">Sign in with a different account</a>
+    </div>
+
+    <p class="op-field__help">
+        If this is a mistake, ask the owner to add
+        @if (Model.Login is not null)
+        {
+            <b class="op-mono">@Model.Login</b>
+        }
+        else
+        {
+            <text>your GitHub login</text>
+        }
+        to the allowlist.
+    </p>
+}
