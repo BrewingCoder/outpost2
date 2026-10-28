@@ -133,6 +133,49 @@ namespace OutPost2.Infrastructure.Data.Migrations
                     b.ToTable("oauth_tokens", (string)null);
                 });
 
+            modelBuilder.Entity("OutPost2.Core.Auth.PreviewLink", b =>
+                {
+                    b.Property<string>("TokenHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("FirstUsedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FirstUsedFrom")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<DateTimeOffset?>("LastUsedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("UseCount")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("TokenHash");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("preview_links", (string)null);
+                });
+
             modelBuilder.Entity("OutPost2.Core.Connections.Connection", b =>
                 {
                     b.Property<Guid>("Id")

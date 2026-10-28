@@ -18,6 +18,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
     public DbSet<OAuthToken> OAuthTokens => Set<OAuthToken>();
     public DbSet<StagedFile> StagedFiles => Set<StagedFile>();
     public DbSet<Job> Jobs => Set<Job>();
+    public DbSet<PreviewLink> PreviewLinks => Set<PreviewLink>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -113,6 +114,16 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.Property(c => c.RedirectUri).HasMaxLength(500);
             e.Property(c => c.CodeChallenge).HasMaxLength(128);
             e.HasIndex(c => c.ExpiresAt);
+        });
+
+        b.Entity<PreviewLink>(e =>
+        {
+            e.ToTable("preview_links");
+            e.HasKey(l => l.TokenHash);
+            e.Property(l => l.TokenHash).HasMaxLength(64);
+            e.Property(l => l.Label).HasMaxLength(120);
+            e.Property(l => l.FirstUsedFrom).HasMaxLength(200);
+            e.HasIndex(l => l.UserId);
         });
 
         b.Entity<OAuthToken>(e =>

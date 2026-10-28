@@ -61,6 +61,8 @@ builder.Services.AddHostedService<JobRunner>();
 builder.Services.AddHostedService<HousekeepingService>();
 builder.Services.AddHttpClient("youtrack").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddHttpClient("github").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddScoped<OutPost2.Infrastructure.Auth.IPreviewLinkService,
+                           OutPost2.Infrastructure.Auth.PreviewLinkService>();
 builder.Services.AddScoped<IGitHubConnectionService, GitHubConnectionService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Code.IGitHubService,
                            OutPost2.Infrastructure.Code.GitHubService>();
@@ -180,6 +182,11 @@ if (!app.Environment.IsDevelopment())
 app.UseStaticFiles();
 app.UseRouting();
 app.UseAuthentication();
+
+// Immediately after authentication and BEFORE anything can act on the principal, so a
+// preview session is confined no matter which endpoint it reaches.
+app.UseMiddleware<PreviewReadOnlyMiddleware>();
+
 app.UseAuthorization();
 
 // Required by [FromForm] in minimal APIs, and wanted anyway: these forms change
@@ -191,6 +198,7 @@ app.MapConnectionEndpoints();
 app.MapFileEndpoints();
 var publicBaseUrl = builder.Configuration["OutPost2:PublicBaseUrl"] ?? "https://outpost.brewingcoder.com";
 app.MapMcpOAuth(publicBaseUrl);
+app.MapPreviewLinks();
 
 // Bearer-only on /mcp. The cookie pipeline's 302-to-a-login-page is unusable by an MCP
 // client, which needs a 401 plus WWW-Authenticate to discover where to authenticate.

@@ -1,0 +1,95 @@
+@page "/preview-links"
+@model OutPost2.Web.Pages.PreviewLinksModel
+@{
+    ViewData["Title"] = "Preview links";
+}
+
+<h1 class="h3">Preview links</h1>
+
+<p class="text-muted" style="max-width:46rem">
+    A preview link lets something that cannot sign in with GitHub &mdash; a design tool, a
+    reviewer &mdash; open these pages. The session it creates is <strong>read-only</strong>:
+    it can look at every page, and it cannot change a connection, send anything, or reach
+    the OAuth or MCP endpoints.
+</p>
+
+<div class="alert alert-warning" style="max-width:46rem">
+    <strong>It is not anonymous.</strong> A preview session acts as you, so whoever holds the
+    link can see your connection names and the account addresses behind them. Treat it as
+    sharing your screen, not as a public demo.
+</div>
+
+@if (Model.JustMintedUrl is not null)
+{
+    <div class="alert alert-success" style="max-width:46rem">
+        <p class="mb-1"><strong>Copy this now &mdash; it is not shown again.</strong></p>
+        <input class="form-control font-monospace mb-2" readonly value="@Model.JustMintedUrl"
+               onclick="this.select()" aria-label="Preview link" />
+        <div class="small text-muted">
+            Expires @Model.JustMintedExpires. Opening it signs the holder in and immediately
+            drops the token from the address bar.
+        </div>
+    </div>
+}
+
+<h2 class="h5 mt-4">Create one</h2>
+<form method="post" action="/preview/mint" class="row g-2 align-items-end" style="max-width:46rem">
+    @Html.AntiForgeryToken()
+    <div class="col-sm-6">
+        <label class="form-label" for="plabel">What is it for</label>
+        <input class="form-control" id="plabel" name="label" placeholder="Claude design" required maxlength="120" />
+    </div>
+    <div class="col-sm-3">
+        <label class="form-label" for="phours">Hours</label>
+        <input class="form-control" id="phours" name="hours" type="number" min="1" max="168" value="12" />
+    </div>
+    <div class="col-sm-3">
+        <button class="btn btn-primary w-100" type="submit">Create link</button>
+    </div>
+    <div class="col-12">
+        <div class="form-text">Maximum a week. Anything needing standing access should be a GitHub account instead.</div>
+    </div>
+</form>
+
+<h2 class="h5 mt-4">Active links</h2>
+@if (Model.Links.Count == 0)
+{
+    <p class="text-muted">None.</p>
+}
+else
+{
+    <table class="table align-middle" style="max-width:62rem">
+        <thead>
+        <tr>
+            <th>Label</th><th>Expires</th><th>Used</th><th>First seen from</th><th></th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var l in Model.Links)
+        {
+            <tr>
+                <td>@l.Label</td>
+                <td class="text-nowrap">@l.ExpiresAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                <td>
+                    @if (l.UseCount == 0)
+                    {
+                        <span class="text-muted">never opened</span>
+                    }
+                    else
+                    {
+                        <span>@l.UseCount time@(l.UseCount == 1 ? "" : "s"), last @l.LastUsedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+                    }
+                </td>
+                <td class="small text-muted text-break">@(l.FirstUsedFrom ?? "—")</td>
+                <td class="text-nowrap">
+                    <form method="post" action="/preview/revoke" class="d-inline">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="hash" value="@l.TokenHash" />
+                        <button class="btn btn-sm btn-outline-danger">Revoke</button>
+                    </form>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
