@@ -12,10 +12,14 @@ public static class RepoNameEndpoints
 {
     public static void MapRepoNames(this WebApplication app)
     {
+        // Both handlers read the signed-in user's id and would throw on an anonymous
+        // request rather than redirecting to sign-in.
+        var group = app.MapGroup("").RequireAuthorization();
+
         // [FromForm], not the query string. The same binding mistake has now been made
         // twice in this codebase; both times the value arrived null and the handler
         // behaved as though the field had been left blank.
-        app.MapPost("/repo-names/add", async (
+        group.MapPost("/repo-names/add", async (
             HttpContext ctx, OutPostDbContext db,
             [FromForm] Guid connectionId, [FromForm] string alias, [FromForm] string fullName) =>
         {
@@ -65,7 +69,7 @@ public static class RepoNameEndpoints
             return Results.Redirect("/repo-names?added=" + Uri.EscapeDataString(alias));
         });
 
-        app.MapPost("/repo-names/{id:guid}/delete", async (
+        group.MapPost("/repo-names/{id:guid}/delete", async (
             HttpContext ctx, OutPostDbContext db, Guid id) =>
         {
             var userId = ctx.User.UserId();

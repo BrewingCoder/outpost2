@@ -113,6 +113,12 @@ public sealed class FormBindingTests : IClassFixture<FormBindingTests.Factory>, 
 
         protected override Task<AuthenticateResult> HandleAuthenticateAsync()
         {
+            // A way to be genuinely signed out. Without it this scheme authenticates every
+            // request, so nothing can test what a visitor who is not signed in actually
+            // sees — and a page that throws instead of redirecting passes every test.
+            if (Request.Headers.ContainsKey("X-Skip-Test-Auth"))
+                return Task.FromResult(AuthenticateResult.NoResult());
+
             var identity = new ClaimsIdentity(
                 [new Claim("op2:uid", UserId.ToString()), new Claim(ClaimTypes.Name, "tester")], "Test");
 
@@ -272,6 +278,7 @@ public sealed class FormBindingTests : IClassFixture<FormBindingTests.Factory>, 
     [InlineData("/jobs")]
     [InlineData("/files")]
     [InlineData("/preview-links")]
+    [InlineData("/repo-names")]
     [InlineData("/connected-apps")]
     [InlineData("/signin")]
     [InlineData("/denied")]
@@ -292,6 +299,36 @@ public sealed class FormBindingTests : IClassFixture<FormBindingTests.Factory>, 
 
         // The shell, so a page that silently lost its layout is caught too.
         Assert.Contains("op-app", html);
+    }
+
+    [SkippableTheory]
+    [InlineData("/connections")]
+    [InlineData("/jobs")]
+    [InlineData("/files")]
+    [InlineData("/preview-links")]
+    [InlineData("/repo-names")]
+    [InlineData("/connected-apps")]
+    public async Task A_signed_out_visitor_is_sent_to_sign_in_rather_than_an_error(string path)
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        // A page that reads the signed-in user's id without [Authorize] throws instead of
+        // redirecting, and a 500 on the sign-in path looks like the site is down. Caught
+        // in production on /repo-names, which every other page happened to get right.
+        using var anon = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        anon.DefaultRequestHeaders.Add("X-Skip-Test-Auth", "1");
+
+        using var resp = await anon.GetAsync(path);
+
+        // Not a redirect specifically: the stub scheme challenges with 401 where the real
+        // cookie scheme sends 302 to the sign-in page. Both are a refusal the visitor can
+        // act on. The defect is the third outcome — a 500 from reading a claim that is not
+        // there, which looks to the visitor like the site is broken rather than private.
+        Assert.True((int)resp.StatusCode < 500,
+            $"{path} answered {(int)resp.StatusCode} to a signed-out visitor");
     }
 
     [SkippableFact]

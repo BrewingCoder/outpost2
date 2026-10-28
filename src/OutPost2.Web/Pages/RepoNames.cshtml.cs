@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
@@ -10,6 +11,7 @@ using OutPost2.Web.Connections;
 
 namespace OutPost2.Web.Pages;
 
+[Authorize]
 public sealed class RepoNamesModel(
     OutPostDbContext db,
     IConnectionStore connections,
