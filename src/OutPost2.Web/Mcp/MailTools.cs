@@ -33,7 +33,8 @@ public sealed class MailTools(
     IConnectionStore connections,
     IMailService mail,
     IMessageIndex index,
-    OutPost2.Infrastructure.Mail.IAttachmentExtractor extractor)
+    OutPost2.Infrastructure.Mail.IAttachmentExtractor extractor,
+    PublicUrls urls)
 {
     private Guid UserId => http.HttpContext?.User.UserId()
         ?? throw new InvalidOperationException("No authenticated user on this MCP request.");
@@ -44,7 +45,7 @@ public sealed class MailTools(
     {
         var all = await connections.ListAsync(UserId, ct);
         if (all.Count == 0)
-            return "No connections set up yet. Add one at https://outpost.brewingcoder.com/connections";
+            return $"No connections set up yet. Add one at {urls.Connections}";
 
         var sb = new StringBuilder();
         foreach (var c in all)
@@ -598,10 +599,10 @@ public sealed class MailTools(
     /// settings rather than in mail, so this is a consent gap and not a bug — and the user
     /// can only act on it if the difference is spelled out.
     /// </summary>
-    private static string PaletteUnreadable(string label) =>
+    private string PaletteUnreadable(string label) =>
         $"{label} was connected before Outpost asked for permission to read Outlook's "
         + "category list, so I can't see or add to it. Reconnecting it at "
-        + "https://outpost.brewingcoder.com/connections fixes that.";
+        + $"{urls.Connections} fixes that.";
 
     private sealed record Resolved(MailRef? Item, Connection? Connection, string? Problem);
 

@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using OutPost2.Infrastructure.Data;
 using OutPost2.Infrastructure.Users;
 using OutPost2.Infrastructure.Connections;
+using OutPost2.Web;
 using OutPost2.Web.Auth;
 using OutPost2.Web.Code;
 using OutPost2.Web.Connections;
@@ -83,10 +84,14 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Feedback.IFrictionService,
 
 // The app sits behind the Cloudflare tunnel, which terminates TLS and forwards plain HTTP
 // to the container. Without honouring X-Forwarded-Proto, ASP.NET Core believes the request
-// is http:// and builds the OAuth redirect_uri as http://outpost.brewingcoder.com/signin-github
+// is http:// and builds the OAuth redirect_uri as http://<public-host>/signin-github
 // — which GitHub rejects as a mismatch against the registered https:// callback.
 // cloudflared is an arbitrary address on the compose network, so the default known-proxy
 // allowlist has to be cleared for the headers to be honoured at all.
+// Resolved once at startup and injected wherever a user-facing link is produced, so no
+// tool can quietly hard-code one deployment's address.
+builder.Services.AddSingleton(new PublicUrls(builder.Configuration["OutPost2:PublicBaseUrl"]));
+
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {
     o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
@@ -240,7 +245,7 @@ app.UseAntiforgery();
 app.MapRazorPages();
 app.MapConnectionEndpoints();
 app.MapFileEndpoints();
-var publicBaseUrl = builder.Configuration["OutPost2:PublicBaseUrl"] ?? "https://outpost.brewingcoder.com";
+var publicBaseUrl = app.Services.GetRequiredService<PublicUrls>().Base;
 app.MapMcpOAuth(publicBaseUrl);
 app.MapPreviewLinks();
 app.MapRepoNames();

@@ -16,7 +16,8 @@ public sealed class FileAndJobTools(
     IHttpContextAccessor http,
     IStagingService staging,
     IConnectionStore connections,
-    IJobService jobs)
+    IJobService jobs,
+    PublicUrls urls)
 {
     private Guid UserId => http.HttpContext?.User.UserId()
         ?? throw new InvalidOperationException("No authenticated user on this MCP request.");
@@ -27,7 +28,7 @@ public sealed class FileAndJobTools(
     {
         var files = await staging.ListAsync(UserId, ct);
         if (files.Count == 0)
-            return "No files staged. Upload one at https://outpost.brewingcoder.com/files and give it a name.";
+            return $"No files staged. Upload one at {urls.Files} and give it a name.";
 
         return "Staged files:\n" + string.Join("\n",
             files.Select(f => $"- {f.Name} ({f.FileName}, {f.HumanSize})"));
@@ -116,7 +117,7 @@ public sealed class FileAndJobTools(
         var waiting = items.Count(j => j.State == JobState.AwaitingApproval);
         if (waiting > 0)
             sb.AppendLine($"{waiting} item{(waiting == 1 ? "" : "s")} need your approval at " +
-                          "https://outpost.brewingcoder.com/jobs");
+                          urls.Jobs);
 
         return sb.ToString().TrimEnd();
     }
