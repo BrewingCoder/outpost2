@@ -19,10 +19,10 @@ public sealed class FrictionReportTests
     public void Email_addresses_are_removed()
     {
         var scrubbed = FrictionService.Scrub(
-            "list_mail showed nothing from scott.singleton@contoso.com even though it was there");
+            "list_mail showed nothing from jordan.lee@example.com even though it was there");
 
-        Assert.DoesNotContain("@contoso.com", scrubbed);
-        Assert.DoesNotContain("scott.singleton", scrubbed);
+        Assert.DoesNotContain("@example.com", scrubbed);
+        Assert.DoesNotContain("jordan.lee", scrubbed);
         Assert.Contains("[address]", scrubbed);
 
         // The sentence around it has to survive, or the report says nothing.
@@ -40,6 +40,9 @@ public sealed class FrictionReportTests
         Assert.Contains("[address]", scrubbed);
     }
 
+    // Every fixture below is SYNTHETIC and must stay that way. A redaction test needs a
+    // string shaped like the real thing, which makes it the easiest place in the codebase
+    // to park a working credential by accident — and the test still passes when you do.
     [Theory]
     [InlineData("ghp_EXAMPLEONLYnotarealtoken000000000000")]
     [InlineData("perm:ZXhhbXBsZQ==.MDAtMA==.EXAMPLEONLYnotarealtoken00000")]

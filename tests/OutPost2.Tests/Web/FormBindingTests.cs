@@ -71,6 +71,11 @@ public sealed class FormBindingTests : IClassFixture<FormBindingTests.Factory>, 
             builder.UseSetting("OutPost2:Entra:ClientId", "00000000-0000-0000-0000-000000000001");
             builder.UseSetting("OutPost2:Entra:ClientSecret", "test-secret");
 
+            // Supplied here because EntraOptions no longer carries a default. A default
+            // would have to name somebody's deployment, and a fork inheriting it would
+            // send its users there to consent.
+            builder.UseSetting("OutPost2:Entra:RedirectUri", "https://localhost/signin-microsoft");
+
             builder.ConfigureServices(services =>
             {
                 // Stand in for the GitHub cookie, so these tests exercise BINDING and not

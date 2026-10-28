@@ -28,7 +28,12 @@ public sealed class EntraOptions
     /// </summary>
     public string Authority { get; set; } = "https://login.microsoftonline.com/organizations";
 
-    public string RedirectUri { get; set; } = "https://outpost.brewingcoder.com/signin-microsoft";
+    /// <summary>
+    /// Must match a redirect URI on the app registration. No default on purpose: a default
+    /// pointing at someone else's deployment would send this instance's users there to
+    /// consent, and it would fail in a way that looks like a tenant problem.
+    /// </summary>
+    public string RedirectUri { get; set; } = "";
 
     /// <summary>
     /// Delegated only, and deliberately minimal (D2: email first). Capabilities beyond mail
