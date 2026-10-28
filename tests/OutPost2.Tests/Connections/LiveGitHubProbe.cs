@@ -63,6 +63,9 @@ public sealed class LiveGitHubProbe(ITestOutputHelper output) : IDisposable
         }
         catch (Exception ex) { Skip.If(true, ex.Message); return; }
 
+        // Reachable-but-unmigrated Postgres is a skip, not a failure (see LiveEnvironment).
+        await LiveEnvironment.RequireSchemaAsync(db);
+
         var c = await db.Connections.FirstOrDefaultAsync(x => x.Provider == ProviderKind.GitHub);
         Skip.If(c is null, "no GitHub connection stored");
 

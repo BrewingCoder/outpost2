@@ -75,6 +75,9 @@ public sealed class LiveConnectionSmokeTests : IDisposable
         Skip.If(built is null, why);
         var (db, store, ms) = built!.Value;
 
+        // Reachable-but-unmigrated Postgres is a skip, not a failure (see LiveEnvironment).
+        await LiveEnvironment.RequireSchemaAsync(db);
+
         var connection = await db.Connections
             .FirstOrDefaultAsync(c => c.Provider == ProviderKind.Microsoft);
 

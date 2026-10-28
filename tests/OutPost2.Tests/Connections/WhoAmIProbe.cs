@@ -60,6 +60,9 @@ public sealed class WhoAmIProbe(ITestOutputHelper output) : IDisposable
         }
         catch (Exception ex) { Skip.If(true, ex.Message); return; }
 
+        // Reachable-but-unmigrated Postgres is a skip, not a failure (see LiveEnvironment).
+        await LiveEnvironment.RequireSchemaAsync(db);
+
         var connections = await db.Connections
             .Where(c => c.Provider == ProviderKind.Microsoft).ToListAsync();
 

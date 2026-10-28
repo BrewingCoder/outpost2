@@ -70,6 +70,9 @@ public sealed class LiveMailProbe(ITestOutputHelper output) : IDisposable
         }
         catch (Exception ex) { Skip.If(true, ex.Message); return; }
 
+        // Reachable-but-unmigrated Postgres is a skip, not a failure (see LiveEnvironment).
+        await LiveEnvironment.RequireSchemaAsync(db);
+
         var connection = await db.Connections
             .FirstOrDefaultAsync(c => c.Provider == ProviderKind.Microsoft);
         Skip.If(connection is null, "no Microsoft connection stored");

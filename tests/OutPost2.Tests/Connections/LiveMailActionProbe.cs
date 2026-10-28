@@ -80,6 +80,9 @@ public sealed class LiveMailActionProbe(ITestOutputHelper output) : IDisposable
         }
         catch (Exception ex) { Skip.If(true, ex.Message); return; }
 
+        // Reachable-but-unmigrated Postgres is a skip, not a failure (see LiveEnvironment).
+        await LiveEnvironment.RequireSchemaAsync(db);
+
         // Which mailbox to act on. Unset it and the probe takes whichever Microsoft
         // connection comes first, which is the right default for "does mail still work";
         // set it to re-run the whole surface against one mailbox after a reconnect.
