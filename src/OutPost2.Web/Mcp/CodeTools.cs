@@ -198,7 +198,7 @@ public sealed class CodeTools(
     }
 
     [McpServerTool(Name = "github_repositories")]
-    [Description("List the repositories this GitHub connection can see. Use it to answer whether a repository is reachable at all, or to find its owner when only the name is known.")]
+    [Description("List the repositories this GitHub connection can see, and the names configured for it. Use it to answer whether a repository is reachable at all, to find its owner when only the name is known, or to see what nicknames resolve to what.")]
     public async Task<string> Repositories(
         [Description("Optional filter on name, owner or description.")] string? match = null,
         [Description(ConnectionDoc)] string? connection = null,
@@ -211,6 +211,7 @@ public sealed class CodeTools(
         try
         {
             var all = await repos.KnownAsync(c, ct);
+            var aliases = await repos.AliasesAsync(c, ct);
 
             var hits = string.IsNullOrWhiteSpace(match)
                 ? all
@@ -218,17 +219,58 @@ public sealed class CodeTools(
                     r.FullName.Contains(match, StringComparison.OrdinalIgnoreCase)
                     || (r.Description ?? "").Contains(match, StringComparison.OrdinalIgnoreCase)).ToList();
 
-            if (hits.Count == 0)
+            // Aliases can point at a repository that is not in the listing at all — a
+            // public repo this token never lists, for instance — so they are reported
+            // whether or not anything in the listing matched.
+            var namedHits = string.IsNullOrWhiteSpace(match)
+                ? aliases
+                : aliases.Where(a =>
+                    a.Alias.Contains(match, StringComparison.OrdinalIgnoreCase)
+                    || a.FullName.Contains(match, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            if (hits.Count == 0 && namedHits.Count == 0)
             {
                 return string.IsNullOrWhiteSpace(match)
                     ? $"{c.Label} can see no repositories at all. The token may lack the repo scope."
-                    : $"Nothing matching '{match}' among the {all.Count} repositories {c.Label} can see.";
+                    : $"Nothing matching '{match}' among the {all.Count} repositories {c.Label} can see, " +
+                      $"and no configured name matches either.";
+            }
+
+            if (hits.Count == 0)
+            {
+                var only = new StringBuilder(
+                    $"Nothing in the {all.Count} repositories {c.Label} can see matches '{match}', " +
+                    "but these names are configured:\n");
+                foreach (var a in namedHits) only.AppendLine($"- \"{a.Alias}\" means {a.FullName}");
+                return only.ToString().TrimEnd();
             }
 
             var shown = hits.Take(Math.Clamp(count, 1, 100)).ToList();
             var sb = new StringBuilder(shown.Count < hits.Count
                 ? $"{hits.Count} repositories on {c.Label}, first {shown.Count} by most recent activity:\n"
                 : $"{hits.Count} repositor{(hits.Count == 1 ? "y" : "ies")} on {c.Label}:\n");
+
+            // The shape of what is visible, per owner. A fine-grained token can be granted
+            // public access only to an account, and the listing then looks complete while
+            // every private repository under that owner is missing from it. A flat count
+            // cannot show that; "33 under BrewingCoder, all public" can.
+            if (string.IsNullOrWhiteSpace(match) && all.Count > 0)
+            {
+                var byOwner = all
+                    .GroupBy(r => r.Owner)
+                    .OrderByDescending(g => g.Count())
+                    .Select(g =>
+                    {
+                        var priv = g.Count(r => r.Private);
+                        var shapeOf = priv == 0 ? "all public"
+                            : priv == g.Count() ? "all private"
+                            : $"{priv} private";
+                        return $"{g.Key} {g.Count()} ({shapeOf})";
+                    });
+
+                sb.AppendLine($"By owner: {string.Join(", ", byOwner)}.");
+                sb.AppendLine();
+            }
 
             foreach (var r in shown)
             {
@@ -238,6 +280,13 @@ public sealed class CodeTools(
                 if (r.Fork) sb.Append(" [fork]");
                 if (r.PushedAt is { } p) sb.Append($" — last push {Ago(p)}");
                 sb.AppendLine();
+            }
+
+            if (namedHits.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("Names configured for this connection:");
+                foreach (var a in namedHits) sb.AppendLine($"- \"{a.Alias}\" means {a.FullName}");
             }
 
             return sb.ToString().TrimEnd();

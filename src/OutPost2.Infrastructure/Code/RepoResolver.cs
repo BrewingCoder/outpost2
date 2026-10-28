@@ -24,6 +24,13 @@ public interface IRepoResolver
 {
     Task<RepoResolution> ResolveAsync(Connection c, string spoken, CancellationToken ct = default);
     Task<IReadOnlyList<RepoRef>> KnownAsync(Connection c, CancellationToken ct = default);
+
+    /// <summary>
+    /// The names configured for this connection. Exposed because a tool that cannot read
+    /// them reports, correctly from what it can see, that aliases do not exist — so the
+    /// one place they are configured is invisible to the conversation that uses them.
+    /// </summary>
+    Task<IReadOnlyList<RepoAlias>> AliasesAsync(Connection c, CancellationToken ct = default);
     void Forget(Guid connectionId);
 }
 
@@ -59,6 +66,12 @@ public sealed class RepoResolver(
         return repos;
     }
 
+    public async Task<IReadOnlyList<RepoAlias>> AliasesAsync(Connection c, CancellationToken ct = default) =>
+        await db.RepoAliases
+            .Where(a => a.ConnectionId == c.Id)
+            .OrderBy(a => a.Alias)
+            .ToListAsync(ct);
+
     public async Task<RepoResolution> ResolveAsync(Connection c, string spoken, CancellationToken ct = default)
     {
         var said = (spoken ?? "").Trim().Trim('/');
@@ -72,9 +85,7 @@ public sealed class RepoResolver(
         var key = RepoAlias.Normalise(said);
 
         // Aliases first. The whole point of configuring one is to beat the search.
-        var aliases = await db.RepoAliases
-            .Where(a => a.ConnectionId == c.Id)
-            .ToListAsync(ct);
+        var aliases = await AliasesAsync(c, ct);
 
         var alias = aliases.FirstOrDefault(a => RepoAlias.Normalise(a.Alias) == key);
         if (alias is not null) return RepoResolution.Found(alias.FullName);
@@ -107,6 +118,15 @@ public sealed class RepoResolver(
         var message = near.Count > 0
             ? $"No repository called {said} on {c.Label}. Closest: {string.Join(", ", near)}."
             : $"No repository called {said} among the {known.Count} this connection can see on {c.Label}.";
+
+        // If names are configured, say so and list them. Otherwise the reply states a
+        // fact about the listing and leaves the listener to wonder whether the thing they
+        // set up is being consulted at all.
+        if (aliases.Count > 0)
+        {
+            message += " Configured names: " +
+                string.Join(", ", aliases.Select(a => $"\"{a.Alias}\" = {a.FullName}")) + ".";
+        }
 
         return new(RepoResolutionKind.NotFound, null, near, message);
     }

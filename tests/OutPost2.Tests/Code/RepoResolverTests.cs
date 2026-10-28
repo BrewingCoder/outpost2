@@ -276,6 +276,57 @@ public sealed class RepoResolverTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Configured_names_can_be_read_back()
+    {
+        Skip.IfNot(_ready, _why);
+
+        _db.RepoAliases.Add(new RepoAlias
+        {
+            UserId = _conn.UserId,
+            ConnectionId = _conn.Id,
+            Alias = "the core",
+            FullName = "BrewingCoder/RosettaCore",
+        });
+        await _db.SaveChangesAsync();
+
+        var (r, _) = Build("BrewingCoder/outpost");
+
+        // Reading them back is what makes them exist as far as the conversation is
+        // concerned. Without this the tools report, correctly from what they can see,
+        // that there is no alias concept at all — while resolution is quietly using one.
+        var names = await r.AliasesAsync(_conn);
+
+        Assert.Single(names);
+        Assert.Equal("the core", names[0].Alias);
+        Assert.Equal("BrewingCoder/RosettaCore", names[0].FullName);
+    }
+
+    [SkippableFact]
+    public async Task A_failed_lookup_mentions_the_names_that_are_configured()
+    {
+        Skip.IfNot(_ready, _why);
+
+        _db.RepoAliases.Add(new RepoAlias
+        {
+            UserId = _conn.UserId,
+            ConnectionId = _conn.Id,
+            Alias = "the core",
+            FullName = "BrewingCoder/RosettaCore",
+        });
+        await _db.SaveChangesAsync();
+
+        var (r, _) = Build("BrewingCoder/outpost");
+        var result = await r.ResolveAsync(_conn, "zzzz");
+
+        Assert.Equal(RepoResolutionKind.NotFound, result.Kind);
+
+        // Otherwise the reply states a fact about the listing and leaves the listener
+        // wondering whether the thing they configured is consulted at all.
+        Assert.Contains("the core", result.Message);
+        Assert.Contains("BrewingCoder/RosettaCore", result.Message);
+    }
+
+    [SkippableFact]
     public async Task Aliases_do_not_leak_between_connections()
     {
         Skip.IfNot(_ready, _why);
