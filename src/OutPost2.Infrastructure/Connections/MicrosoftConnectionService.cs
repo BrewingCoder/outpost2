@@ -287,7 +287,7 @@ public sealed class MicrosoftConnectionService(
         // scope set it was first issued with, so a connection can scope UP to anything the
         // tenant has consented to since — no browser, no re-authorising, no lost label.
         //
-        // Measured on three real connections: both contoso mailboxes picked up
+        // Measured on three real connections: both work mailboxes picked up
         // MailboxSettings on the next refresh after the tenant granted it, while a mailbox
         // in a tenant that had not consented answered "interaction required". Asking for
         // everything unconditionally would have broken that third one for ALL mail; never

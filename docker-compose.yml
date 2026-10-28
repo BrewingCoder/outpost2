@@ -33,7 +33,7 @@ services:
   # S3-compatible object store. We depend on RANGED READS (GetObject with Range):
   # large mail attachments stream to Graph in 320 KiB-multiple chunks and must never be
   # buffered whole (OP2-10). Garage rather than MinIO because MinIO's images are no longer
-  # pullable from Docker Hub or quay.io, and cluster-ops flagged Garage as the better fit for
+  # pullable from Docker Hub or quay.io, and Garage was judged the better fit for
   # the NFS-backed cluster - so dev and prod share an implementation, not just an API.
   garage:
     image: dxflrs/garage:v2.1.0
@@ -84,7 +84,7 @@ services:
       timeout: 5s
       retries: 20
 
-  # Enables the transit engine and creates the OP2 key, mirroring what cluster-ops
+  # Enables the transit engine and creates the OP2 key, mirroring what the cluster
   # will provision in the cluster as `op2-transit/`.
   vault-init:
     image: hashicorp/vault:2.0.4
@@ -148,7 +148,7 @@ services:
       - "5080:8080"
 
   # Publishes https://outpost.brewingcoder.com -> http://web:8080
-  # Tunnel `outpost2-dev` (00000000-0000-0000-0000-000000000000), ingress managed
+  # Cloudflare tunnel (name and id in CLAUDE.local.md), ingress managed
   # in Cloudflare, not in a local config file.
   cloudflared:
     image: cloudflare/cloudflared:2025.4.0

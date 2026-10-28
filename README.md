@@ -79,14 +79,14 @@ docker compose up -d
 | vault (dev) | http://localhost:8200 | throwaway; mirrors `op2-transit/op2-kek` |
 
 Vault address, auth method and mount path are configuration, so pointing at the lab Vault at
-`https://vault.internal.example` (LAN only, never via Cloudflare) needs no code change.
+a private LAN Vault (never exposed publicly) needs no code change.
 
 ## Gotchas found the hard way
 
 - `.NET 10` creates **`.slnx`**, not `.sln`.
 - Git-Bash mangles container paths (`/garage` → `C:/Program Files/Git/garage`). Use
   PowerShell for `docker exec`, or set `MSYS_NO_PATHCONV=1`.
-- Git-Bash curl is Schannel and ignores `--cacert`, so it cannot reach `vault.internal.example`.
+- Git-Bash curl is Schannel and ignores `--cacert`, so it cannot reach a host behind a private CA.
 - The Garage image is distroless — no shell; drive its CLI from the host.
 - Garage key ids are `GK` + exactly 24 hex chars; secrets exactly 64 hex.
 - **AWS SDK v4** enables request checksums and `aws-chunked` by default, which Garage

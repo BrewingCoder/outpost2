@@ -39,7 +39,7 @@ public sealed class YouTrackConnectionService(
         http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         // Some YouTrack instances sit behind Cloudflare, which 1010-blocks unfamiliar
-        // user agents. Learned the hard way against youtrack.example.com, where the default
+        // user agents. Learned the hard way against a Cloudflare-fronted instance, where the default
         // .NET agent is refused outright.
         http.DefaultRequestHeaders.UserAgent.ParseAdd("OutPost2/1.0");
         return http;

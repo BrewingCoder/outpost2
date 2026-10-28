@@ -12,7 +12,7 @@ namespace OutPost2.Web.Jobs;
 /// <summary>
 /// Drains the job queue (OP2-11).
 /// <para>
-/// In-process and Postgres-backed, as cluster-ops recommended — there is no shared broker in
+/// In-process and Postgres-backed, on the cluster team's advice — there is no shared broker in
 /// the cluster, and the resume semantics are custom enough (<c>nextExpectedRanges</c>) that
 /// a generic framework would fight us.
 /// </para>

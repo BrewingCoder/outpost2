@@ -11,7 +11,7 @@ public sealed class VaultOptions
 
     /// <summary>
     /// Dev: <c>http://vault-dev:8200</c>.
-    /// Integration: <c>https://vault.internal.example</c> (LAN only — never exposed via Cloudflare).
+    /// Integration: a private LAN Vault — never exposed publicly.
     /// Production: <c>https://keyvault.keyvault.svc:8200</c>.
     /// </summary>
     public string Address { get; set; } = "http://vault-dev:8200";
@@ -37,7 +37,7 @@ public sealed class VaultOptions
 
     /// <summary>
     /// PEM path for a private CA. The lab Vault uses the BrewingCoder Lab CA, so without
-    /// this the TLS handshake fails against <c>vault.internal.example</c>.
+    /// this the TLS handshake fails against a Vault behind a private CA.
     /// </summary>
     public string? CaCertPath { get; set; }
 

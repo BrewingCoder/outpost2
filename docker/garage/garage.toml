@@ -1,6 +1,6 @@
 # Garage — S3-compatible object store for dev.
 # Chosen over MinIO because MinIO's images are no longer pullable from Docker Hub or
-# quay.io, and because cluster-ops flagged Garage as the better fit for the NFS-backed
+# quay.io, and because Garage was judged the better fit for the NFS-backed
 # lab cluster — so dev and prod stay on the same implementation, not just the same API.
 #
 # What we actually depend on is RANGED READS (S3 GetObject with Range): large mail

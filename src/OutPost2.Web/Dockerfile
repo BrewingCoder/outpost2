@@ -15,7 +15,7 @@ RUN dotnet publish src/OutPost2.Web/OutPost2.Web.csproj -c Release -o /app --no-
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
-# Trust the lab CA so the container can reach https://vault.internal.example when
+# Trust the private CA so the container can reach a LAN Vault over TLS when
 # OutPost2__Vault__Address points at the real cluster Vault instead of vault-dev.
 # Mount the cert at /usr/local/share/ca-certificates/lab-ca.crt to activate.
 RUN apt-get update \

@@ -14,6 +14,7 @@ artifacts/
 # Secrets and local config
 .env
 .mcp.json
+CLAUDE.local.md
 appsettings.*.Local.json
 *.pfx
 *.crt
