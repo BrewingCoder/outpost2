@@ -186,9 +186,13 @@ class Build : SecurityPipelineBuild
     Target MigrationCheck => _ => _
         .DependsOn(nameof(Compile))
         .Description("Fail if the EF model has drifted from the migration snapshot.")
+        // SetConfiguration matters with NoBuild: `dotnet ef` otherwise looks for the
+        // assembly in the default (Debug) output, and CI builds Release. Locally the
+        // configuration happens to match, so the mismatch is invisible until CI.
         .Executes(() => EFCore.MigrationsHasPendingModelChanges(Ef, s => s
             .SetProject(InfrastructureProject)
             .SetStartupProject(WebProject)
+            .SetConfiguration(Configuration.ToString())
             .SetNoBuild(true)));
 
     // Idempotent so it can be replayed against a database at any migration, which is what
@@ -205,6 +209,7 @@ class Build : SecurityPipelineBuild
                 .SetStartupProject(WebProject)
                 .SetOutput(MigrationsDir / "outpost2.sql")
                 .SetIdempotent(true)
+                .SetConfiguration(Configuration.ToString())
                 .SetNoBuild(true));
         });
 
