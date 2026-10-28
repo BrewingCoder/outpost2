@@ -215,6 +215,27 @@ public sealed class ConnectionStoreTests : IAsyncLifetime
         Assert.All(all, c => Assert.False(c.IsDefaultForProvider));
     }
 
+    [SkippableFact]
+    public async Task The_same_account_on_two_instances_is_two_connections()
+    {
+        Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
+
+        // github.com and an Enterprise server both know you as the same login, so identity
+        // is only unique once the instance is part of it. Without that, connecting the
+        // second would silently overwrite the first's credential and the user would be
+        // left wondering why one of their two GitHub accounts kept disappearing.
+        var dotCom = await Add(_alice, "github", ProviderKind.GitHub,
+            instance: "https://api.github.com", account: "BrewingCoder");
+
+        var enterprise = await Add(_alice, "work-github", ProviderKind.GitHub,
+            instance: "https://ghe.example.com/api/v3", account: "BrewingCoder");
+
+        Assert.NotEqual(dotCom.Id, enterprise.Id);
+
+        var all = await _store.ListAsync(_alice);
+        Assert.Equal(2, all.Count(c => c.Provider == ProviderKind.GitHub));
+    }
+
     // ── reconnect semantics ──────────────────────────────────────────────────
 
     [SkippableFact]

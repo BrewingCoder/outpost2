@@ -13,8 +13,13 @@ namespace OutPost2.Tests.Issues;
 
 /// <summary>
 /// Drives the YouTrack operations against the real lab server and the real OP2 project.
-/// Read-only apart from one scratch issue that is closed immediately, so a test run never
-/// disturbs the actual backlog.
+/// Read-only apart from one scratch issue, which is deleted again in a finally block.
+/// <para>
+/// It used to be closed rather than deleted, on the theory that an Obsolete issue is out
+/// of the way. It is not: twenty-four of them accumulated in the real backlog, one per
+/// suite run, and they turn up in every search of the project. A test that leaves residue
+/// proportional to how often it runs is a test that punishes running it.
+/// </para>
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class YouTrackServiceTests : IAsyncLifetime
@@ -146,18 +151,50 @@ public sealed class YouTrackServiceTests : IAsyncLifetime
         Skip.IfNot(_ready, _why);
 
         var key = await _svc.CreateIssueAsync(
-            _conn, "OP2", "[automated test] scratch issue — safe to delete",
-            "Created by the OutPost2 integration suite to exercise create/comment/command. "
-            + "Closed immediately.");
+            _conn, "OP2", "[automated test] scratch issue — deleted by the suite",
+            "Created by the OutPost2 integration suite to exercise create/comment/command.");
 
-        Assert.StartsWith("OP2-", key);
+        try
+        {
+            Assert.StartsWith("OP2-", key);
 
-        await _svc.CommentAsync(_conn, key, "Automated test comment.");
-        await _svc.ApplyCommandAsync(_conn, key, "State Obsolete");
+            await _svc.CommentAsync(_conn, key, "Automated test comment.");
+            await _svc.ApplyCommandAsync(_conn, key, "State Obsolete");
 
-        var reloaded = await _svc.GetIssueAsync(_conn, key);
-        Assert.NotNull(reloaded);
-        Assert.Equal("Obsolete", reloaded!.State);
-        Assert.Contains(reloaded.Comments, c => c.Contains("Automated test comment"));
+            var reloaded = await _svc.GetIssueAsync(_conn, key);
+            Assert.NotNull(reloaded);
+            Assert.Equal("Obsolete", reloaded!.State);
+            Assert.Contains(reloaded.Comments, c => c.Contains("Automated test comment"));
+        }
+        finally
+        {
+            // In a finally so a failed assertion still cleans up — otherwise the run that
+            // most needs re-running is the one that leaves the mess.
+            await DeleteScratchIssueAsync(key);
+        }
+    }
+
+    /// <summary>
+    /// Deletes directly rather than through YouTrackService, which has no delete method
+    /// and should not gain one: the product is driven by voice, and "delete that ticket"
+    /// is one mishearing away from being irreversible. Test cleanup does not justify
+    /// putting that capability in reach of a spoken turn.
+    /// </summary>
+    private async Task DeleteScratchIssueAsync(string key)
+    {
+        var store = new ConnectionStore(_db, new CredentialProtector(_vault));
+        var token = await store.GetCredentialAsync(_conn);
+        if (token is null) return;
+
+        using var http = new HttpClient { BaseAddress = new Uri(_conn.Instance.TrimEnd('/') + "/") };
+        http.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("OutPost2/1.0");
+
+        using var resp = await http.DeleteAsync($"api/issues/{Uri.EscapeDataString(key)}");
+        if (!resp.IsSuccessStatusCode)
+            throw new InvalidOperationException(
+                $"Scratch issue {key} could not be deleted (HTTP {(int)resp.StatusCode}); " +
+                "it will litter the real backlog until removed by hand.");
     }
 }
