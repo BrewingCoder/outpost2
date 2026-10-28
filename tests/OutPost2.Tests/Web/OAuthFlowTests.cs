@@ -112,6 +112,81 @@ public sealed class OAuthFlowTests : IClassFixture<FormBindingTests.Factory>, ID
 
         var challenge = resp.Headers.WwwAuthenticate.ToString();
         Assert.Contains("resource_metadata", challenge);
+
+        // The document it names has to describe /mcp specifically. The bare-origin one
+        // claims a different resource than the endpoint that sent the challenge.
+        Assert.Contains("/.well-known/oauth-protected-resource/mcp", challenge);
+    }
+
+    // ── CORS ────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The connector dialog is a browser, so every call it makes to these endpoints is
+    /// cross-origin. This went unnoticed through an entire OAuth verification pass
+    /// because curl does not preflight: the whole flow passed from a shell and the real
+    /// client could not get past "connecting to the server".
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("/mcp")]
+    [InlineData("/.well-known/oauth-protected-resource/mcp")]
+    [InlineData("/oauth/register")]
+    [InlineData("/oauth/token")]
+    public async Task A_preflight_is_answered_without_authentication(string path)
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        using var req = new HttpRequestMessage(HttpMethod.Options, path);
+        req.Headers.Add("Origin", "https://claude.ai");
+        req.Headers.Add("Access-Control-Request-Method", "POST");
+        req.Headers.Add("Access-Control-Request-Headers", "content-type,authorization");
+
+        using var resp = await _client.SendAsync(req);
+
+        // A preflight carries no Authorization header by definition — challenging it
+        // means the browser never sends the real request at all.
+        Assert.NotEqual(HttpStatusCode.Unauthorized, resp.StatusCode);
+        Assert.True(resp.Headers.Contains("Access-Control-Allow-Origin"),
+            $"{path} answered a preflight with no Access-Control-Allow-Origin");
+    }
+
+    [SkippableFact]
+    public async Task The_challenge_and_session_headers_are_readable_cross_origin()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        // On the real request, not the preflight: Access-Control-Expose-Headers governs
+        // what the actual response lets script read, so the preflight never carries it.
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"initialize"}""",
+                Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Add("Origin", "https://claude.ai");
+
+        using var resp = await _client.SendAsync(req);
+
+        // Not exposed means the client receives them and cannot read them, which looks
+        // identical to the server never having sent them.
+        var exposed = resp.Headers.TryGetValues("Access-Control-Expose-Headers", out var v)
+            ? string.Join(",", v)
+            : "";
+        Assert.Contains("WWW-Authenticate", exposed, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Mcp-Session-Id", exposed, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [SkippableFact]
+    public async Task The_cookie_pages_do_not_answer_cross_origin()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        // The counterpart to the above: widening CORS for the MCP surface must not
+        // quietly widen it for the pages that run on a session cookie.
+        using var req = new HttpRequestMessage(HttpMethod.Options, "/connections");
+        req.Headers.Add("Origin", "https://evil.test");
+        req.Headers.Add("Access-Control-Request-Method", "POST");
+
+        using var resp = await _client.SendAsync(req);
+        Assert.False(resp.Headers.Contains("Access-Control-Allow-Origin"));
     }
 
     // ── the flow itself ─────────────────────────────────────────────────────────

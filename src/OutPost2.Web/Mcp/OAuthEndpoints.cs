@@ -238,7 +238,11 @@ public sealed class McpBearerMiddleware(RequestDelegate next, string publicBaseU
 
     private async Task ChallengeAsync(HttpContext ctx, string error)
     {
-        var meta = $"{publicBaseUrl.TrimEnd('/')}/.well-known/oauth-protected-resource";
+        // Path-aware, per RFC 9728 §3.1. The generic document claims a resource of the
+        // bare origin, which is not the resource being protected here — a client that
+        // checks the document it was sent to against the endpoint that sent it is right
+        // to object. Pointing at the /mcp document makes the two agree.
+        var meta = $"{publicBaseUrl.TrimEnd('/')}/.well-known/oauth-protected-resource/mcp";
 
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         ctx.Response.Headers.WWWAuthenticate =

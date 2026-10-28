@@ -169,6 +169,24 @@ if (gh.IsConfigured)
 
 builder.Services.AddAuthorization();
 
+// An MCP client is a browser. Claude's connector dialog fetches /mcp and the discovery
+// documents cross-origin, so without this the preflight never gets an answer and the
+// server reports as unreachable — which looks nothing like the CORS problem it is.
+//
+// Any origin, and deliberately no credentials. These endpoints carry no ambient authority:
+// /mcp is bearer-only and the well-known documents are public by specification, so a page
+// that calls them cross-origin learns exactly what it could have learned by calling them
+// itself. Allowing credentials here would be the opposite — it would let any page act as
+// the signed-in user — and the two settings are mutually exclusive for that reason.
+builder.Services.AddCors(o => o.AddPolicy("mcp", p => p
+    .AllowAnyOrigin()
+    .AllowAnyHeader()
+    .AllowAnyMethod()
+    // Without exposing these the client gets the response but cannot read the two headers
+    // that make the protocol work: the challenge that says where to authenticate, and the
+    // session id that ties a streamable-HTTP conversation together.
+    .WithExposedHeaders("WWW-Authenticate", "Mcp-Session-Id", "Mcp-Protocol-Version")));
+
 var app = builder.Build();
 
 app.UseForwardedHeaders();
@@ -189,6 +207,13 @@ if (!app.Environment.IsDevelopment())
 
 app.UseStaticFiles();
 app.UseRouting();
+
+// Scoped by path rather than applied globally: the Razor pages are cookie-authenticated
+// and have no business answering cross-origin at all. This also has to sit ahead of the
+// bearer middleware, because a CORS preflight carries no Authorization header by
+// definition — challenge it and the browser never sends the real request.
+app.UseWhen(IsCrossOriginEndpoint, b => b.UseCors("mcp"));
+
 app.UseAuthentication();
 
 // Immediately after authentication and BEFORE anything can act on the principal, so a
@@ -235,5 +260,14 @@ app.MapPost("/signout", async (HttpContext ctx) =>
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 
 app.Run();
+
+// The endpoints an MCP client reaches with fetch(), and therefore the only ones that need
+// to answer a preflight. /oauth/authorize is missing on purpose: the browser navigates to
+// it, which is not a cross-origin request and must stay a normal cookie-bearing one.
+static bool IsCrossOriginEndpoint(HttpContext c) =>
+    c.Request.Path.StartsWithSegments("/mcp")
+    || c.Request.Path.StartsWithSegments("/.well-known")
+    || c.Request.Path.StartsWithSegments("/oauth/register")
+    || c.Request.Path.StartsWithSegments("/oauth/token");
 
 public partial class Program;
