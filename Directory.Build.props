@@ -1,0 +1,30 @@
+<Project>
+
+  <!--
+    Opt-in Roslyn analyzer pack for the nightly security chain.
+
+    Activated only by `/p:IncludeSecurityAnalyzers=true`, which the SecurityScanRoslyn
+    target passes. Unset — which is every ordinary build, every `tamp Ci`, every F5 — none
+    of this applies and the build is exactly what it was before this file existed.
+
+    Pattern taken from Tamp's own Directory.Build.props, including the two decisions that
+    are not obvious:
+
+    Test projects are excluded on purpose. SARIF should describe production code; findings
+    against test scaffolding are noise that makes the real ones harder to see.
+
+    ErrorLog is NOT set here — see Directory.Build.targets, which is imported after the
+    project body and so can see $(TargetFramework). Setting it in this file produces an
+    empty framework in the path and breaks the compile.
+  -->
+
+  <PropertyGroup>
+    <IsTestProject Condition="$(MSBuildProjectName.EndsWith('Tests'))">true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IncludeSecurityAnalyzers)' == 'true' AND '$(IsTestProject)' != 'true'">
+    <PackageReference Include="SonarAnalyzer.CSharp" Version="10.25.0.139117" PrivateAssets="all" IncludeAssets="analyzers;build" />
+    <PackageReference Include="Roslynator.Analyzers" Version="4.15.0" PrivateAssets="all" IncludeAssets="analyzers;build" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,35 @@
+<Project>
+
+  <!--
+    The ErrorLog path lives here rather than in Directory.Build.props, and the difference
+    is not cosmetic.
+
+    Directory.Build.props is imported at the TOP of every project, before the project body
+    sets <TargetFramework>. Evaluated there, $(TargetFramework) is empty and the SARIF path
+    comes out as "OutPost2.Core-.sarif" — every project writing to the same file, and the
+    compiler failing outright with CS0016 because the directory does not exist either.
+
+    Tamp's own Directory.Build.props does set it there and works, which is a trap worth
+    naming: Tamp multi-targets, so MSBuild runs an inner build per framework and passes
+    TargetFramework as a GLOBAL property, which is available during props evaluation.
+    OutPost2 single-targets, so there is no inner build and no global property. The same
+    line is correct in one repo and broken in the other.
+
+    Directory.Build.targets is imported at the END, after the project body, so
+    $(TargetFramework) is known. Only applies when IncludeSecurityAnalyzers=true.
+  -->
+
+  <PropertyGroup Condition="'$(IncludeSecurityAnalyzers)' == 'true' AND '$(IsTestProject)' != 'true'">
+    <ErrorLog>$(MSBuildThisFileDirectory)artifacts/security/roslyn/$(MSBuildProjectName)-$(TargetFramework).sarif,version=2.1</ErrorLog>
+    <ReportAnalyzer>true</ReportAnalyzer>
+  </PropertyGroup>
+
+  <!-- Roslyn will not create the directory it is told to write into; it fails the compile
+       with CS0016 instead. -->
+  <Target Name="EnsureRoslynSarifDirectory"
+          BeforeTargets="CoreCompile"
+          Condition="'$(IncludeSecurityAnalyzers)' == 'true' AND '$(IsTestProject)' != 'true'">
+    <MakeDir Directories="$(MSBuildThisFileDirectory)artifacts/security/roslyn" />
+  </Target>
+
+</Project>

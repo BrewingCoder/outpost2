@@ -56,8 +56,8 @@ YAML, so CI and a laptop run the identical thing.
 
 ```
 tamp            # Compile
-tamp Ci         # the gate: Compile, Test + coverage, MigrationCheck, SecretScan
-tamp Verify     # Ci plus the security chain (SBOM, SAST, SCA, misconfig)
+tamp Ci         # per-push gate: Compile, Test + coverage, MigrationCheck
+tamp Nightly    # Ci plus secret scanning and the SBOM/SAST/SCA chain
 tamp Smoke      # Image, Deploy, then prove the deployed app answers
 ```
 

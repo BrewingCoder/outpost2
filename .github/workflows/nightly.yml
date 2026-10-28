@@ -1,0 +1,153 @@
+name: Nightly
+
+# Everything that needs a scanner binary downloaded: secret scanning over the full git
+# history, SBOM, SAST, SCA, and secrets/misconfig. Minutes rather than seconds, almost all
+# of it tool installation, which is why it is not on the per-push path.
+#
+# Target definitions live in build/Build.cs — `tamp Nightly` runs the identical thing on a
+# laptop, provided the same binaries are on PATH.
+
+on:
+  schedule:
+    # 07:00 UTC — after the working day here, so a red nightly is waiting rather than
+    # interrupting, and a fix has a whole day to land before the next one.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Pinned, and every download checksum-verified. An unpinned scanner is a third party
+  # with commit rights to your pipeline.
+  TRUFFLEHOG_VERSION: '3.99.7'
+  OSV_SCANNER_VERSION: '2.7.0'
+  TRIVY_VERSION: '0.76.1'
+  OPENGREP_VERSION: '1.33.0'
+  CYCLONEDX_VERSION: '6.3.1'
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: outpost2
+          POSTGRES_PASSWORD: outpost2-dev
+          POSTGRES_DB: outpost2
+        ports: ['5435:5432']
+        options: >-
+          --health-cmd "pg_isready -U outpost2"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+      vault:
+        image: hashicorp/vault:1.18
+        env:
+          VAULT_DEV_ROOT_TOKEN_ID: op2-dev-root
+          VAULT_DEV_LISTEN_ADDRESS: '0.0.0.0:8200'
+        ports: ['8200:8200']
+
+    steps:
+      # fetch-depth: 0 is load-bearing, not boilerplate. SecretScan reads the whole
+      # history; against a shallow clone it scans one commit and reports clean, which is
+      # the most dangerous possible outcome for a secret gate.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Enable Vault transit
+        env:
+          VAULT_ADDR: http://localhost:8200
+          VAULT_TOKEN: op2-dev-root
+        run: |
+          curl -sf -X POST -H "X-Vault-Token: $VAULT_TOKEN" \
+            -d '{"type":"transit"}' "$VAULT_ADDR/v1/sys/mounts/op2-transit"
+          curl -sf -X POST -H "X-Vault-Token: $VAULT_TOKEN" \
+            -d '{"type":"aes256-gcm96"}' "$VAULT_ADDR/v1/op2-transit/keys/op2-kek"
+
+      # Each tool is fetched to the asset's REAL filename. Renaming on download makes
+      # `sha256sum -c` fail to find the file, and it fails in the worst way — the verify
+      # step reports "FAILED open or read", the scan silently skips, and the job stays
+      # green having checked nothing. (Lesson taken from tamp-build/tamp #101.)
+      - name: Install trufflehog
+        run: |
+          set -euo pipefail
+          base="https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}"
+          tarball="trufflehog_${TRUFFLEHOG_VERSION}_linux_amd64.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o "$tarball" "${base}/${tarball}"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o th_sums.txt \
+            "${base}/trufflehog_${TRUFFLEHOG_VERSION}_checksums.txt"
+          grep " ${tarball}\$" th_sums.txt | sha256sum -c -
+          tar -xzf "$tarball" trufflehog
+          sudo install -m 0755 trufflehog /usr/local/bin/trufflehog
+          trufflehog --version
+
+      - name: Install osv-scanner
+        run: |
+          set -euo pipefail
+          bin="osv-scanner_linux_amd64"
+          base="https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o "$bin" "${base}/${bin}"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o osv_sums.txt "${base}/osv-scanner_SHA256SUMS"
+          grep " ${bin}\$" osv_sums.txt | sha256sum -c -
+          sudo install -m 0755 "$bin" /usr/local/bin/osv-scanner
+          osv-scanner --version
+
+      - name: Install trivy
+        run: |
+          set -euo pipefail
+          deb="trivy_${TRIVY_VERSION}_Linux-64bit.deb"
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o "$deb" "${base}/${deb}"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o trivy_sums.txt \
+            "${base}/trivy_${TRIVY_VERSION}_checksums.txt"
+          grep " ${deb}\$" trivy_sums.txt | sha256sum -c -
+          sudo dpkg -i "$deb"
+          trivy --version
+
+      - name: Install opengrep
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o opengrep \
+            "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          sudo install -m 0755 opengrep /usr/local/bin/opengrep
+          opengrep --version
+
+      - name: Install CycloneDX
+        run: dotnet tool install --global CycloneDX --version "${CYCLONEDX_VERSION}"
+
+      - run: dotnet tool restore
+
+      - name: tamp Nightly
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Both push legs are env-gated and no-op cleanly when unset, so this stays green
+          # without a Dependency-Track or DefectDojo instance to push to.
+          TAMP_DT_URL: ${{ secrets.TAMP_DT_URL }}
+          TAMP_DT_API_KEY: ${{ secrets.TAMP_DT_API_KEY }}
+          TAMP_DT_PROJECT_UUID: ${{ secrets.TAMP_DT_PROJECT_UUID }}
+          TAMP_DD_URL: ${{ secrets.TAMP_DD_URL }}
+          TAMP_DD_TOKEN: ${{ secrets.TAMP_DD_TOKEN }}
+          TAMP_DD_ENGAGEMENT_ID: ${{ secrets.TAMP_DD_ENGAGEMENT_ID }}
+        run: dotnet tamp Nightly --reporter=json --events artifacts/events.ndjson
+
+      # Kept even when the job fails — a failed security run is precisely when you want
+      # the SARIF and the SBOM to read.
+      - name: Upload security evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-evidence
+          path: |
+            artifacts/security/**
+            artifacts/coverage.cobertura.xml
+            artifacts/events.ndjson
+          if-no-files-found: ignore
+          retention-days: 30

@@ -1,8 +1,12 @@
 name: CI
 
-# Everything here delegates to Tamp. The workflow's job is to provide a machine and the
-# tools; what "CI" means lives in build/Build.cs, so it is identical on a laptop. A
-# pipeline whose logic lives in YAML can only be debugged by pushing.
+# Fast gate, runs on every push and PR: build, test with coverage, migration-drift check.
+# Nothing here installs a scanner binary — that is what makes it fast, and it is why the
+# security chain lives in nightly.yml instead.
+#
+# What "CI" means is defined in build/Build.cs, not here. This workflow's only job is to
+# provide a machine and the services, then call `tamp Ci`. A pipeline whose logic lives in
+# YAML can only be debugged by pushing.
 
 on:
   push:
@@ -13,13 +17,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     runs-on: ubuntu-latest
 
-    # The integration suites talk to real Postgres, Vault and Garage rather than fakes,
-    # and skip themselves when the services are absent. Supplying them here is the
-    # difference between 361 tests running and a large fraction quietly not.
+    # The integration suites talk to real Postgres, Vault and Garage rather than fakes, and
+    # skip themselves when the services are absent. Supplying them is the difference
+    # between 361 tests running and a large fraction quietly not.
     services:
       postgres:
         image: postgres:17
@@ -40,21 +48,14 @@ jobs:
         ports: ['8200:8200']
 
     steps:
-      # fetch-depth: 0 is load-bearing, not boilerplate. The SecretScan target scans the
-      # whole history, and against a shallow clone it would scan one commit and report
-      # clean — the most dangerous possible outcome for a secret gate.
+      # A shallow clone is fine here. The history secret scan lives in nightly.yml, which
+      # fetches everything — scanning one commit and reporting clean is the most dangerous
+      # possible outcome for a secret gate.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-
-      - name: Install trufflehog
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-            | sh -s -- -b /usr/local/bin
 
       - name: Enable Vault transit
         env:
@@ -68,10 +69,10 @@ jobs:
 
       - run: dotnet tool restore
 
-      - name: Tamp Ci
+      - name: tamp Ci
         env:
-          # Build outcomes go to Telegram. Absent secrets mean the reporter returns null
-          # and the framework skips it, so a fork's CI stays quiet rather than failing.
+          # Absent secrets mean the reporter returns null and the framework skips it, so a
+          # fork's CI stays quiet rather than failing on a missing token.
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: dotnet tamp Ci --reporter=json --events artifacts/events.ndjson

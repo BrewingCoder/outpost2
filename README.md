@@ -114,16 +114,20 @@ Driven by [Tamp](https://github.com/tamp-build/tamp) — the build is a C# progr
 
 ```bash
 tamp          # compile
-tamp Ci       # compile, test with coverage, migration-drift check, secret scan
-tamp Verify   # Ci plus the security chain: SBOM, SAST, SCA, misconfig
+tamp Ci       # per-push gate: compile, test with coverage, migration-drift check
+tamp Nightly  # Ci plus secret scanning and the full SBOM / SAST / SCA chain
 tamp Smoke    # build the image, deploy it, prove it answers
 ```
 
-Two gates are worth calling out. **`MigrationCheck`** fails when the EF model has drifted
-from the migration snapshot — the forgot-to-add-a-migration bug, which otherwise only
-appears on a fresh deploy. **`SecretScan`** runs trufflehog over the whole git history,
-verified-only, and fails on a live credential; CI checks out with `fetch-depth: 0`, because
-against a shallow clone a history scan passes by examining one commit.
+The split is deliberate: every push runs only what needs no scanner binary, so CI stays
+around two minutes, and everything that costs minutes of tool downloads runs nightly.
+
+Two gates are worth calling out. **`MigrationCheck`** runs per-push despite being a
+correctness gate rather than a test — it costs about a second and the bug it catches, a
+model change with no migration, is invisible until a deploy against a fresh database.
+**`SecretScan`** is nightly and reads the whole git history, verified-only, failing on a
+live credential; that workflow checks out with `fetch-depth: 0`, because against a shallow
+clone a history scan passes by examining one commit.
 
 ## Stack
 

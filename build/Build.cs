@@ -306,14 +306,22 @@ class Build : SecurityPipelineBuild
 
     // ---- aggregates --------------------------------------------------------
 
+    // Runs on every push, so it is deliberately only the things that need no tool beyond
+    // the .NET SDK. MigrationCheck is in here rather than nightly because it costs about a
+    // second, needs nothing installed, and the bug it catches — model changed, migration
+    // not added — is invisible until a deploy against a fresh database, by which time the
+    // commit that caused it is hours of history back.
     Target Ci => _ => _
         .DependsOn(nameof(Info), nameof(Compile), nameof(Test), nameof(Coverage),
-                   nameof(MigrationCheck), nameof(SecretScan))
-        .Description("The gate: build, test with coverage, migration drift, live-secret scan.");
+                   nameof(MigrationCheck))
+        .Description("Per-push gate: build, test with coverage, migration-drift check.");
 
-    Target Verify => _ => _
-        .DependsOn(nameof(Ci), nameof(Security), nameof(SecretScanWorkingTree))
-        .Description("Ci plus the full security chain — SBOM, SAST, SCA, misconfig.");
+    // Everything that needs a scanner binary downloaded. Minutes rather than seconds,
+    // almost all of it tool installation, which is why it is nightly and not per-push.
+    Target Nightly => _ => _
+        .DependsOn(nameof(Ci), nameof(SecretScan), nameof(SecretScanWorkingTree),
+                   nameof(Security))
+        .Description("Nightly: Ci plus secret scanning and the full SBOM/SAST/SCA chain.");
 
     Target Default => _ => _
         .Default()
