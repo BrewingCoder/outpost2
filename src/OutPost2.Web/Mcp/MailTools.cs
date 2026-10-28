@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Server;
 using OutPost2.Core.Connections;
+using OutPost2.Core.Mail;
 using OutPost2.Infrastructure.Connections;
 using OutPost2.Infrastructure.Mail;
 using OutPost2.Web.Connections;
@@ -13,11 +14,13 @@ namespace OutPost2.Web.Mcp;
 /// The MCP tool surface. Per D1 this IS the product — the web app is configuration only
 /// and never renders a mailbox, so every tool must be able to answer fully in speech.
 /// <para>
-/// Three rules shape every signature here:
+/// Four rules shape every signature here:
 /// <list type="bullet">
 /// <item>No opaque identifiers in the conversational path. Graph message ids are long
-/// base64 and unspeakable, so tools accept an ordinal ("the second one") resolved against
-/// the last listing.</item>
+/// base64 and unspeakable, so listings carry a short handle and tools accept that, or an
+/// ordinal ("the second one") resolved against the last listing.</item>
+/// <item>Anything that changes the mailbox takes the handle, not the ordinal, and reads
+/// back the subject it acted on. See <see cref="MessageIndex"/>.</item>
 /// <item>Responses are prose, not tables. There is no screen to fall back on.</item>
 /// <item>Writes never ride on a default connection. Sending from the wrong tenant cannot
 /// be undone.</item>
@@ -58,7 +61,7 @@ public sealed class MailTools(
     }
 
     [McpServerTool(Name = "list_mail")]
-    [Description("List recent messages. Omit 'connection' to use the default mailbox, or pass 'all' to check every mailbox at once.")]
+    [Description("List recent messages. Omit 'connection' to use the default mailbox, or pass 'all' to check every mailbox at once. Each result carries a handle in square brackets — pass that to read or act on it.")]
     public async Task<string> ListMail(
         [Description("Connection name such as 'work' or 'home'. Use 'all' for every mailbox. Omit only if a default mailbox has been set.")] string? connection,
         [Description("Only unread messages.")] bool unreadOnly = false,
@@ -70,7 +73,7 @@ public sealed class MailTools(
 
         if (!resolution.IsActionable) return resolution.SpokenSummary;
 
-        var results = new List<(string Label, IReadOnlyList<Core.Mail.MailSummary> Items, string? Error)>();
+        var results = new List<(string Label, IReadOnlyList<MailSummary> Items, string? Error)>();
 
         // Fan out in parallel. One slow or throttled tenant must not stall the whole turn —
         // a partial answer now beats a complete answer after the conversation has moved on.
@@ -87,7 +90,8 @@ public sealed class MailTools(
             .Take(Math.Clamp(count, 1, 50) * Math.Max(1, resolution.Connections.Count))
             .ToList();
 
-        index.Remember(UserId, ordered.Select(x => (x.Item.Id, x.Label)).ToList());
+        var refs = index.Remember(UserId,
+            ordered.Select(x => (x.Item.Id, x.Label, x.Item.Subject, x.Item.From)).ToList());
 
         var sb = new StringBuilder();
         if (ordered.Count == 0)
@@ -95,12 +99,13 @@ public sealed class MailTools(
         else
         {
             sb.AppendLine($"{ordered.Count} message{(ordered.Count == 1 ? "" : "s")}:");
-            var n = 1;
-            foreach (var (label, m) in ordered)
+            for (var n = 0; n < ordered.Count; n++)
             {
-                // Numbered, so the next turn can say "read the second one" instead of
-                // anyone having to utter a base64 id.
-                sb.Append($"{n++}. ");
+                var (label, m) = ordered[n];
+
+                // Numbered so the next turn can say "read the second one", and handled so
+                // anything that changes the mailbox has something that cannot shift under it.
+                sb.Append($"{n + 1}. [{refs[n].Ref}] ");
                 if (resolution.Connections.Count > 1) sb.Append($"[{label}] ");
                 sb.Append($"{m.From} — {m.Subject}");
                 if (!m.IsRead) sb.Append(" (unread)");
@@ -120,29 +125,25 @@ public sealed class MailTools(
     }
 
     [McpServerTool(Name = "read_mail")]
-    [Description("Read a message in full. Use the number from the last list, e.g. 2 for the second message.")]
+    [Description("Read a message in full. Pass the handle from the last listing, e.g. 'a7kq', or the number, e.g. '2'.")]
     public async Task<string> ReadMail(
-        [Description("The number shown in the last listing.")] int number,
+        [Description("The handle in square brackets from the listing, or the number shown beside it.")] string message,
         CancellationToken ct = default)
     {
-        var remembered = index.Resolve(UserId, number);
-        if (remembered is null)
-            return "I don't have that one — list your messages first, then tell me the number.";
-
-        var (messageId, label) = remembered.Value;
-
-        var c = await connections.FindByLabelAsync(UserId, label, ct);
-        if (c is null) return $"The {label} connection has gone.";
+        var found = await ResolveAsync(message, ct, Capabilities.MailRead);
+        if (found.Problem is not null) return found.Problem;
+        var (item, c) = (found.Item!, found.Connection!);
 
         try
         {
-            var m = await mail.ReadAsync(c, messageId, ct);
+            var m = await mail.ReadAsync(c, item.MessageId, ct);
             if (m is null) return "That message no longer exists.";
 
             var sb = new StringBuilder();
             sb.AppendLine($"From: {m.From}");
             sb.AppendLine($"Subject: {m.Subject}");
-            sb.AppendLine($"Received: {Ago(m.ReceivedAt)} ({label})");
+            sb.AppendLine($"Received: {Ago(m.ReceivedAt)} ({c.Label})");
+            sb.AppendLine($"Handle: {item.Ref}");
             if (m.HasAttachments) sb.AppendLine("Has attachments.");
             sb.AppendLine();
             sb.AppendLine(HtmlToText.Clamp(m.Body, 8000));
@@ -152,7 +153,7 @@ public sealed class MailTools(
     }
 
     [McpServerTool(Name = "search_mail")]
-    [Description("Search messages by text. Omit 'connection' for the default mailbox, or pass 'all' to search everywhere.")]
+    [Description("Search messages by text. Omit 'connection' for the default mailbox, or pass 'all' to search everywhere. Results carry a handle in square brackets.")]
     public async Task<string> SearchMail(
         [Description("What to search for.")] string query,
         [Description("Connection name, or 'all'. Omit only if a default mailbox has been set.")] string? connection = null,
@@ -164,7 +165,7 @@ public sealed class MailTools(
 
         if (!resolution.IsActionable) return resolution.SpokenSummary;
 
-        var found = new List<(string Label, Core.Mail.MailSummary Item)>();
+        var found = new List<(string Label, MailSummary Item)>();
         await Task.WhenAll(resolution.Connections.Select(async c =>
         {
             try
@@ -177,13 +178,15 @@ public sealed class MailTools(
 
         if (found.Count == 0) return $"Nothing found for \"{query}\".";
 
-        index.Remember(UserId, found.Select(x => (x.Item.Id, x.Label)).ToList());
+        var ordered = found.OrderByDescending(x => x.Item.ReceivedAt).ToList();
+        var refs = index.Remember(UserId,
+            ordered.Select(x => (x.Item.Id, x.Label, x.Item.Subject, x.Item.From)).ToList());
 
-        var sb = new StringBuilder($"{found.Count} result{(found.Count == 1 ? "" : "s")} for \"{query}\":\n");
-        var n = 1;
-        foreach (var (label, m) in found.OrderByDescending(x => x.Item.ReceivedAt))
+        var sb = new StringBuilder($"{ordered.Count} result{(ordered.Count == 1 ? "" : "s")} for \"{query}\":\n");
+        for (var n = 0; n < ordered.Count; n++)
         {
-            sb.Append($"{n++}. ");
+            var (label, m) = ordered[n];
+            sb.Append($"{n + 1}. [{refs[n].Ref}] ");
             if (resolution.Connections.Count > 1) sb.Append($"[{label}] ");
             sb.AppendLine($"{m.From} — {m.Subject} — {Ago(m.ReceivedAt)}");
         }
@@ -191,7 +194,7 @@ public sealed class MailTools(
     }
 
     [McpServerTool(Name = "send_mail")]
-    [Description("Send an email. Body may use Markdown. Always name the connection to send from.")]
+    [Description("Send a NEW email. To answer one you have been reading, use reply_mail instead. Body may use Markdown. Always name the connection to send from.")]
     public async Task<string> SendMail(
         [Description("Recipient addresses, comma separated.")] string to,
         [Description("Subject line.")] string subject,
@@ -213,7 +216,7 @@ public sealed class MailTools(
 
         try
         {
-            await mail.SendAsync(c, new Core.Mail.OutgoingMail
+            await mail.SendAsync(c, new OutgoingMail
             {
                 To = recipients, Cc = Split(cc), Subject = subject, Body = body, IsHtml = true,
             }, ct);
@@ -224,20 +227,299 @@ public sealed class MailTools(
         catch (MailException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "list_attachments")]
-    [Description("List the attachments on a message, using the number from the last listing.")]
-    public async Task<string> ListAttachments(
-        [Description("The number shown in the last listing.")] int number,
+    [McpServerTool(Name = "reply_mail")]
+    [Description("Reply to a message, keeping the thread and quoting the original. Pass the handle from the listing. Set replyAll to include everyone who was copied.")]
+    public async Task<string> ReplyMail(
+        [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
+        [Description("What to say. Markdown is supported. Goes above the quoted original.")] string body,
+        [Description("Reply to everyone on the thread rather than just the sender.")] bool replyAll = false,
         CancellationToken ct = default)
     {
-        var remembered = index.Resolve(UserId, number);
-        if (remembered is null) return "I don't have that one — list your messages first.";
+        // The thread decides which mailbox and which identity, so there is nothing for the
+        // resolver to ask about and the capabilities are the only gate. Both of them:
+        // sending is obvious, filing less so — Graph composes a threaded reply as a draft
+        // in the mailbox before it goes anywhere.
+        var found = await ResolveAsync(message, ct, Capabilities.MailSend, Capabilities.MailWrite);
+        if (found.Problem is not null) return found.Problem;
+        var (item, c) = (found.Item!, found.Connection!);
 
-        var (messageId, label) = remembered.Value;
-        var c = await connections.FindByLabelAsync(UserId, label, ct);
-        if (c is null) return $"The {label} connection has gone.";
+        if (string.IsNullOrWhiteSpace(body)) return "I need something to say in the reply.";
 
-        var items = await mail.ListAttachmentsAsync(c, messageId, ct);
+        try
+        {
+            var subject = await mail.SendReplyAsync(
+                c, item.MessageId, replyAll ? ReplyKind.All : ReplyKind.Sender, body, null, ct);
+
+            return replyAll
+                ? $"Replied to everyone on \"{subject}\" from {c.Label}."
+                : $"Replied to {item.From} on \"{subject}\" from {c.Label}.";
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "forward_mail")]
+    [Description("Forward a message to someone else, quoting the original. Pass the handle from the listing.")]
+    public async Task<string> ForwardMail(
+        [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
+        [Description("Who to forward it to, comma separated.")] string to,
+        [Description("A note to put above the forwarded message. Markdown is supported.")] string? body = null,
+        CancellationToken ct = default)
+    {
+        // Both: sending is obvious, filing is not — Graph composes a threaded reply as a
+        // draft in the mailbox before sending it.
+        var found = await ResolveAsync(message, ct, Capabilities.MailSend, Capabilities.MailWrite);
+        if (found.Problem is not null) return found.Problem;
+        var (item, c) = (found.Item!, found.Connection!);
+
+        var recipients = Split(to);
+        if (recipients.Count == 0) return "I need someone to forward it to.";
+
+        try
+        {
+            var subject = await mail.SendReplyAsync(
+                c, item.MessageId, ReplyKind.Forward, body ?? "", recipients, ct);
+
+            return $"Forwarded \"{subject}\" to {string.Join(", ", recipients)} from {c.Label}.";
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "mark_mail")]
+    [Description("Mark a message read or unread. Pass the handle from the listing.")]
+    public async Task<string> MarkMail(
+        [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
+        [Description("True to mark read, false to mark unread.")] bool read = true,
+        CancellationToken ct = default)
+    {
+        var found = await ResolveAsync(message, ct, Capabilities.MailWrite);
+        if (found.Problem is not null) return found.Problem;
+        var (item, c) = (found.Item!, found.Connection!);
+
+        try
+        {
+            await mail.MarkReadAsync(c, item.MessageId, read, ct);
+            return $"Marked \"{item.Subject}\" {(read ? "read" : "unread")} in {c.Label}.";
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "move_mail")]
+    [Description("File a message away. Destination can be 'archive', 'trash' (Deleted Items), 'inbox', 'junk', or the name of any folder in the mailbox. This is how you delete or archive something. Pass the handle from the listing.")]
+    public async Task<string> MoveMail(
+        [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
+        [Description("Where to put it: 'archive', 'trash', 'inbox', 'junk', or a folder name.")] string destination = "archive",
+        CancellationToken ct = default)
+    {
+        var found = await ResolveAsync(message, ct, Capabilities.MailWrite);
+        if (found.Problem is not null) return found.Problem;
+        var (item, c) = (found.Item!, found.Connection!);
+
+        try
+        {
+            var target = WellKnown(destination);
+            string spoken;
+
+            if (target is not null)
+                spoken = Spoken(destination);
+            else
+            {
+                // Only list folders when the destination is not one of the standard ones.
+                // A round trip per archive would be a round trip nobody asked for.
+                var folders = await mail.ListFoldersAsync(c, ct);
+                var match = folders.FirstOrDefault(f => Same(f.Name, destination))
+                            ?? folders.FirstOrDefault(f => Same(f.Path, destination));
+
+                if (match is null)
+                    return $"No folder called \"{destination}\" in {c.Label}. There is: " +
+                           string.Join(", ", folders.Select(f => f.Path)) + ".";
+
+                target = match.Id;
+                spoken = match.Path;
+            }
+
+            var movedId = await mail.MoveAsync(c, item.MessageId, target, ct);
+
+            // Graph reissues the id, so the handle has to follow the message or the next
+            // "put it back" acts on an address that no longer resolves.
+            index.Retarget(UserId, item.Ref, movedId);
+
+            return $"Moved \"{item.Subject}\" to {spoken} in {c.Label}. Handle is still {item.Ref}.";
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "report_junk")]
+    [Description("Report a message as junk or phishing: blocks the sender and files it in Junk Email, which trains the filter. Prefer this over deleting spam. Pass the handle from the listing.")]
+    public async Task<string> ReportJunk(
+        [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
+        [Description("True if it looks like a phishing attempt rather than ordinary spam.")] bool phishing = false,
+        CancellationToken ct = default)
+    {
+        var found = await ResolveAsync(message, ct, Capabilities.MailWrite);
+        if (found.Problem is not null) return found.Problem;
+        var (item, c) = (found.Item!, found.Connection!);
+
+        try
+        {
+            var movedId = await mail.MarkAsJunkAsync(c, item.MessageId, ct);
+            if (movedId is not null) index.Retarget(UserId, item.Ref, movedId);
+
+            var said = $"Reported \"{item.Subject}\" as junk in {c.Label}. {item.From} is now blocked " +
+                       "and the message is in Junk Email.";
+
+            // Said plainly rather than quietly skipped: submitting a phish to Microsoft for
+            // analysis is a different action from blocking a sender, and this cannot do it.
+            // Letting the user believe otherwise is worse than telling them to press a button.
+            if (phishing)
+                said += " Microsoft's phishing analysis needs the Report button in Outlook itself — " +
+                        "this blocks the sender but does not submit the message to them.";
+
+            return said;
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "flag_mail")]
+    [Description("Flag a message for follow-up, optionally with a due date, or clear an existing flag. Pass the handle from the listing.")]
+    public async Task<string> FlagMail(
+        [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
+        [Description("True to flag, false to clear the flag.")] bool flagged = true,
+        [Description("Days from now it is due. Omit for a flag with no date.")] int? dueInDays = null,
+        CancellationToken ct = default)
+    {
+        var found = await ResolveAsync(message, ct, Capabilities.MailWrite);
+        if (found.Problem is not null) return found.Problem;
+        var (item, c) = (found.Item!, found.Connection!);
+
+        var due = flagged && dueInDays is > 0
+            ? DateTimeOffset.UtcNow.AddDays(dueInDays.Value)
+            : (DateTimeOffset?)null;
+
+        try
+        {
+            await mail.FlagAsync(c, item.MessageId, flagged, due, ct);
+
+            if (!flagged) return $"Cleared the flag on \"{item.Subject}\" in {c.Label}.";
+
+            return due is null
+                ? $"Flagged \"{item.Subject}\" in {c.Label}."
+                : $"Flagged \"{item.Subject}\" in {c.Label}, due {due:d MMM yyyy}.";
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "list_categories")]
+    [Description("List the Outlook colour categories defined on a mailbox — the names a message may be filed under.")]
+    public async Task<string> ListCategories(
+        [Description("Connection name such as 'work'. Omit only if a default mailbox has been set.")] string? connection = null,
+        CancellationToken ct = default)
+    {
+        var resolution = ConnectionResolver.Resolve(
+            await connections.ListAsync(UserId, ct), Capabilities.MailRead, connection, isWrite: false);
+
+        if (resolution.Kind != ResolutionKind.Single) return resolution.SpokenSummary;
+        var c = resolution.Connection!;
+
+        try
+        {
+            var all = await mail.ListCategoriesAsync(c, ct);
+            if (all is null) return PaletteUnreadable(c.Label);
+            if (all.Count == 0) return $"No categories defined on {c.Label} yet.";
+
+            return $"{all.Count} categor{(all.Count == 1 ? "y" : "ies")} on {c.Label}: " +
+                   string.Join(", ", all.Select(x => $"{x.Name} ({x.Colour})")) + ".";
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "categorise_mail")]
+    [Description("Apply or remove Outlook colour categories on a message. Pass the handle from the listing. Categories must already exist on the mailbox unless 'colour' is given, which creates the missing one.")]
+    public async Task<string> CategoriseMail(
+        [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
+        [Description("Category names, comma separated.")] string categories,
+        [Description("True to take these categories off instead of adding them.")] bool remove = false,
+        [Description("Colour to create any missing category with: red, orange, blue, green, purple and so on. Omit to refuse unknown names instead of creating them.")] string? colour = null,
+        CancellationToken ct = default)
+    {
+        var found = await ResolveAsync(message, ct, Capabilities.MailWrite);
+        if (found.Problem is not null) return found.Problem;
+        var (item, c) = (found.Item!, found.Connection!);
+
+        var wanted = Split(categories);
+        if (wanted.Count == 0) return "Name at least one category.";
+
+        try
+        {
+            var defined = await mail.ListCategoriesAsync(c, ct);
+
+            // The palette is unreadable on a connection consented before MailboxSettings
+            // was asked for. Applying a name still works, so the category goes on and the
+            // reply says what could not be checked — refusing here would make the whole
+            // feature wait on a re-authorisation the user may never get round to.
+            if (defined is null)
+            {
+                if (colour is not null)
+                    return $"I can't create categories on {c.Label} — {PaletteUnreadable(c.Label)}";
+
+                var applied = await ApplyAsync(c, item, wanted, remove, ct);
+                return applied + (remove
+                    ? ""
+                    : $" I couldn't check {c.Label}'s category list first, so if a name is new "
+                      + "it will show without a colour until it's added in Outlook.");
+            }
+
+            if (!remove)
+            {
+                var missing = wanted
+                    .Where(w => !defined.Any(d => Same(d.Name, w)))
+                    .ToList();
+
+                if (missing.Count > 0)
+                {
+                    // Creating a category is mailbox-wide and shows up in Outlook forever,
+                    // so it happens only when asked for by name — a typo must not quietly
+                    // leave "Ugrent" in the palette.
+                    if (colour is null)
+                        return $"{c.Label} has no categor{(missing.Count == 1 ? "y" : "ies")} called " +
+                               $"{string.Join(", ", missing)}. It has: " +
+                               string.Join(", ", defined.Select(d => d.Name)) +
+                               ". Say which colour to create them with if you want them added.";
+
+                    var preset = CategoryColours.Preset(colour);
+                    if (preset is null)
+                        return $"\"{colour}\" isn't one of Outlook's category colours. Try: " +
+                               string.Join(", ", CategoryColours.All.Take(9)) + ".";
+
+                    foreach (var name in missing)
+                        if (await mail.CreateCategoryAsync(c, name, preset, ct) is null)
+                            return $"I can't create categories on {c.Label} — {PaletteUnreadable(c.Label)}";
+                }
+            }
+
+            return await ApplyAsync(c, item, wanted, remove, ct);
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "list_attachments")]
+    [Description("List the attachments on a message. Pass the handle from the listing, or the number.")]
+    public async Task<string> ListAttachments(
+        [Description("The handle from the listing, or the number shown beside it.")] string message,
+        CancellationToken ct = default)
+    {
+        var found = await ResolveAsync(message, ct, Capabilities.MailRead);
+        if (found.Problem is not null) return found.Problem;
+        var (item, c) = (found.Item!, found.Connection!);
+
+        var items = await mail.ListAttachmentsAsync(c, item.MessageId, ct);
         if (items.Count == 0) return "That message has no attachments.";
 
         var sb = new StringBuilder($"{items.Count} attachment{(items.Count == 1 ? "" : "s")}:\n");
@@ -254,20 +536,17 @@ public sealed class MailTools(
     }
 
     [McpServerTool(Name = "read_attachment")]
-    [Description("Read the text content of an attachment — PDF, Word, Excel, PowerPoint or plain text. Use the message number and the attachment number.")]
+    [Description("Read the text content of an attachment — PDF, Word, Excel, PowerPoint or plain text. Pass the message handle and the attachment number.")]
     public async Task<string> ReadAttachment(
-        [Description("The message number from the last listing.")] int messageNumber,
+        [Description("The message handle from the listing, or the number shown beside it.")] string message,
         [Description("Which attachment, from list_attachments. Defaults to the first.")] int attachmentNumber = 1,
         CancellationToken ct = default)
     {
-        var remembered = index.Resolve(UserId, messageNumber);
-        if (remembered is null) return "I don't have that message — list your messages first.";
+        var found = await ResolveAsync(message, ct, Capabilities.MailRead);
+        if (found.Problem is not null) return found.Problem;
+        var (item, c) = (found.Item!, found.Connection!);
 
-        var (messageId, label) = remembered.Value;
-        var c = await connections.FindByLabelAsync(UserId, label, ct);
-        if (c is null) return $"The {label} connection has gone.";
-
-        var items = await mail.ListAttachmentsAsync(c, messageId, ct);
+        var items = await mail.ListAttachmentsAsync(c, item.MessageId, ct);
         if (items.Count == 0) return "That message has no attachments.";
 
         var i = attachmentNumber - 1;
@@ -285,12 +564,109 @@ public sealed class MailTools(
         if (!extractor.CanExtract(a.Name, a.ContentType))
             return $"I can't read {a.Name} ({a.ContentType}). I handle PDF, Word, Excel, PowerPoint and text.";
 
-        await using var bytes = await mail.OpenAttachmentAsync(c, messageId, a.Id, ct);
+        await using var bytes = await mail.OpenAttachmentAsync(c, item.MessageId, a.Id, ct);
         if (bytes is null) return $"Couldn't download {a.Name}.";
 
         var text = await extractor.ExtractAsync(a.Name, bytes, ct);
         return $"{a.Name}:{Environment.NewLine}{Environment.NewLine}{HtmlToText.Clamp(text, 12000)}";
     }
+
+    // ── shared plumbing ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Read-modify-write, because Graph replaces the whole array. Sending only the new
+    /// names would silently strip every category already on the message.
+    /// </summary>
+    private async Task<string> ApplyAsync(
+        Connection c, MailRef item, List<string> wanted, bool remove, CancellationToken ct)
+    {
+        var current = await mail.GetCategoriesAsync(c, item.MessageId, ct);
+
+        var next = remove
+            ? current.Where(x => !wanted.Any(w => Same(w, x))).ToList()
+            : current.Concat(wanted.Where(w => !current.Any(x => Same(x, w)))).ToList();
+
+        await mail.SetCategoriesAsync(c, item.MessageId, next, ct);
+
+        return next.Count == 0
+            ? $"\"{item.Subject}\" now has no categories in {c.Label}."
+            : $"\"{item.Subject}\" is now categorised {string.Join(", ", next)} in {c.Label}.";
+    }
+
+    /// <summary>
+    /// Says which thing is missing and what fixes it. The palette lives in mailbox
+    /// settings rather than in mail, so this is a consent gap and not a bug — and the user
+    /// can only act on it if the difference is spelled out.
+    /// </summary>
+    private static string PaletteUnreadable(string label) =>
+        $"{label} was connected before Outpost asked for permission to read Outlook's "
+        + "category list, so I can't see or add to it. Reconnecting it at "
+        + "https://outpost.brewingcoder.com/connections fixes that.";
+
+    private sealed record Resolved(MailRef? Item, Connection? Connection, string? Problem);
+
+    /// <summary>
+    /// Turns what the conversation said into the message AND the connection that holds it,
+    /// refusing when the connection cannot do what is being asked.
+    /// <para>
+    /// The capability is checked here rather than at the Graph call because the message
+    /// decides the mailbox — the user never names one for an action, so there is no
+    /// resolver step to catch a mailbox with filing switched off.
+    /// </para>
+    /// </summary>
+    private async Task<Resolved> ResolveAsync(
+        string message, CancellationToken ct, params string[] capabilities)
+    {
+        var item = index.Resolve(UserId, message);
+        if (item is null)
+            return new(null, null, "I don't have that one — list your messages first, then tell me which.");
+
+        var c = await connections.FindByLabelAsync(UserId, item.ConnectionLabel, ct);
+        if (c is null) return new(null, null, $"The {item.ConnectionLabel} connection has gone.");
+
+        // Every capability, not the first one that happens to be present. A threaded reply
+        // needs both send AND filing, because Graph builds it as a draft in the mailbox —
+        // and a connection with filing switched off would otherwise pass this check and
+        // then fail on the first of three calls with a bare 403.
+        foreach (var capability in capabilities)
+        {
+            var cap = c.Capabilities.FirstOrDefault(x => x.Name == capability);
+            if (cap is null || !cap.Usable)
+                return new(null, null, ConnectionResolution.Unavailable(c, capability).SpokenSummary);
+        }
+
+        return new(item, c, null);
+    }
+
+    /// <summary>
+    /// Graph accepts a well-known folder name wherever it accepts a folder id, so the
+    /// common destinations need no lookup at all. The synonyms are what people actually
+    /// say: nobody asks to move something to "deleteditems".
+    /// </summary>
+    public static string? WellKnown(string? said) => (said ?? "").Trim().ToLowerInvariant() switch
+    {
+        "archive" or "archived" => "archive",
+        "trash" or "bin" or "delete" or "deleted" or "deleted items" or "rubbish" => "deleteditems",
+        "junk" or "spam" or "junk email" or "junk e-mail" => "junkemail",
+        "inbox" => "inbox",
+        "drafts" or "draft" => "drafts",
+        "sent" or "sent items" => "sentitems",
+        _ => null,
+    };
+
+    private static string Spoken(string destination) => WellKnown(destination) switch
+    {
+        "deleteditems" => "Deleted Items",
+        "junkemail" => "Junk Email",
+        "sentitems" => "Sent Items",
+        "archive" => "Archive",
+        "inbox" => "the Inbox",
+        "drafts" => "Drafts",
+        _ => destination,
+    };
+
+    private static bool Same(string? a, string? b) =>
+        string.Equals((a ?? "").Trim(), (b ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
 
     private static List<string> Split(string? csv) =>
         (csv ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();

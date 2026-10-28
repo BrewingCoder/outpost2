@@ -38,6 +38,12 @@ public static class Capabilities
     public const string MailRead = "mail.read";
     public const string MailSend = "mail.send";
 
+    // Separate from both of its neighbours on purpose. Filing, flagging and deleting change
+    // the mailbox but are invisible outside it, so gating them behind mail.send would make
+    // "tidy my inbox" require standing permission to write as the user — and gating them
+    // behind mail.read would mean switching off deletion also switches off reading.
+    public const string MailWrite = "mail.write";
+
     public const string IssuesRead = "issues.read";
     public const string IssuesWrite = "issues.write";
     public const string IssuesAdmin = "issues.admin";
