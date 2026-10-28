@@ -9,6 +9,7 @@ using OutPost2.Infrastructure.Data;
 using OutPost2.Infrastructure.Users;
 using OutPost2.Infrastructure.Connections;
 using OutPost2.Web.Auth;
+using OutPost2.Web.Code;
 using OutPost2.Web.Connections;
 using OutPost2.Web.Files;
 using OutPost2.Web.Jobs;
@@ -64,6 +65,9 @@ builder.Services.AddHttpClient("github").ConfigureHttpClient(c => c.Timeout = Ti
 builder.Services.AddScoped<OutPost2.Infrastructure.Auth.IPreviewLinkService,
                            OutPost2.Infrastructure.Auth.PreviewLinkService>();
 builder.Services.AddScoped<IGitHubConnectionService, GitHubConnectionService>();
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<OutPost2.Infrastructure.Code.IRepoResolver,
+    OutPost2.Infrastructure.Code.RepoResolver>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Code.IGitHubService,
                            OutPost2.Infrastructure.Code.GitHubService>();
 builder.Services.AddScoped<IYouTrackConnectionService, YouTrackConnectionService>();
@@ -232,6 +236,7 @@ app.MapFileEndpoints();
 var publicBaseUrl = builder.Configuration["OutPost2:PublicBaseUrl"] ?? "https://outpost.brewingcoder.com";
 app.MapMcpOAuth(publicBaseUrl);
 app.MapPreviewLinks();
+app.MapRepoNames();
 
 // Bearer-only on /mcp. The cookie pipeline's 302-to-a-login-page is unusable by an MCP
 // client, which needs a 401 plus WWW-Authenticate to discover where to authenticate.

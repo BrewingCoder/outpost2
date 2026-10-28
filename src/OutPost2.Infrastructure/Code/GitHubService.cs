@@ -37,6 +37,46 @@ public sealed record CodeTriage
     public required string Login { get; init; }
 }
 
+/// <summary>A repository this token can see, named the way a person would say it.</summary>
+public sealed record RepoRef
+{
+    public required string FullName { get; init; }
+    public required string Name { get; init; }
+    public required string Owner { get; init; }
+    public string? Description { get; init; }
+    public bool Private { get; init; }
+    public bool Fork { get; init; }
+    public bool Archived { get; init; }
+    public string? DefaultBranch { get; init; }
+    public DateTimeOffset? PushedAt { get; init; }
+    public string? Url { get; init; }
+}
+
+/// <summary>One commit, flattened to what gets read out.</summary>
+public sealed record CommitRef
+{
+    public required string Sha { get; init; }
+    public required string Message { get; init; }
+    public required string Author { get; init; }
+    public DateTimeOffset? At { get; init; }
+    public string? Url { get; init; }
+
+    public string ShortSha => Sha.Length >= 7 ? Sha[..7] : Sha;
+
+    /// <summary>
+    /// The first line only. A commit body can run to paragraphs, and "the last three
+    /// commits" wants three subjects, not three essays.
+    /// </summary>
+    public string Subject
+    {
+        get
+        {
+            var i = Message.IndexOf('\n');
+            return (i < 0 ? Message : Message[..i]).Trim();
+        }
+    }
+}
+
 public enum PullRequestScope { AwaitingMyReview, Mine, Mentioning, AllOpen }
 
 public enum IssueScope { AssignedToMe, Mentioning, Unassigned, AllOpen }
@@ -44,6 +84,11 @@ public enum IssueScope { AssignedToMe, Mentioning, Unassigned, AllOpen }
 public interface IGitHubService
 {
     Task<CodeTriage> TriageAsync(Connection c, CancellationToken ct = default);
+
+    Task<IReadOnlyList<RepoRef>> ListRepositoriesAsync(Connection c, CancellationToken ct = default);
+
+    Task<IReadOnlyList<CommitRef>> ListCommitsAsync(
+        Connection c, string repo, string? branch, int count, CancellationToken ct = default);
 
     Task<IReadOnlyList<CodeItem>> ListPullRequestsAsync(
         Connection c, PullRequestScope scope, string? repo, int count, CancellationToken ct = default);
@@ -180,6 +225,90 @@ public sealed class GitHubService(
         return (await SearchAsync(http, q, count, ct)).Items.Select(Map).ToList();
     }
 
+    /// <summary>
+    /// Every repository the token can reach, newest activity first.
+    /// <para>
+    /// There was no way to ask this, and its absence was invisible: asked whether it could
+    /// see a repository at all, the only honest answer was "I cannot tell". A product that
+    /// takes a repository name by voice has to be able to say which names it knows.
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyList<RepoRef>> ListRepositoriesAsync(
+        Connection c, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(c, ct);
+
+        var all = new List<RepoRef>();
+
+        // Paged to a ceiling rather than exhaustively. Five hundred covers any account a
+        // person resolves names against out loud, and an account in hundreds of org repos
+        // should not pay an unbounded walk on a question asked while driving.
+        for (var page = 1; page <= 5; page++)
+        {
+            using var resp = await http.GetAsync(
+                "user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member" +
+                $"&page={page}", ct);
+
+            if (!resp.IsSuccessStatusCode)
+                throw new GitHubException($"GitHub returned HTTP {(int)resp.StatusCode} listing repositories.");
+
+            var batch = await resp.Content.ReadFromJsonAsync<List<Repository>>(ct) ?? [];
+            all.AddRange(batch.Select(r => new RepoRef
+            {
+                FullName = r.FullName ?? "",
+                Name = r.Name ?? "",
+                Owner = r.Owner?.Login ?? "",
+                Description = r.Description,
+                Private = r.Private,
+                Fork = r.Fork,
+                Archived = r.Archived,
+                DefaultBranch = r.DefaultBranch,
+                PushedAt = r.PushedAt,
+                Url = r.HtmlUrl,
+            }));
+
+            if (batch.Count < 100) break;
+        }
+
+        log.LogInformation("Listed {Count} repositories for {Label}.", all.Count, c.Label);
+        return all.Where(r => r.FullName.Length > 0).ToList();
+    }
+
+    public async Task<IReadOnlyList<CommitRef>> ListCommitsAsync(
+        Connection c, string repo, string? branch, int count, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(c, ct);
+
+        var url = $"repos/{repo.Trim('/')}/commits?per_page={Math.Clamp(count, 1, 100)}" +
+                  (string.IsNullOrWhiteSpace(branch) ? "" : $"&sha={Uri.EscapeDataString(branch.Trim())}");
+
+        using var resp = await http.GetAsync(url, ct);
+
+        // 409 is an empty repository, which is a real answer rather than a failure.
+        if ((int)resp.StatusCode == 409) return [];
+
+        if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+            throw new GitHubException(string.IsNullOrWhiteSpace(branch)
+                ? $"No repository {repo}, or this token cannot see it."
+                : $"No branch '{branch}' on {repo}.");
+
+        if (!resp.IsSuccessStatusCode)
+            throw new GitHubException($"GitHub returned HTTP {(int)resp.StatusCode} for commits on {repo}.");
+
+        var commits = await resp.Content.ReadFromJsonAsync<List<CommitNode>>(ct) ?? [];
+
+        return commits.Select(x => new CommitRef
+        {
+            Sha = x.Sha ?? "",
+            Message = x.Commit?.Message ?? "(no message)",
+            // The commit author is who wrote it; the linked GitHub account may not exist
+            // at all for a commit made under an address with no account attached.
+            Author = x.Author?.Login ?? x.Commit?.Author?.Name ?? "unknown",
+            At = x.Commit?.Author?.Date,
+            Url = x.HtmlUrl,
+        }).ToList();
+    }
+
     public async Task<CodeItem?> GetAsync(Connection c, string repo, int number, CancellationToken ct = default)
     {
         using var http = await ClientAsync(c, ct);
@@ -242,6 +371,42 @@ public sealed class GitHubService(
 
     private sealed record Actor([property: JsonPropertyName("login")] string Login);
     private sealed record Label([property: JsonPropertyName("name")] string Name);
+
+    private sealed record Repository
+    {
+        [JsonPropertyName("full_name")] public string? FullName { get; init; }
+        [JsonPropertyName("name")] public string? Name { get; init; }
+        [JsonPropertyName("owner")] public Actor? Owner { get; init; }
+        [JsonPropertyName("description")] public string? Description { get; init; }
+        [JsonPropertyName("private")] public bool Private { get; init; }
+        [JsonPropertyName("fork")] public bool Fork { get; init; }
+        [JsonPropertyName("archived")] public bool Archived { get; init; }
+        [JsonPropertyName("default_branch")] public string? DefaultBranch { get; init; }
+        [JsonPropertyName("pushed_at")] public DateTimeOffset? PushedAt { get; init; }
+        [JsonPropertyName("html_url")] public string? HtmlUrl { get; init; }
+    }
+
+    private sealed record CommitNode
+    {
+        [JsonPropertyName("sha")] public string? Sha { get; init; }
+        [JsonPropertyName("html_url")] public string? HtmlUrl { get; init; }
+        [JsonPropertyName("commit")] public CommitBody? Commit { get; init; }
+
+        /// <summary>Null when the commit's email matches no GitHub account.</summary>
+        [JsonPropertyName("author")] public Actor? Author { get; init; }
+    }
+
+    private sealed record CommitBody
+    {
+        [JsonPropertyName("message")] public string? Message { get; init; }
+        [JsonPropertyName("author")] public CommitSignature? Author { get; init; }
+    }
+
+    private sealed record CommitSignature
+    {
+        [JsonPropertyName("name")] public string? Name { get; init; }
+        [JsonPropertyName("date")] public DateTimeOffset? Date { get; init; }
+    }
 }
 
 public sealed class GitHubException(string message) : Exception(message);

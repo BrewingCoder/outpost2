@@ -176,6 +176,41 @@ namespace OutPost2.Infrastructure.Data.Migrations
                     b.ToTable("preview_links", (string)null);
                 });
 
+            modelBuilder.Entity("OutPost2.Core.Code.RepoAlias", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Alias")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<Guid>("ConnectionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("ConnectionId", "Alias")
+                        .IsUnique();
+
+                    b.ToTable("repo_aliases", (string)null);
+                });
+
             modelBuilder.Entity("OutPost2.Core.Connections.Connection", b =>
                 {
                     b.Property<Guid>("Id")
@@ -454,6 +489,21 @@ namespace OutPost2.Infrastructure.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("users", (string)null);
+                });
+
+            modelBuilder.Entity("OutPost2.Core.Code.RepoAlias", b =>
+                {
+                    b.HasOne("OutPost2.Core.Connections.Connection", null)
+                        .WithMany()
+                        .HasForeignKey("ConnectionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("OutPost2.Core.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("OutPost2.Core.Connections.Connection", b =>

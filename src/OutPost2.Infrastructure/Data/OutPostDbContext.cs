@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using OutPost2.Core.Auth;
+using OutPost2.Core.Code;
 using OutPost2.Core.Connections;
 using OutPost2.Core.Files;
 using OutPost2.Core.Jobs;
@@ -19,6 +20,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
     public DbSet<StagedFile> StagedFiles => Set<StagedFile>();
     public DbSet<Job> Jobs => Set<Job>();
     public DbSet<PreviewLink> PreviewLinks => Set<PreviewLink>();
+    public DbSet<RepoAlias> RepoAliases => Set<RepoAlias>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -32,6 +34,25 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
 
             e.Property(u => u.GitHubLogin).HasMaxLength(100).IsRequired();
             e.Property(u => u.AvatarUrl).HasMaxLength(500);
+        });
+
+        b.Entity<RepoAlias>(e =>
+        {
+            e.ToTable("repo_aliases");
+            e.HasKey(a => a.Id);
+
+            e.HasOne<User>().WithMany().HasForeignKey(a => a.UserId).OnDelete(DeleteBehavior.Cascade);
+
+            // Deleting a connection takes its aliases with it. An alias naming a
+            // repository nothing can reach any more is not a record worth keeping.
+            e.HasOne<Connection>().WithMany().HasForeignKey(a => a.ConnectionId).OnDelete(DeleteBehavior.Cascade);
+
+            e.Property(a => a.Alias).HasMaxLength(120).IsRequired();
+            e.Property(a => a.FullName).HasMaxLength(255).IsRequired();
+
+            // One meaning per spoken name per connection. Two rows for "the core" would
+            // make resolution depend on insertion order, which is no resolution at all.
+            e.HasIndex(a => new { a.ConnectionId, a.Alias }).IsUnique();
         });
 
         b.Entity<Connection>(e =>

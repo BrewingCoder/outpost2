@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -132,6 +133,45 @@ public sealed class LiveGitHubProbe(ITestOutputHelper output) : IDisposable
             () => code.ListIssuesAsync(c, IssueScope.Unassigned, null, 5));
         output.WriteLine("");
         output.WriteLine($"  unscoped 'unassigned' refused: {blown.Message}");
+
+        // ── what this token can actually see ────────────────────────────────
+        // Asked "can you even see that repo?", there was no way to answer. This is the
+        // call that makes the question answerable, and it is worth proving against the
+        // real account rather than a fake with three rows in it.
+        var repos = await code.ListRepositoriesAsync(c);
+        output.WriteLine("");
+        output.WriteLine($"  repositories visible: {repos.Count}");
+        foreach (var r in repos.Take(12))
+            output.WriteLine($"    {r.FullName,-44}{(r.Private ? " private" : "")}" +
+                             $"{(r.Archived ? " archived" : "")} pushed {r.PushedAt:yyyy-MM-dd}");
+
+        Assert.NotEmpty(repos);
+        Assert.All(repos, r => Assert.Contains('/', r.FullName));
+        Assert.All(repos, r => Assert.False(string.IsNullOrWhiteSpace(r.Name)));
+
+        // Resolution, end to end, on a name from the live listing rather than a constant:
+        // a bare repository name has to come back as the owner/name path.
+        var sample = repos.First(r => !r.Archived);
+        var resolver = new RepoResolver(db, code, new MemoryCache(new MemoryCacheOptions()));
+        var resolved = await resolver.ResolveAsync(c, sample.Name);
+
+        output.WriteLine("");
+        output.WriteLine($"  resolved '{sample.Name}' -> {resolved.Kind} {resolved.FullName ?? resolved.Message}");
+
+        // Ambiguous is a legitimate outcome if the account really does hold two repos of
+        // that name — what must never happen is a silent pick or a flat not-found.
+        Assert.NotEqual(RepoResolutionKind.NotFound, resolved.Kind);
+        if (resolved.Kind == RepoResolutionKind.Resolved)
+            Assert.Equal(sample.FullName, resolved.FullName);
+
+        var commits = await code.ListCommitsAsync(c, sample.FullName, null, 3);
+        output.WriteLine("");
+        output.WriteLine($"  last {commits.Count} commit(s) on {sample.FullName}:");
+        foreach (var x in commits)
+            output.WriteLine($"    {x.ShortSha}  {Trim(x.Subject, 56),-58} {x.Author}  {x.At:yyyy-MM-dd}");
+
+        Assert.All(commits, x => Assert.True(x.Sha.Length >= 7));
+        Assert.All(commits, x => Assert.DoesNotContain('\n', x.Subject));
     }
 
     private static string Trim(string s, int n) => s.Length <= n ? s : s[..n] + "…";

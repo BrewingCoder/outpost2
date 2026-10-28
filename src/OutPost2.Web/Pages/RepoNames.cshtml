@@ -1,0 +1,126 @@
+@page "/repo-names"
+@using OutPost2.Web.Auth
+@using OutPost2.Web.Pages
+@model RepoNamesModel
+@{
+    ViewData["Title"] = "Repository names";
+    var readOnly = User.IsPreview();
+}
+
+<div class="op-pagehead">
+    <div>
+        <h1 class="op-h1">Repository names</h1>
+        <p class="op-lede">
+            Say a repository by name and Outpost finds it among the ones your token can see.
+            Add a name here only when that is not enough &mdash; a nickname GitHub has never
+            heard, or a name that means two different repositories.
+        </p>
+    </div>
+</div>
+
+@if (Model.Error is not null)
+{
+    <div class="op-note op-note--warn" role="alert">@Icons.Warn()<span>@Model.Error</span></div>
+}
+@if (Model.Added is not null)
+{
+    <div class="op-note op-note--info" role="status">
+        @Icons.Check()<span>Added <b class="op-mono">@Model.Added</b>.</span>
+    </div>
+}
+
+@if (Model.Groups.Count == 0)
+{
+    <div class="op-panel">
+        <p class="op-muted" style="margin:0">
+            No GitHub connections yet. Add one on <a asp-page="/Connections">Connections</a> first.
+        </p>
+    </div>
+}
+
+@foreach (var g in Model.Groups)
+{
+    <section class="op-group" aria-label="@g.Connection.Label">
+        <div class="op-group__head">
+            <h2 class="op-h2">@g.Connection.Label</h2>
+            @if (g.Error is null)
+            {
+                <span class="op-count">@g.Visible repositories visible</span>
+            }
+        </div>
+
+        @if (g.Error is not null)
+        {
+            <div class="op-note op-note--warn">
+                @Icons.Warn()
+                <span>Could not list repositories: @g.Error</span>
+            </div>
+        }
+
+        @if (g.Aliases.Count == 0)
+        {
+            <div class="op-panel">
+                <p class="op-muted" style="margin:0">
+                    No names configured. Nothing is wrong with that &mdash; names resolve on
+                    their own unless they are ambiguous.
+                </p>
+            </div>
+        }
+        else
+        {
+            <div class="op-panel">
+                <ul class="op-list">
+                    @foreach (var a in g.Aliases)
+                    {
+                        <li>
+                            <span class="op-grow">
+                                <b class="op-mono">@a.Alias</b>
+                                <span class="op-field__help">&rarr; @a.FullName</span>
+                            </span>
+                            @if (!readOnly)
+                            {
+                                <form method="post" action="/repo-names/@a.Id/delete"
+                                      data-confirm-submit="Remove @a.Alias? Saying it stops resolving to @a.FullName.">
+                                    @Html.AntiForgeryToken()
+                                    <button class="op-btn op-btn--danger op-btn--sm">Remove</button>
+                                </form>
+                            }
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
+
+        @if (!readOnly)
+        {
+            <section class="op-panel" aria-label="Add a name for @g.Connection.Label">
+                <form method="post" action="/repo-names/add" class="op-grid2">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="connectionId" value="@g.Connection.Id" />
+                    <div class="op-field">
+                        <label class="op-field__label" for="alias-@g.Connection.Id">What you&rsquo;ll say</label>
+                        <input class="op-input" id="alias-@g.Connection.Id" name="alias" required maxlength="120"
+                               autocomplete="off" placeholder="the core" />
+                        <span class="op-field__help">
+                            Case and hyphens are ignored, so &ldquo;rosetta core&rdquo; and
+                            &ldquo;RosettaCore&rdquo; are the same name.
+                        </span>
+                    </div>
+                    <div class="op-field">
+                        <label class="op-field__label" for="full-@g.Connection.Id">Repository</label>
+                        <input class="op-input op-input--mono" id="full-@g.Connection.Id" name="fullName" required
+                               maxlength="255" autocomplete="off" placeholder="BrewingCoder/RosettaCore" />
+                        <span class="op-field__help">owner/name, exactly as GitHub spells it.</span>
+                    </div>
+                    <div class="op-row op-row--end" style="grid-column:1/-1">
+                        <button class="op-btn op-btn--primary">Add name</button>
+                    </div>
+                </form>
+            </section>
+        }
+    </section>
+}
+
+@section Scripts {
+    <script src="~/js/outpost.js" asp-append-version="true"></script>
+}

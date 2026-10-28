@@ -16,7 +16,8 @@ namespace OutPost2.Web.Mcp;
 public sealed class CodeTools(
     IHttpContextAccessor http,
     IConnectionStore connections,
-    IGitHubService github)
+    IGitHubService github,
+    IRepoResolver repos)
 {
     private Guid UserId => http.HttpContext?.User.UserId()
         ?? throw new InvalidOperationException("No authenticated user on this MCP request.");
@@ -44,6 +45,27 @@ public sealed class CodeTools(
 
     private const string ConnectionDoc =
         "GitHub connection name. Required unless a default has been set.";
+
+    private const string RepoDoc =
+        "Repository. A bare name like 'RosettaCore' is resolved against the repositories " +
+        "this connection can see; owner/name is taken as given.";
+
+    /// <summary>
+    /// Turns what was said into an owner/name, or returns the sentence to say back.
+    /// <para>
+    /// Every repository argument goes through here. Passing a spoken name straight to the
+    /// API produced a 404 that read as "no such repository" when the truth was "I was
+    /// never told which owner", and there was no way to tell those apart from outside.
+    /// </para>
+    /// </summary>
+    private async Task<(string? Repo, string? Message)> RepoAsync(
+        Connection c, string? spoken, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(spoken)) return (null, null);
+
+        var r = await repos.ResolveAsync(c, spoken, ct);
+        return r.Kind == RepoResolutionKind.Resolved ? (r.FullName, null) : (null, r.Message);
+    }
 
     [McpServerTool(Name = "github_triage")]
     [Description("What on GitHub is waiting on me: pull requests to review, my open PRs, issues assigned to me.")]
@@ -94,7 +116,7 @@ public sealed class CodeTools(
     [Description("List open pull requests. Scope: awaiting-my-review, mine, mentioning, or all-open (needs a repo).")]
     public async Task<string> PullRequests(
         [Description("One of: awaiting-my-review, mine, mentioning, all-open.")] string scope = "awaiting-my-review",
-        [Description("Limit to one repository, e.g. 'signalclaude/outpost'. Optional.")] string? repo = null,
+        [Description(RepoDoc + " Optional.")] string? repo = null,
         [Description(ConnectionDoc)] string? connection = null,
         [Description("How many to return.")] int count = 20,
         CancellationToken ct = default)
@@ -105,10 +127,13 @@ public sealed class CodeTools(
         if (!TryParseScope(scope, out PullRequestScope parsed))
             return "Scope must be one of: awaiting-my-review, mine, mentioning, all-open.";
 
+        var (full, repoMsg) = await RepoAsync(c, repo, ct);
+        if (repoMsg is not null) return repoMsg;
+
         try
         {
-            var items = await github.ListPullRequestsAsync(c, parsed, repo, count, ct);
-            return Render(items, $"pull requests ({Humanise(scope)})", c.Label, repo);
+            var items = await github.ListPullRequestsAsync(c, parsed, full, count, ct);
+            return Render(items, $"pull requests ({Humanise(scope)})", c.Label, full);
         }
         catch (GitHubException ex) { return ex.Message; }
     }
@@ -117,7 +142,7 @@ public sealed class CodeTools(
     [Description("List open issues. Scope: assigned-to-me, mentioning, unassigned (needs a repo), or all-open (needs a repo).")]
     public async Task<string> Issues(
         [Description("One of: assigned-to-me, mentioning, unassigned, all-open.")] string scope = "assigned-to-me",
-        [Description("Limit to one repository, e.g. 'signalclaude/outpost'. Optional.")] string? repo = null,
+        [Description(RepoDoc + " Optional.")] string? repo = null,
         [Description(ConnectionDoc)] string? connection = null,
         [Description("How many to return.")] int count = 20,
         CancellationToken ct = default)
@@ -128,10 +153,13 @@ public sealed class CodeTools(
         if (!TryParseScope(scope, out IssueScope parsed))
             return "Scope must be one of: assigned-to-me, mentioning, unassigned, all-open.";
 
+        var (full, repoMsg) = await RepoAsync(c, repo, ct);
+        if (repoMsg is not null) return repoMsg;
+
         try
         {
-            var items = await github.ListIssuesAsync(c, parsed, repo, count, ct);
-            return Render(items, $"issues ({Humanise(scope)})", c.Label, repo);
+            var items = await github.ListIssuesAsync(c, parsed, full, count, ct);
+            return Render(items, $"issues ({Humanise(scope)})", c.Label, full);
         }
         catch (GitHubException ex) { return ex.Message; }
     }
@@ -139,7 +167,7 @@ public sealed class CodeTools(
     [McpServerTool(Name = "github_item")]
     [Description("Read one pull request or issue by repository and number, e.g. signalclaude/outpost 12.")]
     public async Task<string> Item(
-        [Description("Repository as owner/name, e.g. 'signalclaude/outpost'.")] string repo,
+        [Description(RepoDoc)] string repo,
         [Description("The PR or issue number.")] int number,
         [Description(ConnectionDoc)] string? connection = null,
         CancellationToken ct = default)
@@ -147,10 +175,13 @@ public sealed class CodeTools(
         var (c, msg) = await ResolveAsync(connection, Capabilities.CodeRead, false, ct);
         if (c is null) return msg!;
 
+        var (full, repoMsg) = await RepoAsync(c, repo, ct);
+        if (repoMsg is not null) return repoMsg;
+
         try
         {
-            var item = await github.GetAsync(c, repo, number, ct);
-            if (item is null) return $"No {repo}#{number} on {c.Label}, or it isn't visible to that token.";
+            var item = await github.GetAsync(c, full!, number, ct);
+            if (item is null) return $"No {full}#{number} on {c.Label}, or it isn't visible to that token.";
 
             var sb = new StringBuilder();
             sb.AppendLine($"{(item.IsPullRequest ? "Pull request" : "Issue")} {item.Reference}: {item.Title}");
@@ -161,6 +192,91 @@ public sealed class CodeTools(
             if (item.Labels.Count > 0) sb.AppendLine($"Labels: {string.Join(", ", item.Labels)}.");
             sb.AppendLine($"{item.Comments} comment{(item.Comments == 1 ? "" : "s")}.");
             if (item.Url is not null) sb.AppendLine(item.Url);
+            return sb.ToString().TrimEnd();
+        }
+        catch (GitHubException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "github_repositories")]
+    [Description("List the repositories this GitHub connection can see. Use it to answer whether a repository is reachable at all, or to find its owner when only the name is known.")]
+    public async Task<string> Repositories(
+        [Description("Optional filter on name, owner or description.")] string? match = null,
+        [Description(ConnectionDoc)] string? connection = null,
+        [Description("How many to return.")] int count = 40,
+        CancellationToken ct = default)
+    {
+        var (c, msg) = await ResolveAsync(connection, Capabilities.CodeRead, false, ct);
+        if (c is null) return msg!;
+
+        try
+        {
+            var all = await repos.KnownAsync(c, ct);
+
+            var hits = string.IsNullOrWhiteSpace(match)
+                ? all
+                : all.Where(r =>
+                    r.FullName.Contains(match, StringComparison.OrdinalIgnoreCase)
+                    || (r.Description ?? "").Contains(match, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            if (hits.Count == 0)
+            {
+                return string.IsNullOrWhiteSpace(match)
+                    ? $"{c.Label} can see no repositories at all. The token may lack the repo scope."
+                    : $"Nothing matching '{match}' among the {all.Count} repositories {c.Label} can see.";
+            }
+
+            var shown = hits.Take(Math.Clamp(count, 1, 100)).ToList();
+            var sb = new StringBuilder(shown.Count < hits.Count
+                ? $"{hits.Count} repositories on {c.Label}, first {shown.Count} by most recent activity:\n"
+                : $"{hits.Count} repositor{(hits.Count == 1 ? "y" : "ies")} on {c.Label}:\n");
+
+            foreach (var r in shown)
+            {
+                sb.Append($"- {r.FullName}");
+                if (r.Private) sb.Append(" [private]");
+                if (r.Archived) sb.Append(" [archived]");
+                if (r.Fork) sb.Append(" [fork]");
+                if (r.PushedAt is { } p) sb.Append($" — last push {Ago(p)}");
+                sb.AppendLine();
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+        catch (GitHubException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "github_commits")]
+    [Description("Recent commits on a repository, newest first. Answers 'what were the last few commits on X'.")]
+    public async Task<string> Commits(
+        [Description(RepoDoc)] string repo,
+        [Description("Branch or tag. Defaults to the repository's default branch.")] string? branch = null,
+        [Description(ConnectionDoc)] string? connection = null,
+        [Description("How many to return.")] int count = 10,
+        CancellationToken ct = default)
+    {
+        var (c, msg) = await ResolveAsync(connection, Capabilities.CodeRead, false, ct);
+        if (c is null) return msg!;
+
+        var (full, repoMsg) = await RepoAsync(c, repo, ct);
+        if (repoMsg is not null) return repoMsg;
+
+        try
+        {
+            var commits = await github.ListCommitsAsync(c, full!, branch, count, ct);
+            if (commits.Count == 0)
+                return $"{full} has no commits{(branch is null ? "" : $" on {branch}")}.";
+
+            var where = branch is null ? full : $"{full} ({branch})";
+            var sb = new StringBuilder($"Last {commits.Count} commit{(commits.Count == 1 ? "" : "s")} on {where}:\n");
+
+            foreach (var x in commits)
+            {
+                // Subject only. A commit body runs to paragraphs and "the last three
+                // commits" wants three subjects, not three essays.
+                sb.AppendLine($"- {x.ShortSha} {x.Subject} — {x.Author}" +
+                              (x.At is { } at ? $", {Ago(at)}" : ""));
+            }
+
             return sb.ToString().TrimEnd();
         }
         catch (GitHubException ex) { return ex.Message; }
