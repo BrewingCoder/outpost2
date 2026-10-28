@@ -25,7 +25,7 @@ public sealed class FeedbackTools(
     private Guid UserId => http.HttpContext?.User.UserId()
         ?? throw new InvalidOperationException("No authenticated user on this MCP request.");
 
-    [McpServerTool(Name = "report_friction")]
+    [McpServerTool(Name = "report_friction", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
     [Description("""
         Report a problem or rough edge with Outpost itself — a tool that failed, something
         you could not do, or a design that got in your way. Files it into Outpost's issue

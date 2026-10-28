@@ -189,7 +189,9 @@ public sealed class IssueDescriptionTests
     [Fact]
     public void A_cut_description_does_not_end_mid_sentence()
     {
-        var text = IssueTools.Describe(WithDescription(Criteria(400)));
+        // Unfenced: this test is about where the prose is cut, which is a property of the
+        // content, not of the trust boundary wrapped around it (OP2-125).
+        var text = Untrusted.Unfence(IssueTools.Describe(WithDescription(Criteria(400))));
 
         var body = text[..text.IndexOf("[", StringComparison.Ordinal)].TrimEnd();
         var lastLine = body.Split('\n').Last(l => !string.IsNullOrWhiteSpace(l)).TrimEnd();
@@ -204,7 +206,7 @@ public sealed class IssueDescriptionTests
         var d = Criteria(400);
         var issue = WithDescription(d);
 
-        var first = IssueTools.Describe(issue);
+        var first = Untrusted.Unfence(IssueTools.Describe(issue));
         var offset = int.Parse(first
             .Split("descriptionFrom: ")[1]
             .Split(' ')[0]
@@ -215,7 +217,7 @@ public sealed class IssueDescriptionTests
         var at = 0;
         for (var guard = 0; guard < 50; guard++)
         {
-            var page = IssueTools.Describe(issue, at);
+            var page = Untrusted.Unfence(IssueTools.Describe(issue, at));
             var start = page.IndexOf(Summary, StringComparison.Ordinal);
             var bodyStart = page.IndexOf("AC", start, StringComparison.Ordinal);
             var end = page.IndexOf("[", bodyStart, StringComparison.Ordinal);

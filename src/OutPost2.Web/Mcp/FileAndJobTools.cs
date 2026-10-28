@@ -22,7 +22,7 @@ public sealed class FileAndJobTools(
     private Guid UserId => http.HttpContext?.User.UserId()
         ?? throw new InvalidOperationException("No authenticated user on this MCP request.");
 
-    [McpServerTool(Name = "list_files")]
+    [McpServerTool(Name = "list_files", ReadOnly = true, OpenWorld = true)]
     [Description("List files the user has staged for attaching. Refer to them by name.")]
     public async Task<string> ListFiles(CancellationToken ct = default)
     {
@@ -34,7 +34,7 @@ public sealed class FileAndJobTools(
             files.Select(f => $"- {f.Name} ({f.FileName}, {f.HumanSize})"));
     }
 
-    [McpServerTool(Name = "send_mail_with_attachments")]
+    [McpServerTool(Name = "send_mail_with_attachments", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
     [Description("Send an email with staged files attached, naming each file. Returns immediately; large uploads continue in the background.")]
     public async Task<string> SendWithAttachments(
         [Description("Recipient addresses, comma separated.")] string to,
@@ -102,7 +102,7 @@ public sealed class FileAndJobTools(
                    : "I'll have it in your queue.");
     }
 
-    [McpServerTool(Name = "check_queue")]
+    [McpServerTool(Name = "check_queue", ReadOnly = true, OpenWorld = true)]
     [Description("Check what is in flight, waiting for approval, or recently finished.")]
     public async Task<string> CheckQueue(
         [Description("Only show things still in progress.")] bool activeOnly = false,

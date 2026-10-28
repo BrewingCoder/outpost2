@@ -39,7 +39,7 @@ public sealed class MailTools(
     private Guid UserId => http.HttpContext?.User.UserId()
         ?? throw new InvalidOperationException("No authenticated user on this MCP request.");
 
-    [McpServerTool(Name = "list_connections")]
+    [McpServerTool(Name = "list_connections", ReadOnly = true, OpenWorld = true)]
     [Description("List the user's named connections — which mailboxes and trackers are available, and their health.")]
     public async Task<string> ListConnections(CancellationToken ct)
     {
@@ -61,7 +61,7 @@ public sealed class MailTools(
         return sb.ToString().TrimEnd();
     }
 
-    [McpServerTool(Name = "list_mail")]
+    [McpServerTool(Name = "list_mail", ReadOnly = true, OpenWorld = true)]
     [Description("List recent messages. Omit 'connection' to use the default mailbox, or pass 'all' to check every mailbox at once. Each result carries a handle in square brackets — pass that to read or act on it.")]
     public async Task<string> ListMail(
         [Description("Connection name such as 'work' or 'home'. Use 'all' for every mailbox. Omit only if a default mailbox has been set.")] string? connection,
@@ -108,7 +108,7 @@ public sealed class MailTools(
                 // anything that changes the mailbox has something that cannot shift under it.
                 sb.Append($"{n + 1}. [{refs[n].Ref}] ");
                 if (resolution.Connections.Count > 1) sb.Append($"[{label}] ");
-                sb.Append($"{m.From} — {m.Subject}");
+                sb.Append($"{Untrusted.Scrub(m.From)} — {Untrusted.Scrub(m.Subject)}");
                 if (!m.IsRead) sb.Append(" (unread)");
                 if (m.HasAttachments) sb.Append(" (has attachments)");
                 sb.AppendLine($" — {Ago(m.ReceivedAt)}");
@@ -125,7 +125,7 @@ public sealed class MailTools(
         return sb.ToString().TrimEnd();
     }
 
-    [McpServerTool(Name = "read_mail")]
+    [McpServerTool(Name = "read_mail", ReadOnly = true, OpenWorld = true)]
     [Description("Read a message in full. Pass the handle from the last listing, e.g. 'a7kq', or the number, e.g. '2'.")]
     public async Task<string> ReadMail(
         [Description("The handle in square brackets from the listing, or the number shown beside it.")] string message,
@@ -141,19 +141,19 @@ public sealed class MailTools(
             if (m is null) return "That message no longer exists.";
 
             var sb = new StringBuilder();
-            sb.AppendLine($"From: {m.From}");
-            sb.AppendLine($"Subject: {m.Subject}");
+            sb.AppendLine($"From: {Untrusted.Scrub(m.From)}");
+            sb.AppendLine($"Subject: {Untrusted.Scrub(m.Subject)}");
             sb.AppendLine($"Received: {Ago(m.ReceivedAt)} ({c.Label})");
             sb.AppendLine($"Handle: {item.Ref}");
             if (m.HasAttachments) sb.AppendLine("Has attachments.");
             sb.AppendLine();
-            sb.AppendLine(HtmlToText.Clamp(m.Body, 8000));
+            sb.AppendLine(Untrusted.Fence("message body", HtmlToText.Clamp(m.Body, 8000)));
             return sb.ToString().TrimEnd();
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "search_mail")]
+    [McpServerTool(Name = "search_mail", ReadOnly = true, OpenWorld = true)]
     [Description("Search messages by text. Omit 'connection' for the default mailbox, or pass 'all' to search everywhere. Results carry a handle in square brackets.")]
     public async Task<string> SearchMail(
         [Description("What to search for.")] string query,
@@ -189,12 +189,12 @@ public sealed class MailTools(
             var (label, m) = ordered[n];
             sb.Append($"{n + 1}. [{refs[n].Ref}] ");
             if (resolution.Connections.Count > 1) sb.Append($"[{label}] ");
-            sb.AppendLine($"{m.From} — {m.Subject} — {Ago(m.ReceivedAt)}");
+            sb.AppendLine($"{Untrusted.Scrub(m.From)} — {Untrusted.Scrub(m.Subject)} — {Ago(m.ReceivedAt)}");
         }
         return sb.ToString().TrimEnd();
     }
 
-    [McpServerTool(Name = "send_mail")]
+    [McpServerTool(Name = "send_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
     [Description("Send a NEW email. To answer one you have been reading, use reply_mail instead. Body may use Markdown. Always name the connection to send from.")]
     public async Task<string> SendMail(
         [Description("Recipient addresses, comma separated.")] string to,
@@ -228,7 +228,7 @@ public sealed class MailTools(
         catch (MailException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "reply_mail")]
+    [McpServerTool(Name = "reply_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
     [Description("Reply to a message, keeping the thread and quoting the original. Pass the handle from the listing. Set replyAll to include everyone who was copied.")]
     public async Task<string> ReplyMail(
         [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
@@ -259,7 +259,7 @@ public sealed class MailTools(
         catch (MailException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "forward_mail")]
+    [McpServerTool(Name = "forward_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
     [Description("Forward a message to someone else, quoting the original. Pass the handle from the listing.")]
     public async Task<string> ForwardMail(
         [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
@@ -287,7 +287,7 @@ public sealed class MailTools(
         catch (MailException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "mark_mail")]
+    [McpServerTool(Name = "mark_mail", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
     [Description("Mark a message read or unread. Pass the handle from the listing.")]
     public async Task<string> MarkMail(
         [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
@@ -307,7 +307,7 @@ public sealed class MailTools(
         catch (MailException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "move_mail")]
+    [McpServerTool(Name = "move_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
     [Description("File a message away. Destination can be 'archive', 'trash' (Deleted Items), 'inbox', 'junk', or the name of any folder in the mailbox. This is how you delete or archive something. Pass the handle from the listing.")]
     public async Task<string> MoveMail(
         [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
@@ -353,7 +353,7 @@ public sealed class MailTools(
         catch (MailException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "report_junk")]
+    [McpServerTool(Name = "report_junk", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
     [Description("Report a message as junk or phishing: blocks the sender and files it in Junk Email, which trains the filter. Prefer this over deleting spam. Pass the handle from the listing.")]
     public async Task<string> ReportJunk(
         [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
@@ -385,7 +385,7 @@ public sealed class MailTools(
         catch (MailException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "flag_mail")]
+    [McpServerTool(Name = "flag_mail", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
     [Description("Flag a message for follow-up, optionally with a due date, or clear an existing flag. Pass the handle from the listing.")]
     public async Task<string> FlagMail(
         [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
@@ -415,7 +415,7 @@ public sealed class MailTools(
         catch (MailException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "list_categories")]
+    [McpServerTool(Name = "list_categories", ReadOnly = true, OpenWorld = true)]
     [Description("List the Outlook colour categories defined on a mailbox — the names a message may be filed under.")]
     public async Task<string> ListCategories(
         [Description("Connection name such as 'work'. Omit only if a default mailbox has been set.")] string? connection = null,
@@ -440,7 +440,7 @@ public sealed class MailTools(
         catch (MailException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "categorise_mail")]
+    [McpServerTool(Name = "categorise_mail", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
     [Description("Apply or remove Outlook colour categories on a message. Pass the handle from the listing. Categories must already exist on the mailbox unless 'colour' is given, which creates the missing one.")]
     public async Task<string> CategoriseMail(
         [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
@@ -510,7 +510,7 @@ public sealed class MailTools(
         catch (MailException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "list_attachments")]
+    [McpServerTool(Name = "list_attachments", ReadOnly = true, OpenWorld = true)]
     [Description("List the attachments on a message. Pass the handle from the listing, or the number.")]
     public async Task<string> ListAttachments(
         [Description("The handle from the listing, or the number shown beside it.")] string message,
@@ -536,7 +536,7 @@ public sealed class MailTools(
         return sb.ToString().TrimEnd();
     }
 
-    [McpServerTool(Name = "read_attachment")]
+    [McpServerTool(Name = "read_attachment", ReadOnly = true, OpenWorld = true)]
     [Description("Read the text content of an attachment — PDF, Word, Excel, PowerPoint or plain text. Pass the message handle and the attachment number.")]
     public async Task<string> ReadAttachment(
         [Description("The message handle from the listing, or the number shown beside it.")] string message,
@@ -569,7 +569,8 @@ public sealed class MailTools(
         if (bytes is null) return $"Couldn't download {a.Name}.";
 
         var text = await extractor.ExtractAsync(a.Name, bytes, ct);
-        return $"{a.Name}:{Environment.NewLine}{Environment.NewLine}{HtmlToText.Clamp(text, 12000)}";
+        return $"{Untrusted.Scrub(a.Name)}:{Environment.NewLine}{Environment.NewLine}"
+             + Untrusted.Fence("attachment text", HtmlToText.Clamp(text, 12000));
     }
 
     // ── shared plumbing ──────────────────────────────────────────────────────

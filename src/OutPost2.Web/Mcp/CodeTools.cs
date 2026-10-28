@@ -67,7 +67,7 @@ public sealed class CodeTools(
         return r.Kind == RepoResolutionKind.Resolved ? (r.FullName, null) : (null, r.Message);
     }
 
-    [McpServerTool(Name = "github_triage")]
+    [McpServerTool(Name = "github_triage", ReadOnly = true, OpenWorld = true)]
     [Description("What on GitHub is waiting on me: pull requests to review, my open PRs, issues assigned to me.")]
     public async Task<string> Triage(
         [Description(ConnectionDoc)] string? connection = null,
@@ -112,7 +112,7 @@ public sealed class CodeTools(
         return sb.ToString().TrimEnd();
     }
 
-    [McpServerTool(Name = "github_pull_requests")]
+    [McpServerTool(Name = "github_pull_requests", ReadOnly = true, OpenWorld = true)]
     [Description("List open pull requests. Scope: awaiting-my-review, mine, mentioning, or all-open (needs a repo).")]
     public async Task<string> PullRequests(
         [Description("One of: awaiting-my-review, mine, mentioning, all-open.")] string scope = "awaiting-my-review",
@@ -138,7 +138,7 @@ public sealed class CodeTools(
         catch (GitHubException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "github_issues")]
+    [McpServerTool(Name = "github_issues", ReadOnly = true, OpenWorld = true)]
     [Description("List open issues. Scope: assigned-to-me, mentioning, unassigned (needs a repo), or all-open (needs a repo).")]
     public async Task<string> Issues(
         [Description("One of: assigned-to-me, mentioning, unassigned, all-open.")] string scope = "assigned-to-me",
@@ -164,7 +164,7 @@ public sealed class CodeTools(
         catch (GitHubException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "github_item")]
+    [McpServerTool(Name = "github_item", ReadOnly = true, OpenWorld = true)]
     [Description("Read one pull request or issue by repository and number, e.g. signalclaude/outpost 12.")]
     public async Task<string> Item(
         [Description(RepoDoc)] string repo,
@@ -184,12 +184,12 @@ public sealed class CodeTools(
             if (item is null) return $"No {full}#{number} on {c.Label}, or it isn't visible to that token.";
 
             var sb = new StringBuilder();
-            sb.AppendLine($"{(item.IsPullRequest ? "Pull request" : "Issue")} {item.Reference}: {item.Title}");
-            sb.AppendLine($"Opened by {item.Author}, updated {Ago(item.UpdatedAt)}.");
+            sb.AppendLine($"{(item.IsPullRequest ? "Pull request" : "Issue")} {item.Reference}: {Untrusted.Scrub(item.Title)}");
+            sb.AppendLine($"Opened by {Untrusted.Scrub(item.Author)}, updated {Ago(item.UpdatedAt)}.");
             if (item.IsDraft) sb.AppendLine("Still a draft.");
-            if (item.Assignees.Count > 0) sb.AppendLine($"Assigned to {string.Join(", ", item.Assignees)}.");
+            if (item.Assignees.Count > 0) sb.AppendLine($"Assigned to {string.Join(", ", item.Assignees.Select(Untrusted.Scrub))}.");
             else sb.AppendLine("Nobody is assigned.");
-            if (item.Labels.Count > 0) sb.AppendLine($"Labels: {string.Join(", ", item.Labels)}.");
+            if (item.Labels.Count > 0) sb.AppendLine($"Labels: {string.Join(", ", item.Labels.Select(Untrusted.Scrub))}.");
             sb.AppendLine($"{item.Comments} comment{(item.Comments == 1 ? "" : "s")}.");
             if (item.Url is not null) sb.AppendLine(item.Url);
             return sb.ToString().TrimEnd();
@@ -197,7 +197,7 @@ public sealed class CodeTools(
         catch (GitHubException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "github_repositories")]
+    [McpServerTool(Name = "github_repositories", ReadOnly = true, OpenWorld = true)]
     [Description("List the repositories this GitHub connection can see, and the names configured for it. Use it to answer whether a repository is reachable at all, to find its owner when only the name is known, or to see what nicknames resolve to what.")]
     public async Task<string> Repositories(
         [Description("Optional filter on name, owner or description.")] string? match = null,
@@ -294,7 +294,7 @@ public sealed class CodeTools(
         catch (GitHubException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "github_repo_names")]
+    [McpServerTool(Name = "github_repo_names", ReadOnly = true, OpenWorld = true)]
     [Description("List the repository names (aliases) configured for a GitHub connection — the nicknames that resolve to a specific owner/name. Call this when asked what names, aliases or shortcuts are set up.")]
     public async Task<string> RepoNames(
         [Description(ConnectionDoc)] string? connection = null,
@@ -326,7 +326,7 @@ public sealed class CodeTools(
         return sb.ToString().TrimEnd();
     }
 
-    [McpServerTool(Name = "github_commits")]
+    [McpServerTool(Name = "github_commits", ReadOnly = true, OpenWorld = true)]
     [Description("Recent commits on a repository, newest first. Answers 'what were the last few commits on X'.")]
     public async Task<string> Commits(
         [Description(RepoDoc)] string repo,
@@ -371,7 +371,7 @@ public sealed class CodeTools(
         var sb = new StringBuilder($"{items.Count} {what} in {where}:\n");
         foreach (var i in items)
         {
-            sb.Append($"- {i.Reference}: {i.Title}");
+            sb.Append($"- {i.Reference}: {Untrusted.Scrub(i.Title)}");
             if (i.IsDraft) sb.Append(" [draft]");
             sb.Append($" — by {i.Author}, updated {Ago(i.UpdatedAt)}");
             if (i.Comments > 0) sb.Append($", {i.Comments} comment{(i.Comments == 1 ? "" : "s")}");

@@ -47,7 +47,7 @@ public sealed class IssueTools(
         return (null, message);
     }
 
-    [McpServerTool(Name = "list_projects")]
+    [McpServerTool(Name = "list_projects", ReadOnly = true, OpenWorld = true)]
     [Description("List projects on a YouTrack connection.")]
     public async Task<string> ListProjects(
         [Description("Connection name, e.g. 'lab'. Required unless a default tracker has been set.")] string? connection = null,
@@ -63,7 +63,7 @@ public sealed class IssueTools(
                string.Join("\n", projects.Select(p => $"- {p.ShortName} — {p.Name}"));
     }
 
-    [McpServerTool(Name = "search_issues")]
+    [McpServerTool(Name = "search_issues", ReadOnly = true, OpenWorld = true)]
     [Description("Search issues using YouTrack query syntax, e.g. 'project: OP2 State: Open' or 'for: me'.")]
     public async Task<string> SearchIssues(
         [Description("YouTrack query, e.g. 'project: OP2 #Unresolved'.")] string query,
@@ -80,7 +80,7 @@ public sealed class IssueTools(
         var sb = new StringBuilder($"{issues.Count} issue{(issues.Count == 1 ? "" : "s")} on {c.Label}:\n");
         foreach (var i in issues)
         {
-            sb.Append($"- {i.Key}: {i.Summary}");
+            sb.Append($"- {i.Key}: {Untrusted.Scrub(i.Summary)}");
             if (!string.IsNullOrWhiteSpace(i.State)) sb.Append($" [{i.State}]");
             if (!string.IsNullOrWhiteSpace(i.Assignee)) sb.Append($" — {i.Assignee}");
             sb.AppendLine();
@@ -88,7 +88,7 @@ public sealed class IssueTools(
         return sb.ToString().TrimEnd();
     }
 
-    [McpServerTool(Name = "get_issue")]
+    [McpServerTool(Name = "get_issue", ReadOnly = true, OpenWorld = true)]
     [Description("Read one issue in full: reporter, dates, every field, links, comments and the full description. Issue keys like OP2-14 are speakable, so they are used directly. A very long description is returned in parts; if the reply says it continues, call again with descriptionFrom before answering any question about its later sections.")]
     public async Task<string> GetIssue(
         [Description("Issue key, e.g. OP2-14.")] string issueKey,
@@ -157,7 +157,7 @@ public sealed class IssueTools(
         // answer sitting in the response. Anything omitted here is unanswerable out loud
         // and gives no sign that it was omitted.
         var sb = new StringBuilder();
-        sb.AppendLine($"{i.Key}: {i.Summary}");
+        sb.AppendLine($"{i.Key}: {Untrusted.Scrub(i.Summary)}");
 
         sb.AppendLine($"Project {i.Project}" +
                       (i.State is null ? "" : $", state {i.State}") +
@@ -202,7 +202,8 @@ public sealed class IssueTools(
             sb.AppendLine();
 
             var (text, remaining) = Window(i.Description, descriptionFrom, DescriptionWindow);
-            sb.AppendLine(text);
+            // Third-party prose, same risk class as a mail body (OP2-125).
+            sb.AppendLine(Untrusted.Fence("issue description", text));
 
             if (remaining > 0)
             {
@@ -227,12 +228,16 @@ public sealed class IssueTools(
                 ? $"{i.CommentCount} comments, most recent {shown.Count}:"
                 : $"{i.CommentCount} comment{(i.CommentCount == 1 ? "" : "s")}:");
 
+            // Fenced once around the whole block rather than per comment: the boundary is
+            // what matters, and ten fences would cost more in noise than they buy.
+            var block = new StringBuilder();
             foreach (var cm in shown)
             {
                 var (text, remaining) = Window(cm.Text, 0, CommentWindow);
                 var more = remaining > 0 ? $" [+{remaining:N0} more characters]" : "";
-                sb.AppendLine($"- {cm.Author}{(cm.At is { } at ? $" ({When(at)})" : "")}: {text}{more}");
+                block.AppendLine($"- {Untrusted.Scrub(cm.Author)}{(cm.At is { } at ? $" ({When(at)})" : "")}: {text}{more}");
             }
+            sb.AppendLine(Untrusted.Fence("issue comments", block.ToString()));
         }
 
         if (i.Url is not null)
@@ -251,7 +256,7 @@ public sealed class IssueTools(
     /// </summary>
     private static string When(DateTimeOffset t) => t.ToLocalTime().ToString("d MMM yyyy, HH:mm");
 
-    [McpServerTool(Name = "create_issue")]
+    [McpServerTool(Name = "create_issue", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
     [Description("Create an issue. Always name the connection and project.")]
     public async Task<string> CreateIssue(
         [Description("Project short name, e.g. OP2.")] string project,
@@ -272,7 +277,7 @@ public sealed class IssueTools(
         catch (InvalidOperationException ex) { return ex.Message; }
     }
 
-    [McpServerTool(Name = "comment_on_issue")]
+    [McpServerTool(Name = "comment_on_issue", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
     [Description("Add a comment to an issue.")]
     public async Task<string> CommentOnIssue(
         [Description("Issue key, e.g. OP2-14.")] string issueKey,
@@ -287,7 +292,7 @@ public sealed class IssueTools(
         return $"Commented on {issueKey}.";
     }
 
-    [McpServerTool(Name = "update_issue")]
+    [McpServerTool(Name = "update_issue", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
     [Description("Apply a YouTrack command to an issue, e.g. 'State Fixed', 'Priority Critical', 'for me'.")]
     public async Task<string> UpdateIssue(
         [Description("Issue key, e.g. OP2-14.")] string issueKey,
@@ -302,7 +307,7 @@ public sealed class IssueTools(
         return $"Applied \"{command}\" to {issueKey}.";
     }
 
-    [McpServerTool(Name = "create_project")]
+    [McpServerTool(Name = "create_project", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
     [Description("Create a new YouTrack project. Requires the admin capability, which is switched off by default.")]
     public async Task<string> CreateProject(
         [Description("Project name, e.g. 'OutPost2'.")] string name,
