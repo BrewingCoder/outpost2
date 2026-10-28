@@ -60,6 +60,11 @@ public sealed class FormBindingTests : IClassFixture<FormBindingTests.Factory>, 
             builder.UseSetting("OutPost2:Storage:ServiceUrl", "http://localhost:3900");
             builder.UseSetting("OutPost2:Storage:AccessKey", "GK" + new string('0', 22) + "d2");
             builder.UseSetting("OutPost2:Storage:SecretKey", new string('0', 62) + "d2");
+            // Pinned, so the OAuth tests are not asserting against whatever the
+            // production default happens to be. The resource check compares host and
+            // port, and an unset value here silently meant outpost.brewingcoder.com.
+            builder.UseSetting("OutPost2:PublicBaseUrl", "https://localhost");
+
             builder.UseSetting("OutPost2:GitHub:ClientId", "test-client");
             builder.UseSetting("OutPost2:GitHub:ClientSecret", "test-secret");
             builder.UseSetting("OutPost2:Entra:ClientId", "00000000-0000-0000-0000-000000000001");

@@ -91,6 +91,13 @@ public static class OAuthEndpoints
             if (string.IsNullOrEmpty(code_challenge) || code_challenge_method != "S256")
                 return Results.BadRequest("PKCE with S256 is required.");
 
+            // RFC 8707. The client names the resource it intends the token for; if that
+            // is some OTHER server, refuse rather than mint a credential it could then
+            // present there. Nothing stops it asking that server directly — the point is
+            // that this one does not help, which is what makes a confused deputy possible.
+            if (!string.IsNullOrEmpty(resource) && !IdentifiesThisServer(resource, publicBaseUrl))
+                return Results.BadRequest("resource does not identify this server.");
+
             if (ctx.User.Identity?.IsAuthenticated != true)
                 return Results.Challenge(
                     new AuthenticationProperties { RedirectUri = ctx.Request.GetEncodedPathAndQuery() },
@@ -171,6 +178,24 @@ public static class OAuthEndpoints
     public sealed record RegistrationRequest(
         [property: JsonPropertyName("client_name")] string? ClientName,
         [property: JsonPropertyName("redirect_uris")] string[]? RedirectUris);
+
+    /// <summary>
+    /// Whether an RFC 8707 <c>resource</c> value names this deployment. Accepts the site
+    /// root and the MCP endpoint, with or without a trailing slash, because clients
+    /// legitimately differ on which they send — but compares host and path rather than
+    /// prefix-matching, so "https://outpost.example.com.evil.test/mcp" is not a match.
+    /// </summary>
+    public static bool IdentifiesThisServer(string resource, string publicBaseUrl)
+    {
+        if (!Uri.TryCreate(resource, UriKind.Absolute, out var asked)) return false;
+        if (!Uri.TryCreate(publicBaseUrl, UriKind.Absolute, out var ours)) return false;
+
+        if (!string.Equals(asked.Host, ours.Host, StringComparison.OrdinalIgnoreCase)) return false;
+        if (asked.Port != ours.Port) return false;
+
+        var path = asked.AbsolutePath.TrimEnd('/');
+        return path.Length == 0 || path.Equals("/mcp", StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 /// <summary>
