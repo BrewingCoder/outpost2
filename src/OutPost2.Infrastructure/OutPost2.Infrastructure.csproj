@@ -12,6 +12,13 @@
     <PackageReference Include="Microsoft.Graph" Version="6.9.0" />
     <PackageReference Include="Microsoft.Identity.Client" Version="4.91.1" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <!-- Design-time only: carries IDesignTimeDbContextFactory so `dotnet ef` can build a
+         context without starting the web host. PrivateAssets keeps it out of anything
+         that references this project, and out of the shipped image. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.14">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="PdfPig" Version="0.1.16" />
     <PackageReference Include="VaultSharp" Version="1.17.5.1" />
   </ItemGroup>

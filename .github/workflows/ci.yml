@@ -1,0 +1,88 @@
+name: CI
+
+# Everything here delegates to Tamp. The workflow's job is to provide a machine and the
+# tools; what "CI" means lives in build/Build.cs, so it is identical on a laptop. A
+# pipeline whose logic lives in YAML can only be debugged by pushing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    # The integration suites talk to real Postgres, Vault and Garage rather than fakes,
+    # and skip themselves when the services are absent. Supplying them here is the
+    # difference between 361 tests running and a large fraction quietly not.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: outpost2
+          POSTGRES_PASSWORD: outpost2-dev
+          POSTGRES_DB: outpost2
+        ports: ['5435:5432']
+        options: >-
+          --health-cmd "pg_isready -U outpost2"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+      vault:
+        image: hashicorp/vault:1.18
+        env:
+          VAULT_DEV_ROOT_TOKEN_ID: op2-dev-root
+          VAULT_DEV_LISTEN_ADDRESS: '0.0.0.0:8200'
+        ports: ['8200:8200']
+
+    steps:
+      # fetch-depth: 0 is load-bearing, not boilerplate. The SecretScan target scans the
+      # whole history, and against a shallow clone it would scan one commit and report
+      # clean — the most dangerous possible outcome for a secret gate.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install trufflehog
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+            | sh -s -- -b /usr/local/bin
+
+      - name: Enable Vault transit
+        env:
+          VAULT_ADDR: http://localhost:8200
+          VAULT_TOKEN: op2-dev-root
+        run: |
+          curl -sf -X POST -H "X-Vault-Token: $VAULT_TOKEN" \
+            -d '{"type":"transit"}' "$VAULT_ADDR/v1/sys/mounts/op2-transit"
+          curl -sf -X POST -H "X-Vault-Token: $VAULT_TOKEN" \
+            -d '{"type":"aes256-gcm96"}' "$VAULT_ADDR/v1/op2-transit/keys/op2-kek"
+
+      - run: dotnet tool restore
+
+      - name: Tamp Ci
+        env:
+          # Build outcomes go to Telegram. Absent secrets mean the reporter returns null
+          # and the framework skips it, so a fork's CI stays quiet rather than failing.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: dotnet tamp Ci --reporter=json --events artifacts/events.ndjson
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-artifacts
+          path: |
+            artifacts/coverage/**/*.trx
+            artifacts/coverage.cobertura.xml
+            artifacts/events.ndjson
+          if-no-files-found: ignore

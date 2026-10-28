@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "isRoot": true,
+  "tools": {
+    "dotnet-tamp": {
+      "version": "1.17.4",
+      "commands": ["dotnet-tamp"]
+    }
+  }
+}

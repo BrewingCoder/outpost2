@@ -49,6 +49,33 @@ All four are defined in `docker-compose.yml` and need no credentials beyond the 
 constants committed there. Those constants are bound to localhost containers and are not
 reused anywhere real.
 
+## Build
+
+Driven by **Tamp** (`tamp-build/tamp`). The build is a C# program in `build/Build.cs`, not
+YAML, so CI and a laptop run the identical thing.
+
+```
+tamp            # Compile
+tamp Ci         # the gate: Compile, Test + coverage, MigrationCheck, SecretScan
+tamp Verify     # Ci plus the security chain (SBOM, SAST, SCA, misconfig)
+tamp Smoke      # Image, Deploy, then prove the deployed app answers
+```
+
+`tamp` with the list flag enumerates targets; add the json format for the machine channel.
+`tamp mcp` exposes the build itself over MCP, and the json reporter plus an events file
+give an agent a typed stream rather than scraped console text.
+
+Two targets are worth knowing about:
+
+- **`MigrationCheck`** fails when the EF model has drifted from the migration snapshot —
+  the "forgot to add a migration" bug, which otherwise only shows up on a fresh deploy.
+  `dotnet ef` reaches the context through `DesignTimeDbContextFactory`, NOT by starting
+  the web host, so startup validation can never block tooling.
+- **`SecretScan`** runs trufflehog over the **whole git history**, verified-only, and fails
+  the build on a live credential. This repo shipped a working GitHub PAT into a commit on
+  2026-10-28 inside a redaction test's fixture; deleting it from HEAD would not have helped.
+  CI must check out with `fetch-depth: 0` or the scan passes by only looking at one commit.
+
 ## Gotchas found the hard way
 
 - `.NET 10` creates **`.slnx`**, not `.sln`.

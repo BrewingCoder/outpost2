@@ -6,6 +6,9 @@
 artifacts/
 *.user
 
+# Tamp scratch: resolved NuGet tool binaries, per-run state
+.tamp/
+
 # IDE
 .vs/
 .idea/

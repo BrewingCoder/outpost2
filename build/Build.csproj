@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    OutPost2's build script, driven by Tamp (tamp-build/tamp).
+
+    Run as `tamp Target` (or `dotnet tamp Target`) from the repo root.
+    `tamp` with the list flag enumerates targets; its json format is the
+    machine channel an agent reads.
+
+    Satellites are pinned per-package rather than centrally: Tamp's whole
+    architecture is that wrappers version against the TOOL they wrap, not
+    against core, so a Docker CLI bump must not need a core bump.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Build</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup Label="Core + .NET CLI">
+    <PackageReference Include="Tamp.Core" Version="1.17.4" />
+    <PackageReference Include="Tamp.NetCli.V10" Version="1.17.4" />
+  </ItemGroup>
+
+  <ItemGroup Label="Security chain — SBOM / SAST / SCA / secrets+misconfig, plus the
+                    Dependency-Track and DefectDojo push half (env-gated, skips clean).">
+    <PackageReference Include="Tamp.Security.Pipeline" Version="1.17.4" />
+    <PackageReference Include="Tamp.TruffleHog.V3" Version="0.2.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Toolchain this repo actually uses: compose for deployment, EF for the
+                    migration drift guard, coverage for the gate.">
+    <PackageReference Include="Tamp.Docker.V27" Version="0.3.2" />
+    <PackageReference Include="Tamp.EFCore.V10" Version="0.4.1" />
+    <PackageReference Include="Tamp.DotNetCoverage.V18" Version="1.17.4" />
+    <PackageReference Include="Tamp.ReportGenerator.V5" Version="0.1.2" />
+    <PackageReference Include="Tamp.Testcontainers.V4" Version="0.1.1" />
+  </ItemGroup>
+
+  <ItemGroup Label="Reporting. Telegram is the standing channel for build outcomes.">
+    <PackageReference Include="Tamp.Telegram" Version="0.1.1" />
+  </ItemGroup>
+
+</Project>
