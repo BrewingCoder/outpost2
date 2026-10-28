@@ -195,6 +195,17 @@
                     </div>
 
                     <div class="op-channel__foot">
+                        @*
+                            Re-check existed on the old page and the redesign had no slot
+                            for it. Dropping it would silently lose the only way to ask
+                            "does this still work?" without waiting for a voice turn to
+                            fail — so it keeps its place here rather than its endpoint
+                            quietly becoming unreachable.
+                        *@
+                        <form method="post" action="/connections/@c.Id/check">
+                            @Html.AntiForgeryToken()
+                            <button class="op-btn op-btn--secondary op-btn--sm">Check now</button>
+                        </form>
                         <button class="op-btn op-btn--secondary op-btn--sm" type="button" data-open="dlg-rename-@c.Id">Rename</button>
                         @if (c.AuthKind == AuthKind.PersonalAccessToken)
                         {

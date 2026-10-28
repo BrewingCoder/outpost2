@@ -1,8 +1,96 @@
 ﻿@page
+@using OutPost2.Web.Pages
 @model PrivacyModel
 @{
-    ViewData["Title"] = "Privacy Policy";
+    ViewData["Title"] = "What Outpost holds";
 }
-<h1 class="op-h1">@ViewData["Title"]</h1>
 
-<p>Use this page to detail your site's privacy policy.</p>
+@*
+    Written as a factual account of what the code actually does, not as a legal policy.
+    Every claim here is checkable against the source, and if the behaviour changes this
+    page is wrong and has to change with it. That is the only kind of privacy page worth
+    having on something that custodies other people's credentials.
+*@
+
+<div class="op-pagehead">
+    <div>
+        <h1 class="op-h1">What Outpost holds</h1>
+        <p class="op-lede">
+            A description of what this instance stores and where, accurate to the code
+            running it. Not a legal policy.
+        </p>
+    </div>
+</div>
+
+<section class="op-group" aria-labelledby="h-creds">
+    <div class="op-group__head"><h2 class="op-h2" id="h-creds">Credentials</h2></div>
+    <div class="op-panel">
+        <p style="margin:0">
+            Every credential is encrypted before it is written down, with a key Outpost
+            never sees in full: a data key is fetched per credential from HashiCorp Vault's
+            transit engine, used once, and wiped from memory. What lands in the database is
+            the sealed blob and the wrapped key.
+        </p>
+        <p style="margin:0">
+            That means a copy of the database on its own is not enough to read your mail.
+            It also means that if Vault is lost, so is every credential &mdash; by design.
+        </p>
+    </div>
+</section>
+
+<section class="op-group" aria-labelledby="h-tokens">
+    <div class="op-group__head"><h2 class="op-h2" id="h-tokens">Tokens issued to Claude</h2></div>
+    <div class="op-panel">
+        <p style="margin:0">
+            Access and refresh tokens are stored as SHA-256 hashes, never in the clear.
+            Outpost can check a token you present; it cannot produce one, and neither can
+            anyone reading the database.
+        </p>
+        <p style="margin:0">
+            Revoking from <a asp-page="/ConnectedApps">Connected apps</a> takes effect on the
+            very next request, and kills the refresh token with it.
+        </p>
+    </div>
+</section>
+
+<section class="op-group" aria-labelledby="h-content">
+    <div class="op-group__head"><h2 class="op-h2" id="h-content">Your mail, issues and code</h2></div>
+    <div class="op-panel">
+        <p style="margin:0">
+            Not stored. Messages, issues and pull requests are fetched from the provider
+            when asked for, passed to the conversation, and kept nowhere.
+        </p>
+        <p style="margin:0">
+            The exceptions are deliberate and visible: files you upload on the
+            <a asp-page="/Files">Files</a> page, which expire on their own and can be deleted
+            sooner, and the <a asp-page="/Jobs">Approvals</a> queue, which keeps a short
+            record of what was sent so you can check afterwards.
+        </p>
+    </div>
+</section>
+
+<section class="op-group" aria-labelledby="h-github">
+    <div class="op-group__head"><h2 class="op-h2" id="h-github">Signing in</h2></div>
+    <div class="op-panel">
+        <p style="margin:0">
+            GitHub sign-in asks for no scopes at all. It establishes who you are and nothing
+            else: Outpost cannot read your repositories through it. What is kept is your
+            GitHub user id, your login, and your avatar URL.
+        </p>
+        <p style="margin:0">
+            Access is assigned. An account that is not on the allowlist is refused before any
+            record of it is created.
+        </p>
+    </div>
+</section>
+
+<section class="op-group" aria-labelledby="h-preview">
+    <div class="op-group__head"><h2 class="op-h2" id="h-preview">Preview links</h2></div>
+    <div class="op-panel">
+        <p style="margin:0">
+            A <a asp-page="/PreviewLinks">preview link</a> acts as you, read-only, until it
+            expires or you revoke it. The first address and browser that opens one is recorded
+            and shown to you, so a link used from somewhere unexpected is visible afterwards.
+        </p>
+    </div>
+</section>
