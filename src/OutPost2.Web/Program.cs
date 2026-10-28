@@ -60,6 +60,10 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Jobs.IJobService, OutPost2.In
 builder.Services.AddHostedService<JobRunner>();
 builder.Services.AddHostedService<HousekeepingService>();
 builder.Services.AddHttpClient("youtrack").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddHttpClient("github").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddScoped<IGitHubConnectionService, GitHubConnectionService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Code.IGitHubService,
+                           OutPost2.Infrastructure.Code.GitHubService>();
 builder.Services.AddScoped<IYouTrackConnectionService, YouTrackConnectionService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Issues.IYouTrackService,
                            OutPost2.Infrastructure.Issues.YouTrackService>();

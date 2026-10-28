@@ -185,3 +185,33 @@ else
         </div>
     </div>
 </form>
+
+<h2 class="h5 mt-4">Add a GitHub account</h2>
+<form method="post" action="/connections/github/add" class="row g-2 align-items-end" style="max-width:52rem">
+    @Html.AntiForgeryToken()
+    <div class="col-sm-3">
+        <label class="form-label" for="ghlabel">Name it</label>
+        <input class="form-control" id="ghlabel" name="label" placeholder="github" required maxlength="60" />
+    </div>
+    <div class="col-sm-4">
+        <label class="form-label" for="ghBaseUrl">Server <span class="text-muted">(optional)</span></label>
+        <input class="form-control" id="ghBaseUrl" name="baseUrl" placeholder="github.com" />
+    </div>
+    <div class="col-sm-3">
+        <label class="form-label" for="ghToken">Personal access token</label>
+        <input class="form-control" id="ghToken" name="token" type="password" placeholder="github_pat_... or ghp_..."
+               required autocomplete="off" />
+    </div>
+    <div class="col-sm-2">
+        <button class="btn btn-primary w-100" type="submit">Connect</button>
+    </div>
+    <div class="col-12">
+        <div class="form-text">
+            Leave the server blank for github.com; enter a hostname only for GitHub Enterprise.
+            A fine-grained token needs <strong>read</strong> on Pull requests, Issues and Metadata
+            for the repositories you want to see, plus account <strong>Profile</strong> read.
+            Triage answers questions about <em>you</em> &mdash; reviews requested of you, issues
+            assigned to you &mdash; so the token has to belong to you rather than to an app.
+        </div>
+    </div>
+</form>

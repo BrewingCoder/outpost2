@@ -124,6 +124,34 @@ public static class ConnectionEndpoints
             }
         });
 
+        // ── add a GitHub connection (PAT, no redirect) ──────────────────────
+        group.MapPost("/github/add", async (
+            HttpContext ctx,
+            IGitHubConnectionService github,
+            IConnectionStore connections,
+            [FromForm] string label, [FromForm] string? baseUrl, [FromForm] string token) =>
+        {
+            var userId = ctx.User.UserId();
+            label = label.Trim();
+
+            if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(token))
+                return Results.Redirect("/connections?error=Name+and+token+are+both+required.");
+
+            if (await connections.FindByLabelAsync(userId, label) is not null)
+                return Results.Redirect($"/connections?error={Uri.EscapeDataString($"You already have a connection called '{label}'.")}");
+
+            try
+            {
+                // Blank means github.com. Only Enterprise users need to say anything.
+                var c = await github.ConnectAsync(userId, baseUrl ?? "", token, label);
+                return Results.Redirect($"/connections?added={Uri.EscapeDataString(c.Label)}");
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Redirect($"/connections?error={Uri.EscapeDataString(ex.Message)}");
+            }
+        });
+
         // ── re-check a connection's health ──────────────────────────────────
         group.MapPost("/{id:guid}/check", async (
             HttpContext ctx, IConnectionStore s, IYouTrackConnectionService yt, Guid id) =>

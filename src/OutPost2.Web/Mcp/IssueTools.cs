@@ -24,8 +24,14 @@ public sealed class IssueTools(
     private async Task<(Connection? Conn, string? Message)> ResolveAsync(
         string? connection, string capability, bool isWrite, CancellationToken ct)
     {
-        var r = ConnectionResolver.Resolve(
-            await connections.ListAsync(UserId, ct), capability, connection, isWrite);
+        // Filtered to this provider before resolving. Capability names are meant to be
+        // provider-agnostic, so without this a connection for a different provider could
+        // win a label match and then be called with an API it does not speak.
+        var candidates = (await connections.ListAsync(UserId, ct))
+            .Where(c => c.Provider == ProviderKind.YouTrack)
+            .ToList();
+
+        var r = ConnectionResolver.Resolve(candidates, capability, connection, isWrite);
 
         // FanOut is meaningful for mail but not for a write to one tracker, so anything
         // other than a single resolved connection is reported rather than guessed at.

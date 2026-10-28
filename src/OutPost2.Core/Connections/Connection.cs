@@ -91,6 +91,7 @@ public enum ProviderKind
 {
     Microsoft,
     YouTrack,
+    GitHub,
 }
 
 public enum AuthKind

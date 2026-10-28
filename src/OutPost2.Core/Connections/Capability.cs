@@ -41,4 +41,11 @@ public static class Capabilities
     public const string IssuesRead = "issues.read";
     public const string IssuesWrite = "issues.write";
     public const string IssuesAdmin = "issues.admin";
+
+    // Deliberately NOT issues.* even though a GitHub issue is an issue. Capability names
+    // are how the resolver decides what can serve a request, so sharing a name with
+    // YouTrack would let a GitHub connection be selected for a YouTrack tool and then be
+    // called with the wrong API entirely.
+    public const string CodeRead = "code.read";
+    public const string CodeWrite = "code.write";
 }
