@@ -27,6 +27,12 @@
         @Icons.Check()<span>Connected <b class="op-mono">@Model.Added</b>. Say its name to use it.</span>
     </div>
 }
+@if (Model.Reconnected is not null)
+{
+    <div class="op-note op-note--ok" role="status">
+        @Icons.Check()<span>Reconnected <b class="op-mono">@Model.Reconnected</b>. Its name, default and switches are unchanged.</span>
+    </div>
+}
 @if (Model.Replaced is not null)
 {
     <div class="op-note op-note--info" role="status">
@@ -210,6 +216,19 @@
                         @if (c.AuthKind == AuthKind.PersonalAccessToken)
                         {
                             <button class="op-btn op-btn--secondary op-btn--sm" type="button" data-open="dlg-replace-@c.Id">Replace token</button>
+                        }
+                        else if (c.Provider == ProviderKind.Microsoft)
+                        {
+                            @*
+                                The OAuth equivalent of "Replace token". Renews the
+                                credential and picks up any newly granted permission,
+                                keeping the name, the default and the capability toggles —
+                                all of which remove-and-re-add would throw away.
+                            *@
+                            <form method="post" action="/connections/@c.Id/reconnect">
+                                @Html.AntiForgeryToken()
+                                <button class="op-btn op-btn--secondary op-btn--sm">Reconnect</button>
+                            </form>
                         }
                         <form method="post" action="/connections/@c.Id/delete" data-confirm-submit="Remove @c.Label? Outpost loses access until you connect it again.">
                             @Html.AntiForgeryToken()

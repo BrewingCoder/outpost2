@@ -27,12 +27,14 @@ public class ConnectionsModel(IConnectionStore store) : PageModel
     public string? Error { get; private set; }
     public string? Added { get; private set; }
     public string? Replaced { get; private set; }
+    public string? Reconnected { get; private set; }
 
-    public async Task OnGetAsync(string? error, string? added, string? replaced)
+    public async Task OnGetAsync(string? error, string? added, string? replaced, string? reconnected)
     {
         Error = error;
         Added = added;
         Replaced = replaced;
+        Reconnected = reconnected;
 
         var all = await store.ListAsync(User.UserId());
 

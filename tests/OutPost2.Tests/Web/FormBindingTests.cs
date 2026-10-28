@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using OutPost2.Core.Connections;
 using OutPost2.Infrastructure.Data;
 
 namespace OutPost2.Tests.Web;
@@ -341,6 +342,138 @@ public sealed class FormBindingTests : IClassFixture<FormBindingTests.Factory>, 
             var resp = await _client.GetAsync(path);
             Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         }
+    }
+
+    // ── re-authorising an existing connection ───────────────────────────────
+
+    /// <summary>
+    /// Seeds a connection owned by the stub user, writing straight to the table. The
+    /// credential is never read on this path — reconnect only needs the label, tenant and
+    /// account id — so going through the store and Vault would buy nothing but a
+    /// dependency this test does not need.
+    /// </summary>
+    private async Task<Guid> SeedConnectionAsync(
+        ProviderKind provider, string label, string instance, string? homeAccountId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<OutPostDbContext>();
+
+        if (!await db.Users.AnyAsync(u => u.Id == StubAuth.UserId))
+        {
+            db.Users.Add(new OutPost2.Core.Users.User
+            {
+                Id = StubAuth.UserId, GitHubUserId = 4242, GitHubLogin = "tester",
+            });
+        }
+
+        var c = new Connection
+        {
+            UserId = StubAuth.UserId,
+            Label = label,
+            Provider = provider,
+            Instance = instance,
+            HomeAccountId = homeAccountId,
+            AuthKind = provider == ProviderKind.Microsoft
+                ? AuthKind.OAuth2 : AuthKind.PersonalAccessToken,
+            SealedCredential = "{}",
+            State = ConnectionState.Active,
+        };
+
+        db.Connections.Add(c);
+        await db.SaveChangesAsync();
+        return c.Id;
+    }
+
+    [SkippableFact]
+    public async Task Reconnect_sends_an_existing_mailbox_back_to_its_own_tenant()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        const string Tenant = "00000000-1111-2222-3333-444444444444";
+        var id = await SeedConnectionAsync(
+            ProviderKind.Microsoft, "work-reconnect", Tenant, "oid-1." + Tenant);
+
+        var resp = await _client.PostAsync($"/connections/{id}/reconnect",
+            await FormAsync("/connections"));
+
+        Assert.Equal(HttpStatusCode.Redirect, resp.StatusCode);
+
+        var location = resp.Headers.Location!.ToString();
+        Assert.Contains("login.microsoftonline.com", location);
+
+        // The connection's OWN directory, not /common. Reconnecting must not be a chance
+        // to land in a different tenant by habit and quietly create a second mailbox.
+        Assert.Contains(Tenant, location);
+        Assert.Contains("prompt=select_account", location);
+        Assert.Contains("code_challenge_method=S256", location);
+
+        // The whole point: the label is reused. /microsoft/start refuses a label that
+        // already exists, so if this ever started routing through that guard it would
+        // break and the only route back would be remove-and-re-add.
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<OutPostDbContext>();
+        var pending = await db.PendingConnections
+            .OrderByDescending(x => x.CreatedAt).FirstAsync();
+
+        Assert.Equal("work-reconnect", pending.Label);
+        Assert.Equal("oid-1." + Tenant, pending.ExpectedHomeAccountId);
+        Assert.True(pending.IsReconnect);
+    }
+
+    [SkippableFact]
+    public async Task Reconnect_refuses_a_connection_that_is_not_OAuth()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        var id = await SeedConnectionAsync(
+            ProviderKind.YouTrack, "tracker-reconnect", "https://yt.example.com", null);
+
+        var resp = await _client.PostAsync($"/connections/{id}/reconnect",
+            await FormAsync("/connections"));
+
+        // Redirected back with an explanation rather than sent to Microsoft to consent
+        // for a tracker, which would fail in a way nobody could interpret.
+        Assert.Equal(HttpStatusCode.Redirect, resp.StatusCode);
+        var location = resp.Headers.Location!.ToString();
+        Assert.Contains("error=", location);
+        Assert.DoesNotContain("login.microsoftonline.com", location);
+    }
+
+    [SkippableFact]
+    public async Task Reconnect_will_not_touch_a_connection_owned_by_someone_else()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        // A connection belonging to a different user. Looked up by id alone it would be
+        // found; scoped by owner it must not be, or a guessed id reaches another person's
+        // mailbox — the single most damaging bug this endpoint could have.
+        Guid id;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OutPostDbContext>();
+            var other = new OutPost2.Core.Users.User { GitHubUserId = 9999, GitHubLogin = "someone-else" };
+            db.Users.Add(other);
+
+            var c = new Connection
+            {
+                UserId = other.Id,
+                Label = "their-mailbox",
+                Provider = ProviderKind.Microsoft,
+                Instance = "aaaaaaaa-0000-0000-0000-000000000000",
+                HomeAccountId = "oid-9.aaaaaaaa-0000-0000-0000-000000000000",
+                AuthKind = AuthKind.OAuth2,
+                SealedCredential = "{}",
+                State = ConnectionState.Active,
+            };
+            db.Connections.Add(c);
+            await db.SaveChangesAsync();
+            id = c.Id;
+        }
+
+        var resp = await _client.PostAsync($"/connections/{id}/reconnect",
+            await FormAsync("/connections"));
+
+        Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
 
     [SkippableFact]

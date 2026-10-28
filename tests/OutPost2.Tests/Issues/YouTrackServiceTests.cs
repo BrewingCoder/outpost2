@@ -107,7 +107,12 @@ public sealed class YouTrackServiceTests : IAsyncLifetime
 
         Assert.NotEmpty(issues);
         Assert.All(issues, i => Assert.Equal("OP2", i.Project));
-        Assert.Contains(issues, i => i.Key == "OP2-1");
+
+        // Asked for by id rather than hoped for on the first page. YouTrack returns newest
+        // first, so once the project passed fifty issues OP2-1 fell off the end and this
+        // test started failing for a reason that had nothing to do with searching.
+        var epic = await _svc.SearchAsync(_conn, "project: OP2 issue ID: OP2-1", 5);
+        Assert.Contains(epic, i => i.Key == "OP2-1");
     }
 
     [SkippableFact]

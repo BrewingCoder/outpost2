@@ -49,6 +49,41 @@ public static class ConnectionEndpoints
             return Results.Redirect(url.ToString());
         });
 
+        // ── re-authorise an existing Microsoft connection ───────────────────
+        // Needed because /microsoft/start cannot serve this: it rejects a label that
+        // already exists — correctly, since finding out after consent would waste the
+        // user's time — but that check runs before anyone knows which account will be
+        // picked, so it also blocks renewing the connection that owns the name. Without
+        // this the only route was remove-and-re-add, which throws away the label, the
+        // default and every capability toggle, to fix a credential.
+        group.MapPost("/{id:guid}/reconnect", async (
+            HttpContext ctx,
+            IPendingConnectionStore pendings,
+            IMicrosoftConnectionService microsoft,
+            IConnectionStore connections,
+            Guid id) =>
+        {
+            var userId = ctx.User.UserId();
+
+            var connection = await connections.GetAsync(userId, id);
+            if (connection is null) return Results.NotFound();
+
+            if (connection.Provider != ProviderKind.Microsoft)
+                return Results.Redirect("/connections?error=" +
+                    Uri.EscapeDataString($"{connection.Label} isn't a Microsoft connection — replace its token instead."));
+
+            // The tenant id, not a domain: it targets the exact directory this connection
+            // already belongs to, so the user cannot land in the wrong one by habit.
+            var pending = await pendings.CreateAsync(
+                userId, ProviderKind.Microsoft, connection.Label, connection.Instance,
+                connection.HomeAccountId);
+
+            var url = await microsoft.BuildAuthorizeUrlAsync(pending);
+            await pendings.SaveAsync(pending);
+
+            return Results.Redirect(url.ToString());
+        });
+
         // ── OAuth callback ──────────────────────────────────────────────────
         // One URI serves every tenant and every connection; `state` carries the context.
         app.MapGet("/signin-microsoft", async (
@@ -88,7 +123,12 @@ public static class ConnectionEndpoints
             try
             {
                 var connection = await microsoft.CompleteAsync(pending, code);
-                return Results.Redirect($"/connections?added={Uri.EscapeDataString(connection.Label)}");
+
+                // Reconnecting an existing mailbox is not "added", and saying so sends the
+                // user hunting for a second entry that does not exist.
+                return Results.Redirect(pending.IsReconnect
+                    ? $"/connections?reconnected={Uri.EscapeDataString(connection.Label)}"
+                    : $"/connections?added={Uri.EscapeDataString(connection.Label)}");
             }
             catch (Exception ex)
             {

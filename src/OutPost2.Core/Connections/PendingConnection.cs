@@ -39,6 +39,23 @@ public sealed class PendingConnection
     /// <summary>Optional tenant hint, so a user can target a specific directory.</summary>
     public string? TenantHint { get; init; }
 
+    /// <summary>
+    /// Set when this flow re-authorises a connection that already exists, naming the
+    /// account it must come back as (MSAL's <c>home_account_id</c>).
+    /// <para>
+    /// Not a nicety. A reconnect reuses the existing label, and labels are uniquely
+    /// indexed per user — so signing in as a different account would not update the
+    /// connection, it would try to INSERT a second one under a name already taken and
+    /// fail on the constraint, surfacing as a 500 after the user had already consented.
+    /// Checked before anything is written, so the wrong account is a sentence rather than
+    /// a stack trace.
+    /// </para>
+    /// </summary>
+    public string? ExpectedHomeAccountId { get; init; }
+
+    /// <summary>True when this flow renews an existing connection rather than adding one.</summary>
+    public bool IsReconnect => ExpectedHomeAccountId is not null;
+
 
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public required DateTimeOffset ExpiresAt { get; init; }

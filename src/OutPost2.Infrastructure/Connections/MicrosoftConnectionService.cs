@@ -39,6 +39,35 @@ public sealed class EntraOptions
         ["https://graph.microsoft.com/Mail.ReadWrite", "https://graph.microsoft.com/Mail.Send",
          "https://graph.microsoft.com/User.Read"];
 
+    /// <summary>
+    /// Asked for at consent time and NOT when refreshing silently. Anything here is a
+    /// nice-to-have: the connection works without it, with one feature degraded.
+    /// <para>
+    /// The distinction is load-bearing. Adding a scope to <see cref="Scopes"/> changes what
+    /// every silent refresh asks for, and MSAL answers a request for a scope the cached
+    /// token does not carry with "interaction required" — so one new scope for one small
+    /// feature instantly breaks reading mail on every connection already in the database,
+    /// until each is re-authorised by hand. Measured, not predicted: that is exactly what
+    /// happened when MailboxSettings went into the list above.
+    /// </para>
+    /// <para>
+    /// Asking only at consent means a connection made from now on carries the scope, a
+    /// connection made before it simply lacks it, and nothing breaks either way. Entra
+    /// issues one Graph token carrying everything consented for the resource, so the
+    /// narrower silent request still comes back able to use it.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// MailboxSettings.ReadWrite is for Outlook's colour categories (OP2-76). Mail.ReadWrite
+    /// can put a category ON a message but cannot read or add to the mailbox's palette,
+    /// which lives in mailbox settings.
+    /// </remarks>
+    public string[] OptionalScopes { get; set; } =
+        ["https://graph.microsoft.com/MailboxSettings.ReadWrite"];
+
+    /// <summary>What to ask the user to consent to: everything we need plus everything we would like.</summary>
+    public string[] ConsentScopes => [.. Scopes, .. OptionalScopes];
+
     public bool IsConfigured => !string.IsNullOrWhiteSpace(ClientId) && !string.IsNullOrWhiteSpace(ClientSecret);
 }
 
@@ -128,7 +157,7 @@ public sealed class MicrosoftConnectionService(
         if (!string.IsNullOrWhiteSpace(pending.TenantHint) && pending.TenantHint.Contains('.'))
             extra["domain_hint"] = pending.TenantHint.Trim();
 
-        var builder = app.GetAuthorizationRequestUrl(_o.Scopes)
+        var builder = app.GetAuthorizationRequestUrl(_o.ConsentScopes)
             .WithExtraQueryParameters(extra)
             // WithPrompt, NOT an extra query parameter: MSAL emits `prompt` itself and
             // throws MsalClientException("Duplicate query parameter 'prompt'") if it is
@@ -155,12 +184,25 @@ public sealed class MicrosoftConnectionService(
     {
         var (app, _) = await BuildAppAsync(null, ct);
 
-        var result = await app.AcquireTokenByAuthorizationCode(_o.Scopes, code)
+        var result = await app.AcquireTokenByAuthorizationCode(_o.ConsentScopes, code)
             .WithPkceCodeVerifier(pending.CodeVerifier)
             .ExecuteAsync(ct);
 
         var account = result.Account
             ?? throw new InvalidOperationException("Microsoft returned no account for the authorization code.");
+
+        // Before anything is written. A reconnect reuses the existing label, and labels
+        // are uniquely indexed per user, so the wrong account here would not update the
+        // connection — it would try to insert a second one under a taken name and die on
+        // the constraint, after the user had already consented.
+        if (pending.ExpectedHomeAccountId is { } expected
+            && !string.Equals(expected, account.HomeAccountId?.Identifier, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"That signed in as {account.Username}, which is a different account from the one " +
+                $"'{pending.Label}' is connected to. Reconnect it and pick the original account, " +
+                "or add it as a new connection under its own name.");
+        }
 
         var tenantId = result.TenantId ?? account.HomeAccountId?.TenantId ?? "common";
 
@@ -182,6 +224,12 @@ public sealed class MicrosoftConnectionService(
         {
             new() { Name = Capabilities.MailRead,
                     Granted = granted.Contains("Mail.ReadWrite") || granted.Contains("Mail.Read"),
+                    Enabled = true },
+            // ReadWrite only. Mail.Read alone can list and open a message but cannot move,
+            // flag or delete one, and claiming otherwise turns a consent decision into a
+            // 403 the user meets halfway through tidying their inbox.
+            new() { Name = Capabilities.MailWrite,
+                    Granted = granted.Contains("Mail.ReadWrite"),
                     Enabled = true },
             new() { Name = Capabilities.MailSend,
                     Granted = granted.Contains("Mail.Send"),
@@ -229,6 +277,37 @@ public sealed class MicrosoftConnectionService(
             return null;
         }
 
+        // Ask for the optional scopes too, and settle for the required ones if that is
+        // refused. A refresh token is bound to the client and the resource, not to the
+        // scope set it was first issued with, so a connection can scope UP to anything the
+        // tenant has consented to since — no browser, no re-authorising, no lost label.
+        //
+        // Measured on three real connections: both contoso mailboxes picked up
+        // MailboxSettings on the next refresh after the tenant granted it, while a mailbox
+        // in a tenant that had not consented answered "interaction required". Asking for
+        // everything unconditionally would have broken that third one for ALL mail; never
+        // asking would have left the other two needing a human for no reason.
+        if (_o.OptionalScopes.Length > 0 && WideIsWorthTrying(connection.Id))
+        {
+            try
+            {
+                var wide = await app.AcquireTokenSilent(_o.ConsentScopes, account).ExecuteAsync(ct);
+                await persist();
+                await connections.TouchAsync(connection.Id, ct);
+                return wide.AccessToken;
+            }
+            catch (MsalUiRequiredException)
+            {
+                // Expected wherever the optional scopes are not consented. Remembered, so
+                // every mail read does not pay for the same refusal — and remembered with
+                // an expiry, so consent granted later is picked up on its own.
+                _wideRefusedUntil[connection.Id] = DateTimeOffset.UtcNow.Add(RetryWideAfter);
+                log.LogInformation(
+                    "Connection {Label} has no consent for the optional scopes; using the required set.",
+                    connection.Label);
+            }
+        }
+
         try
         {
             var result = await app.AcquireTokenSilent(_o.Scopes, account).ExecuteAsync(ct);
@@ -248,4 +327,17 @@ public sealed class MicrosoftConnectionService(
             return null;
         }
     }
+
+    /// <summary>
+    /// How long to stop asking for the optional scopes after a refusal. Long enough that a
+    /// busy mailbox is not paying for a round trip it will not get, short enough that an
+    /// admin granting consent over lunch takes effect without a restart.
+    /// </summary>
+    private static readonly TimeSpan RetryWideAfter = TimeSpan.FromMinutes(30);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTimeOffset>
+        _wideRefusedUntil = new();
+
+    private static bool WideIsWorthTrying(Guid connectionId) =>
+        !_wideRefusedUntil.TryGetValue(connectionId, out var until) || DateTimeOffset.UtcNow >= until;
 }

@@ -7,9 +7,13 @@ namespace OutPost2.Infrastructure.Connections;
 
 public interface IPendingConnectionStore
 {
+    /// <param name="expectedHomeAccountId">
+    /// Set only when re-authorising an existing connection; the account the flow must come
+    /// back as. See <see cref="PendingConnection.ExpectedHomeAccountId"/>.
+    /// </param>
     Task<PendingConnection> CreateAsync(
         Guid userId, ProviderKind provider, string label, string? tenantHint,
-        CancellationToken ct = default);
+        string? expectedHomeAccountId = null, CancellationToken ct = default);
 
     /// <summary>
     /// Redeems a state value. Returns null unless it exists, is unexpired, is unused, and
@@ -33,7 +37,7 @@ public sealed class PendingConnectionStore(OutPostDbContext db) : IPendingConnec
 
     public async Task<PendingConnection> CreateAsync(
         Guid userId, ProviderKind provider, string label, string? tenantHint,
-        CancellationToken ct = default)
+        string? expectedHomeAccountId = null, CancellationToken ct = default)
     {
         var pending = new PendingConnection
         {
@@ -46,6 +50,7 @@ public sealed class PendingConnectionStore(OutPostDbContext db) : IPendingConnec
             Provider = provider,
             Label = label,
             TenantHint = tenantHint,
+            ExpectedHomeAccountId = expectedHomeAccountId,
             ExpiresAt = DateTimeOffset.UtcNow.Add(Lifetime),
         };
 
