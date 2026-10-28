@@ -94,3 +94,15 @@ a private LAN Vault (never exposed publicly) needs no code change.
 - Cloudflare 1010-blocks unfamiliar user agents, including the default .NET and
   `Python-urllib` ones. Set a UA on anything scripted.
 - YouTrack custom-field values are objects, arrays, strings *or* numbers. Parse defensively.
+
+## License
+
+[Elastic License 2.0](LICENSE). Use it, change it, run it — including commercially and
+inside a business. The one thing you may not do is provide it to third parties as a
+hosted or managed service, which is the only form in which this could be taken and sold.
+
+Not an OSI-approved open-source licence, and deliberately so: the whole shape of this
+project is a hosted service, so "source available, not resaleable" is the honest
+description rather than a label it does not earn.
+
+Security issues: see [SECURITY.md](SECURITY.md) — please report privately.
