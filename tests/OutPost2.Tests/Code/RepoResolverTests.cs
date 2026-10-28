@@ -327,6 +327,31 @@ public sealed class RepoResolverTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Reading_names_back_does_not_depend_on_the_repository_cache()
+    {
+        Skip.IfNot(_ready, _why);
+
+        _db.RepoAliases.Add(new RepoAlias
+        {
+            UserId = _conn.UserId,
+            ConnectionId = _conn.Id,
+            Alias = "Rosetta",
+            FullName = "BrewingCoder/RosettaCore",
+        });
+        await _db.SaveChangesAsync();
+
+        var (r, gh) = Build("BrewingCoder/outpost");
+
+        // Names are configuration, not a view of GitHub. Reading them must not require
+        // a listing call, or a connection whose token is refusing requests would report
+        // that nothing is configured when something is.
+        var names = await r.AliasesAsync(_conn);
+
+        Assert.Single(names);
+        Assert.Equal(0, gh.Calls);
+    }
+
+    [SkippableFact]
     public async Task Aliases_do_not_leak_between_connections()
     {
         Skip.IfNot(_ready, _why);

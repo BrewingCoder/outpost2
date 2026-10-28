@@ -294,6 +294,38 @@ public sealed class CodeTools(
         catch (GitHubException ex) { return ex.Message; }
     }
 
+    [McpServerTool(Name = "github_repo_names")]
+    [Description("List the repository names (aliases) configured for a GitHub connection — the nicknames that resolve to a specific owner/name. Call this when asked what names, aliases or shortcuts are set up.")]
+    public async Task<string> RepoNames(
+        [Description(ConnectionDoc)] string? connection = null,
+        CancellationToken ct = default)
+    {
+        var (c, msg) = await ResolveAsync(connection, Capabilities.CodeRead, false, ct);
+        if (c is null) return msg!;
+
+        // A tool of its own, even though github_repositories already reports these. A
+        // model asked about aliases looks for a tool named for them, and finding none
+        // concludes the product has no such concept — which is what happened, while the
+        // feature was configured, stored and in use by the resolver on every lookup.
+        var names = await repos.AliasesAsync(c, ct);
+
+        if (names.Count == 0)
+        {
+            return $"No repository names are configured for {c.Label}. " +
+                   "None are needed unless a name is ambiguous or is a nickname GitHub does not know — " +
+                   "a bare repository name resolves against the repositories this connection can see. " +
+                   "They are added on the Repository names page.";
+        }
+
+        var sb = new StringBuilder(
+            $"{names.Count} repository name{(names.Count == 1 ? "" : "s")} configured for {c.Label}:\n");
+        foreach (var a in names) sb.AppendLine($"- \"{a.Alias}\" means {a.FullName}");
+
+        sb.AppendLine();
+        sb.AppendLine("These override the search, so saying one of these names always reaches that repository.");
+        return sb.ToString().TrimEnd();
+    }
+
     [McpServerTool(Name = "github_commits")]
     [Description("Recent commits on a repository, newest first. Answers 'what were the last few commits on X'.")]
     public async Task<string> Commits(
