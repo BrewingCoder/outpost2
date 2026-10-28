@@ -89,10 +89,11 @@ public sealed class IssueTools(
     }
 
     [McpServerTool(Name = "get_issue")]
-    [Description("Read one issue in full, including its comments. Issue keys like OP2-14 are speakable, so they are used directly.")]
+    [Description("Read one issue in full: reporter, dates, every field, links, comments and the full description. Issue keys like OP2-14 are speakable, so they are used directly. A very long description is returned in parts; if the reply says it continues, call again with descriptionFrom before answering any question about its later sections.")]
     public async Task<string> GetIssue(
         [Description("Issue key, e.g. OP2-14.")] string issueKey,
         [Description("Connection name, e.g. 'lab'. Required unless a default tracker has been set.")] string? connection = null,
+        [Description("Character offset to resume the description from. Only needed when a previous call said the description continues; pass the offset it gave you.")] int descriptionFrom = 0,
         CancellationToken ct = default)
     {
         var (c, msg) = await ResolveAsync(connection, Capabilities.IssuesRead, false, ct);
@@ -101,7 +102,7 @@ public sealed class IssueTools(
         var i = await youtrack.GetIssueAsync(c, issueKey, ct);
         if (i is null) return $"No issue {issueKey} on {c.Label}.";
 
-        return Describe(i);
+        return Describe(i, descriptionFrom);
     }
 
     /// <summary>
@@ -109,7 +110,46 @@ public sealed class IssueTools(
     /// this is where the bug was: the service fetched the reporter and this step dropped
     /// it, which is not reachable by any test that stops at the service.
     /// </summary>
-    public static string Describe(IssueDetail i)
+    // Large enough that almost nothing is cut at all. The old 4,000 was small enough to
+    // land inside an ordinary acceptance-criteria list, which is exactly the content
+    // someone asks about out loud and exactly the content that must not arrive partial.
+    private const int DescriptionWindow = 12_000;
+    private const int CommentWindow = 2_000;
+
+    /// <summary>
+    /// Takes at most <paramref name="max"/> characters from <paramref name="from"/>, ending
+    /// on a boundary, and reports how many characters are left after it.
+    /// <para>
+    /// Cutting at a fixed offset lands mid-word and mid-sentence, and a half-sentence reads
+    /// as a whole one. Backing up to a paragraph, line or sentence end costs a few hundred
+    /// characters and makes the break visible as a break.
+    /// </para>
+    /// </summary>
+    private static (string Text, int Remaining) Window(string s, int from, int max)
+    {
+        from = Math.Clamp(from, 0, s.Length);
+        var rest = s[from..];
+        if (rest.Length <= max) return (rest, 0);
+
+        var slice = rest[..max];
+
+        // Only accept a boundary in the last quarter of the window; further back than that
+        // and honouring it would throw away more text than the tidier break is worth.
+        var floor = max * 3 / 4;
+        var cut = -1;
+        foreach (var sep in (string[])["\n\n", "\n", ". ", "? ", "! ", " "])
+        {
+            var at = slice.LastIndexOf(sep, StringComparison.Ordinal);
+            if (at <= floor) continue;
+            cut = at + (sep == " " ? 0 : sep.Length);
+            break;
+        }
+
+        var text = (cut > 0 ? slice[..cut] : slice).TrimEnd();
+        return (text, rest.Length - (cut > 0 ? cut : max));
+    }
+
+    public static string Describe(IssueDetail i, int descriptionFrom = 0)
     {
         // Everything the tracker holds, not a chosen subset. The service was already
         // fetching the reporter while this method printed only state and assignee, so
@@ -160,7 +200,20 @@ public sealed class IssueTools(
         if (!string.IsNullOrWhiteSpace(i.Description))
         {
             sb.AppendLine();
-            sb.AppendLine(i.Description.Length > 4000 ? i.Description[..4000] + "…" : i.Description);
+
+            var (text, remaining) = Window(i.Description, descriptionFrom, DescriptionWindow);
+            sb.AppendLine(text);
+
+            if (remaining > 0)
+            {
+                // A bare ellipsis says something was cut and nothing about what, how much,
+                // or how to get it. An acceptance-criteria list ending in "…" reads as the
+                // end of the list, and the criterion that was dropped is invisible.
+                sb.AppendLine();
+                sb.AppendLine($"[{remaining:N0} more characters of this description. " +
+                              $"Call get_issue again with descriptionFrom: {descriptionFrom + text.Length} " +
+                              "to read on — do that before summarising acceptance criteria.]");
+            }
         }
 
         if (i.CommentCount > 0)
@@ -176,8 +229,9 @@ public sealed class IssueTools(
 
             foreach (var cm in shown)
             {
-                var text = cm.Text.Length > 1500 ? cm.Text[..1500] + "…" : cm.Text;
-                sb.AppendLine($"- {cm.Author}{(cm.At is { } at ? $" ({When(at)})" : "")}: {text}");
+                var (text, remaining) = Window(cm.Text, 0, CommentWindow);
+                var more = remaining > 0 ? $" [+{remaining:N0} more characters]" : "";
+                sb.AppendLine($"- {cm.Author}{(cm.At is { } at ? $" ({When(at)})" : "")}: {text}{more}");
             }
         }
 
