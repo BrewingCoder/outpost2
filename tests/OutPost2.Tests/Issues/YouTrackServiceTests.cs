@@ -123,6 +123,30 @@ public sealed class YouTrackServiceTests : IAsyncLifetime
         Assert.False(string.IsNullOrWhiteSpace(issue.State));
     }
 
+    /// <summary>
+    /// The whole path, against a real tracker: fetch, then render the text the
+    /// conversation actually receives. The unit tests cover the rendering and this
+    /// covers the field list, which is the half that can only fail in flight — ask
+    /// YouTrack for a field name it does not recognise and it answers 400 for the
+    /// entire issue rather than omitting that one field.
+    /// </summary>
+    [SkippableFact]
+    public async Task The_rendered_issue_carries_its_reporter_and_fields()
+    {
+        Skip.IfNot(_ready, _why);
+
+        var issue = await _svc.GetIssueAsync(_conn, "OP2-15");
+        Assert.NotNull(issue);
+
+        Assert.False(string.IsNullOrWhiteSpace(issue!.Reporter), "no reporter came back");
+        Assert.NotNull(issue.Created);
+
+        var text = OutPost2.Web.Mcp.IssueTools.Describe(issue);
+        Assert.Contains(issue.Reporter!, text);
+        Assert.Contains("OP2-15", text);
+        Assert.Contains("/issue/OP2-15", text);
+    }
+
     [SkippableFact]
     public async Task Unknown_issue_returns_null_rather_than_throwing()
     {
@@ -164,7 +188,16 @@ public sealed class YouTrackServiceTests : IAsyncLifetime
             var reloaded = await _svc.GetIssueAsync(_conn, key);
             Assert.NotNull(reloaded);
             Assert.Equal("Obsolete", reloaded!.State);
-            Assert.Contains(reloaded.Comments, c => c.Contains("Automated test comment"));
+            Assert.Contains(reloaded.Comments, c => c.Text.Contains("Automated test comment"));
+
+            // The metadata a triage question actually asks for. These were being fetched
+            // and then dropped by the tool that formats them, so the service returning
+            // them is not on its own enough — but it is the half that belongs here.
+            Assert.NotNull(reloaded.Reporter);
+            Assert.NotNull(reloaded.Created);
+            Assert.Contains(reloaded.Fields, f => f.Key.Equals("State", StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(reloaded.Comments.Count, reloaded.CommentCount);
+            Assert.EndsWith($"/issue/{key}", reloaded.Url);
         }
         finally
         {

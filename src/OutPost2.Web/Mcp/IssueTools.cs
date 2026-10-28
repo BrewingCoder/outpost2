@@ -101,24 +101,101 @@ public sealed class IssueTools(
         var i = await youtrack.GetIssueAsync(c, issueKey, ct);
         if (i is null) return $"No issue {issueKey} on {c.Label}.";
 
+        return Describe(i);
+    }
+
+    /// <summary>
+    /// Renders an issue for the conversation. Static and separate from the tool because
+    /// this is where the bug was: the service fetched the reporter and this step dropped
+    /// it, which is not reachable by any test that stops at the service.
+    /// </summary>
+    public static string Describe(IssueDetail i)
+    {
+        // Everything the tracker holds, not a chosen subset. The service was already
+        // fetching the reporter while this method printed only state and assignee, so
+        // "who filed this?" came back as a limitation of the tracker rather than as the
+        // answer sitting in the response. Anything omitted here is unanswerable out loud
+        // and gives no sign that it was omitted.
         var sb = new StringBuilder();
         sb.AppendLine($"{i.Key}: {i.Summary}");
+
         sb.AppendLine($"Project {i.Project}" +
                       (i.State is null ? "" : $", state {i.State}") +
                       (i.Assignee is null ? "" : $", assigned to {i.Assignee}"));
+
+        if (i.Reporter is not null)
+        {
+            sb.AppendLine($"Reported by {i.Reporter}" +
+                          (i.Created is { } cr ? $" on {When(cr)}" : ""));
+        }
+        else if (i.Created is { } created)
+        {
+            sb.AppendLine($"Created {When(created)}");
+        }
+
+        if (i.Updated is { } up) sb.AppendLine($"Last updated {When(up)}");
+        if (i.Resolved is { } res) sb.AppendLine($"Resolved {When(res)}");
+
+        // State and Assignee are already on the line above; repeating them wastes the
+        // listener's attention on a re-read of what was just said.
+        var rest = i.Fields
+            .Where(f => !f.Key.Equals("State", StringComparison.OrdinalIgnoreCase)
+                     && !f.Key.Equals("Assignee", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (rest.Count > 0)
+        {
+            sb.AppendLine();
+            foreach (var f in rest) sb.AppendLine($"{f.Key}: {f.Value}");
+        }
+
+        if (i.Tags.Count > 0) sb.AppendLine($"Tags: {string.Join(", ", i.Tags)}");
+
+        if (i.Links.Count > 0)
+        {
+            sb.AppendLine();
+            foreach (var l in i.Links) sb.AppendLine($"{l.Key}: {l.Value}");
+        }
+
         if (!string.IsNullOrWhiteSpace(i.Description))
         {
             sb.AppendLine();
             sb.AppendLine(i.Description.Length > 4000 ? i.Description[..4000] + "…" : i.Description);
         }
-        if (i.Comments.Count > 0)
+
+        if (i.CommentCount > 0)
         {
             sb.AppendLine();
-            sb.AppendLine($"{i.Comments.Count} comment{(i.Comments.Count == 1 ? "" : "s")}:");
-            foreach (var cm in i.Comments.TakeLast(5)) sb.AppendLine($"- {cm}");
+
+            // Say how many there are before showing a subset, so a truncated view is never
+            // mistaken for the whole conversation.
+            var shown = i.Comments.TakeLast(10).ToList();
+            sb.AppendLine(shown.Count < i.CommentCount
+                ? $"{i.CommentCount} comments, most recent {shown.Count}:"
+                : $"{i.CommentCount} comment{(i.CommentCount == 1 ? "" : "s")}:");
+
+            foreach (var cm in shown)
+            {
+                var text = cm.Text.Length > 1500 ? cm.Text[..1500] + "…" : cm.Text;
+                sb.AppendLine($"- {cm.Author}{(cm.At is { } at ? $" ({When(at)})" : "")}: {text}");
+            }
         }
+
+        if (i.Url is not null)
+        {
+            sb.AppendLine();
+            sb.AppendLine(i.Url);
+        }
+
         return sb.ToString().TrimEnd();
     }
+
+    /// <summary>
+    /// Absolute, and in the reader's own zone. "3 days ago" is friendlier to say and
+    /// useless to act on — a date that has to be converted before it can be quoted in a
+    /// standup or compared against a release is worse than one that reads a little stiffly.
+    /// </summary>
+    private static string When(DateTimeOffset t) => t.ToLocalTime().ToString("d MMM yyyy, HH:mm");
 
     [McpServerTool(Name = "create_issue")]
     [Description("Create an issue. Always name the connection and project.")]

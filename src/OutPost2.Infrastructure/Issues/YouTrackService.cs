@@ -9,9 +9,29 @@ using OutPost2.Infrastructure.Connections;
 namespace OutPost2.Infrastructure.Issues;
 
 public sealed record IssueSummary(string Id, string Key, string Summary, string? State, string? Assignee, string Project);
+
+public sealed record IssueComment(string Author, string Text, DateTimeOffset? At);
+
+/// <summary>
+/// Everything the tracker holds about one issue, not a chosen subset.
+/// <para>
+/// State and Assignee stay named because they are what gets asked for out loud, but they
+/// are two custom fields among however many a project defines — Priority, Type, Due date,
+/// Fix version, Subsystem, whatever an admin added last week. Picking a fixed list here
+/// means every project-specific field is invisible to the conversation, and nothing about
+/// it being missing is visible either: the answer just quietly lacks it.
+/// </para>
+/// </summary>
 public sealed record IssueDetail(
     string Id, string Key, string Summary, string? Description, string? State,
-    string? Assignee, string Project, string? Reporter, IReadOnlyList<string> Comments);
+    string? Assignee, string Project, string? Reporter,
+    DateTimeOffset? Created, DateTimeOffset? Updated, DateTimeOffset? Resolved,
+    IReadOnlyList<string> Tags,
+    IReadOnlyList<KeyValuePair<string, string>> Fields,
+    IReadOnlyList<KeyValuePair<string, string>> Links,
+    int CommentCount,
+    IReadOnlyList<IssueComment> Comments,
+    string? Url);
 public sealed record ProjectSummary(string Id, string ShortName, string Name);
 
 public interface IYouTrackService
@@ -77,9 +97,15 @@ public sealed class YouTrackService(
     {
         using var http = await ClientAsync(c, ct);
 
+        // Asking for the fields by name is not optional — YouTrack returns only id and
+        // $type otherwise. Anything absent from this list cannot be reported, and that
+        // absence is indistinguishable downstream from the issue not having the value.
         var url = $"api/issues/{Uri.EscapeDataString(issueKey)}" +
                   "?fields=id,idReadable,summary,description,project(shortName),reporter(login,fullName)," +
-                  "customFields(name,value(name,login,fullName)),comments(text,author(login,fullName))";
+                  "created,updated,resolved,tags(name)," +
+                  "customFields(name,value(name,login,fullName,presentation,text,minutes))," +
+                  "links(direction,linkType(name,sourceToTarget,targetToSource),issues(idReadable))," +
+                  "comments(text,created,author(login,fullName))";
 
         using var resp = await http.GetAsync(url, ct);
         if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
@@ -89,10 +115,37 @@ public sealed class YouTrackService(
         if (i is null) return null;
 
         var s = Map(i);
-        return new IssueDetail(s.Id, s.Key, s.Summary, i.Description, s.State, s.Assignee, s.Project,
+
+        // Every field with a value, State and Assignee included — they are named separately
+        // above for the common question, not removed from the record.
+        var fields = (i.CustomFields ?? [])
+            .Select(f => new { f.Name, Value = f.Describe() })
+            .Where(f => !string.IsNullOrWhiteSpace(f.Name) && !string.IsNullOrWhiteSpace(f.Value))
+            .Select(f => new KeyValuePair<string, string>(f.Name!, f.Value!))
+            .ToList();
+
+        var comments = (i.Comments ?? [])
+            .Select(x => new IssueComment(x.Author?.Describe() ?? "?", x.Text ?? "", Moment(x.Created)))
+            .ToList();
+
+        return new IssueDetail(
+            s.Id, s.Key, s.Summary, i.Description, s.State, s.Assignee, s.Project,
             i.Reporter?.Describe(),
-            (i.Comments ?? []).Select(x => $"{x.Author?.Describe() ?? "?"}: {x.Text}").ToList());
+            Moment(i.Created), Moment(i.Updated), Moment(i.Resolved),
+            (i.Tags ?? []).Select(t => t.Name).Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n!).ToList(),
+            fields,
+            (i.Links ?? []).SelectMany(l => l.Describe()).ToList(),
+            comments.Count,
+            comments,
+            $"{c.Instance.TrimEnd('/')}/issue/{s.Key}");
     }
+
+    /// <summary>
+    /// YouTrack timestamps are epoch milliseconds, and 0 means unset rather than 1970 —
+    /// an unresolved issue reporting a resolution date is worse than reporting none.
+    /// </summary>
+    private static DateTimeOffset? Moment(long? ms) =>
+        ms is null or <= 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(ms.Value);
 
     public async Task<string> CreateIssueAsync(
         Connection c, string projectShortName, string summary, string? description, CancellationToken ct = default)
@@ -196,8 +249,50 @@ public sealed class YouTrackService(
         [property: JsonPropertyName("description")] string? Description,
         [property: JsonPropertyName("project")] YtProject? Project,
         [property: JsonPropertyName("reporter")] YtUser? Reporter,
+        [property: JsonPropertyName("created")] long? Created,
+        [property: JsonPropertyName("updated")] long? Updated,
+        [property: JsonPropertyName("resolved")] long? Resolved,
+        [property: JsonPropertyName("tags")] List<YtTag>? Tags,
         [property: JsonPropertyName("customFields")] List<YtField>? CustomFields,
+        [property: JsonPropertyName("links")] List<YtLink>? Links,
         [property: JsonPropertyName("comments")] List<YtComment>? Comments);
+
+    private sealed record YtTag([property: JsonPropertyName("name")] string? Name);
+
+    /// <summary>
+    /// A link's wording depends on which end you are standing at: the same relationship is
+    /// "parent for" from one side and "subtask of" from the other. YouTrack gives both
+    /// phrasings plus a direction, so the right one can be chosen rather than guessed.
+    /// </summary>
+    private sealed record YtLink(
+        [property: JsonPropertyName("direction")] string? Direction,
+        [property: JsonPropertyName("linkType")] YtLinkType? LinkType,
+        [property: JsonPropertyName("issues")] List<YtIssueRef>? Issues)
+    {
+        public IEnumerable<KeyValuePair<string, string>> Describe()
+        {
+            var keys = (Issues ?? []).Select(x => x.IdReadable).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
+            if (keys.Count == 0) yield break;
+
+            // BOTH means the relation is symmetric (duplicates, relates), so either
+            // phrasing is correct; OUTWARD reads source-to-target, INWARD the reverse.
+            var label = Direction?.ToUpperInvariant() switch
+            {
+                "INWARD" => LinkType?.TargetToSource,
+                _ => LinkType?.SourceToTarget,
+            } ?? LinkType?.Name;
+
+            if (string.IsNullOrWhiteSpace(label)) yield break;
+            yield return new KeyValuePair<string, string>(label!, string.Join(", ", keys!));
+        }
+    }
+
+    private sealed record YtLinkType(
+        [property: JsonPropertyName("name")] string? Name,
+        [property: JsonPropertyName("sourceToTarget")] string? SourceToTarget,
+        [property: JsonPropertyName("targetToSource")] string? TargetToSource);
+
+    private sealed record YtIssueRef([property: JsonPropertyName("idReadable")] string? IdReadable);
 
     /// <summary>
     /// A custom field's value is NOT consistently an object. YouTrack returns an object for
@@ -227,6 +322,15 @@ public sealed class YouTrackService(
             foreach (var key in (string[])["fullName", "name", "login", "presentation", "text"])
                 if (o.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String)
                     return v.GetString();
+
+            // A period field (Estimation, Spent time) carries no string at all, only a
+            // minute count. Without this it describes as null and reads as unset.
+            if (o.TryGetProperty("minutes", out var m) && m.ValueKind == JsonValueKind.Number)
+            {
+                var mins = m.GetInt32();
+                return mins >= 60 ? $"{mins / 60}h {mins % 60}m" : $"{mins}m";
+            }
+
             return null;
         }
 
@@ -247,5 +351,6 @@ public sealed class YouTrackService(
 
     private sealed record YtComment(
         [property: JsonPropertyName("text")] string? Text,
+        [property: JsonPropertyName("created")] long? Created,
         [property: JsonPropertyName("author")] YtUser? Author);
 }
