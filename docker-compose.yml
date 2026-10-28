@@ -138,6 +138,12 @@ services:
       OutPost2__GitHub__ClientId: ${GITHUB_CLIENT_ID:-}
       OutPost2__GitHub__ClientSecret: ${GITHUB_CLIENT_SECRET:-}
       OutPost2__GitHub__AllowedUserIds: ${GITHUB_ALLOWED_USER_IDS:-}
+      # Friction reports (OP2-74) land in OutPost2's own tracker under the server's
+      # own token, whoever reports them — the coworkers this is for have no connection
+      # to that project and should not be given one.
+      OutPost2__Feedback__Url: ${FEEDBACK_YOUTRACK_URL:-}
+      OutPost2__Feedback__Token: ${FEEDBACK_YOUTRACK_TOKEN:-}
+      OutPost2__Feedback__Project: ${FEEDBACK_YOUTRACK_PROJECT:-OP2}
     ports:
       - "5080:8080"
 

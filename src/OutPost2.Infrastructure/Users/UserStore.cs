@@ -13,6 +13,9 @@ public interface IUserStore
     Task<User> UpsertOnSignInAsync(long gitHubUserId, string login, string? avatarUrl, CancellationToken ct = default);
 
     Task<User?> FindByGitHubIdAsync(long gitHubUserId, CancellationToken ct = default);
+
+    /// <summary>Looks up a user by our own id — what a request's principal actually carries.</summary>
+    Task<User?> FindAsync(Guid id, CancellationToken ct = default);
 }
 
 public sealed class UserStore(OutPostDbContext db) : IUserStore
@@ -43,4 +46,7 @@ public sealed class UserStore(OutPostDbContext db) : IUserStore
 
     public Task<User?> FindByGitHubIdAsync(long gitHubUserId, CancellationToken ct = default) =>
         db.Users.FirstOrDefaultAsync(u => u.GitHubUserId == gitHubUserId, ct);
+
+    public Task<User?> FindAsync(Guid id, CancellationToken ct = default) =>
+        db.Users.FirstOrDefaultAsync(u => u.Id == id, ct);
 }

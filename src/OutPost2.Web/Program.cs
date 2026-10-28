@@ -39,6 +39,8 @@ builder.Services.Configure<OutPost2.Infrastructure.Security.VaultOptions>(
 builder.Services.Configure<EntraOptions>(builder.Configuration.GetSection(EntraOptions.SectionName));
 builder.Services.Configure<OutPost2.Infrastructure.Files.StorageOptions>(
     builder.Configuration.GetSection(OutPost2.Infrastructure.Files.StorageOptions.SectionName));
+builder.Services.Configure<OutPost2.Infrastructure.Feedback.FeedbackOptions>(
+    builder.Configuration.GetSection(OutPost2.Infrastructure.Feedback.FeedbackOptions.SectionName));
 
 builder.Services.AddSingleton<OutPost2.Infrastructure.Security.IVaultTransitClient,
                               OutPost2.Infrastructure.Security.VaultTransitClient>();
@@ -73,6 +75,11 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Code.IGitHubService,
 builder.Services.AddScoped<IYouTrackConnectionService, YouTrackConnectionService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Issues.IYouTrackService,
                            OutPost2.Infrastructure.Issues.YouTrackService>();
+
+// Friction reports go to OutPost2's OWN tracker under the server's credential, not to a
+// user connection — the coworkers this exists for have no connection to it (OP2-74).
+builder.Services.AddScoped<OutPost2.Infrastructure.Feedback.IFrictionService,
+                           OutPost2.Infrastructure.Feedback.FrictionService>();
 
 // The app sits behind the Cloudflare tunnel, which terminates TLS and forwards plain HTTP
 // to the container. Without honouring X-Forwarded-Proto, ASP.NET Core believes the request
