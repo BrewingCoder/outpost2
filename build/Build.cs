@@ -234,14 +234,21 @@ class Build : SecurityPipelineBuild
                 .SetWorkingDirectory(RootDirectory));
         });
 
-    // The working tree is a separate question from history: a secret that is staged, or
-    // merely sitting in an ignored file someone is about to `git add -f`, is invisible to
-    // the history scan until it is too late to be cheap.
+    // The working tree is a separate question from history: a secret written into a file
+    // that is about to be committed has not reached git yet, so the history scan is blind
+    // to it until the commit exists.
+    //
+    // Needs an exclusion list to be usable at all. Unfiltered it reports the real Entra
+    // and GitHub secrets in .env — correct local state, gitignored, not going anywhere —
+    // and fails every run. A gate that is always red teaches people to skip it, which is
+    // worse than not having one. See build/trufflehog-exclude.txt for what is skipped
+    // and why; none of it applies to the history scan.
     Target SecretScanWorkingTree => _ => _
-        .Description("Scan the working tree for live credentials.")
+        .Description("Scan the working tree for live credentials, excluding local config.")
         .OnlyWhen(() => TruffleHogTool is not null, "trufflehog not on PATH — secret scan skipped.")
         .Executes(() => TruffleHog.Filesystem(TruffleHogTool!, s => s
             .AddPath(RootDirectory)
+            .SetExcludePathsFile(RootDirectory / "build" / "trufflehog-exclude.txt")
             .SetOnlyVerified(true)
             .SetJson(true)
             .SetFail(true)

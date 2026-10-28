@@ -1,0 +1,25 @@
+# Paths excluded from the WORKING-TREE secret scan (tamp SecretScanWorkingTree).
+# One regex per line, matched against the full path. Windows paths arrive with
+# backslashes, so each separator class accepts both.
+#
+# This list deliberately does NOT apply to the history scan (tamp SecretScan). That one
+# reads git objects through the git source and has no reason to skip anything.
+
+# .env holds this deployment's real Entra and GitHub client secrets, by design. It is
+# gitignored, so a credential here is correct local state rather than a leak — and left
+# unexcluded it fails the build every single run, which trains people to ignore the gate.
+# A secret only matters here if it can reach a commit, and if .env ever stops being
+# ignored the history scan catches it the moment it is committed.
+(^|[/\\])\.env$
+
+# Git's own object store. The history scan covers this properly, through git rather than
+# by reading loose objects off disk, and packed objects are invisible to a file walk
+# anyway — so including it gives duplicate hits and a false sense of coverage.
+(^|[/\\])\.git[/\\]
+
+# Build output and tool scratch. Compiled assemblies embed every string literal in the
+# source, so scanning them re-reports each source finding against a path nobody can fix,
+# and it is most of the 41 MB this scan was walking.
+(^|[/\\])(bin|obj)[/\\]
+(^|[/\\])artifacts[/\\]
+(^|[/\\])\.tamp[/\\]
