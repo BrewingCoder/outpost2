@@ -363,6 +363,103 @@ public sealed class CodeTools(
         catch (GitHubException ex) { return ex.Message; }
     }
 
+    private const string RefDoc =
+        "Branch, tag or commit. Defaults to the repository's default branch.";
+
+    /// <summary>
+    /// How much of a file comes back. Generous, because the question behind reading a
+    /// file is usually about the whole of it, and a caller that gets half a config file
+    /// draws conclusions from the half it was given. Still a cap: a 2 MB generated file
+    /// would otherwise spend the turn and answer nothing.
+    /// </summary>
+    private const int MaxFileChars = 60_000;
+
+    [McpServerTool(Name = "github_files", ReadOnly = true, OpenWorld = true)]
+    [Description("List what is at a path in a repository — the files and folders. Omit 'path' for the top level. Answers 'does this repo have a docs folder', 'what is in src', 'is there a README'.")]
+    public async Task<string> Files(
+        [Description(RepoDoc)] string repo,
+        [Description("Folder path within the repository, such as 'docs' or 'src/api'. Omit for the top level.")] string? path = null,
+        [Description(RefDoc)] string? branch = null,
+        [Description(ConnectionDoc)] string? connection = null,
+        CancellationToken ct = default)
+    {
+        var (c, msg) = await ResolveAsync(connection, Capabilities.CodeRead, false, ct);
+        if (c is null) return msg!;
+
+        var (full, repoMsg) = await RepoAsync(c, repo, ct);
+        if (repoMsg is not null) return repoMsg;
+
+        try
+        {
+            var entries = await github.ListPathAsync(c, full!, path, branch, ct);
+
+            // Null means the path is a file. Saying so and naming the tool that reads it
+            // beats an empty listing, which reads as "the folder is empty" — a wrong
+            // answer that looks like a right one.
+            if (entries is null)
+                return $"{path} is a file, not a folder. Use github_file to read it.";
+
+            var where = string.IsNullOrWhiteSpace(path) ? full : $"{path} in {full}";
+            if (branch is not null) where += $" on {branch}";
+
+            if (entries.Count == 0) return $"{where} is empty.";
+
+            var sb = new StringBuilder(
+                $"{entries.Count} entr{(entries.Count == 1 ? "y" : "ies")} in {where}:\n");
+
+            foreach (var e in entries)
+            {
+                // Scrubbed: a path in somebody else's repository is text we did not write,
+                // and a zero-width character in a filename is a cheap way to make two
+                // entries look like one (OP2-125).
+                sb.AppendLine(e.IsDirectory
+                    ? $"- {Untrusted.Scrub(e.Name)}/"
+                    : $"- {Untrusted.Scrub(e.Name)} ({ByteSize.Describe(e.Size)})");
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+        catch (GitHubException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "github_file", ReadOnly = true, OpenWorld = true)]
+    [Description("Read a file's contents from a repository. Answers 'what does the README say', 'show me the workflow file'. Use github_files first if the exact path is not known.")]
+    public async Task<string> File(
+        [Description(RepoDoc)] string repo,
+        [Description("Path to the file within the repository, such as 'README.md' or 'src/Program.cs'.")] string path,
+        [Description(RefDoc)] string? branch = null,
+        [Description(ConnectionDoc)] string? connection = null,
+        CancellationToken ct = default)
+    {
+        var (c, msg) = await ResolveAsync(connection, Capabilities.CodeRead, false, ct);
+        if (c is null) return msg!;
+
+        if (string.IsNullOrWhiteSpace(path))
+            return "Which file? Pass a path such as 'README.md', or call github_files to see what is there.";
+
+        var (full, repoMsg) = await RepoAsync(c, repo, ct);
+        if (repoMsg is not null) return repoMsg;
+
+        try
+        {
+            var file = await github.ReadFileAsync(c, full!, path, branch, MaxFileChars, ct);
+
+            if (file is null)
+                return $"{path} is a folder, not a file. Use github_files to list it.";
+
+            var header = $"{file.Path} in {full}"
+                         + (branch is null ? "" : $" on {branch}")
+                         + $" — {ByteSize.Describe(file.Size)}"
+                         + (file.Truncated ? $", showing the first {MaxFileChars:N0} characters" : "");
+
+            // Fenced, not pasted. A file in a repository is written by whoever opened the
+            // pull request, and it arrives at the model through the same channel our own
+            // instructions use — the exact case OP2-125 built the fence for.
+            return header + "\n" + Untrusted.Fence("file contents", file.Text);
+        }
+        catch (GitHubException ex) { return ex.Message; }
+    }
+
     private static string Render(IReadOnlyList<CodeItem> items, string what, string label, string? repo)
     {
         var where = repo is null ? label : $"{repo} on {label}";

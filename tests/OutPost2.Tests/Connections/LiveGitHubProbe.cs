@@ -175,6 +175,58 @@ public sealed class LiveGitHubProbe(ITestOutputHelper output) : IDisposable
 
         Assert.All(commits, x => Assert.True(x.Sha.Length >= 7));
         Assert.All(commits, x => Assert.DoesNotContain('\n', x.Subject));
+
+        // ── reading the tree and a file (OP2-168) ───────────────────────────
+        // The question that produced the ticket was "does this repository contain that
+        // documentation file", which nothing could answer. Worth a live pass because
+        // the directory/file distinction rests entirely on the JSON arriving as an
+        // array or an object, and only GitHub decides that.
+        var root = await code.ListPathAsync(c, sample.FullName, null, null);
+        Assert.NotNull(root);
+
+        output.WriteLine("");
+        output.WriteLine($"  top level of {sample.FullName} ({root!.Count} entries):");
+        foreach (var e in root.Take(14))
+            output.WriteLine($"    {(e.IsDirectory ? "dir " : "file")}  {e.Name}");
+
+        Assert.All(root, e => Assert.False(string.IsNullOrWhiteSpace(e.Name)));
+
+        var folder = root.FirstOrDefault(e => e.IsDirectory);
+        if (folder is not null)
+        {
+            // Listing a subdirectory, which is where a mis-escaped path would show up.
+            var inside = await code.ListPathAsync(c, sample.FullName, folder.Path, null);
+            Assert.NotNull(inside);
+            output.WriteLine($"  {folder.Name}/ holds {inside!.Count} entr(y/ies)");
+        }
+
+        var textFile = root.FirstOrDefault(e =>
+            !e.IsDirectory && e.Size is > 0 and < 200_000
+            && (e.Name.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+                || e.Name.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)
+                || e.Name.Equals("LICENSE", StringComparison.OrdinalIgnoreCase)));
+
+        if (textFile is not null)
+        {
+            var file = await code.ReadFileAsync(c, sample.FullName, textFile.Path, null, 400);
+            Assert.NotNull(file);
+            Assert.NotEmpty(file!.Text);
+
+            output.WriteLine("");
+            output.WriteLine($"  read {textFile.Name} ({ByteSize.Describe(file.Size)}" +
+                             $"{(file.Truncated ? ", truncated" : "")}):");
+            output.WriteLine("    " + Trim(file.Text.Split('\n')[0], 70));
+
+            // Asking to LIST a file must say so rather than report an empty folder, and
+            // that branch only exists because GitHub answers both from one endpoint.
+            Assert.Null(await code.ListPathAsync(c, sample.FullName, textFile.Path, null));
+        }
+
+        // A path that is not there has to be a sentence, not an exception nobody reads.
+        var missing = await Assert.ThrowsAsync<GitHubException>(
+            () => code.ReadFileAsync(c, sample.FullName, "no/such/file.txt", null, 100));
+        output.WriteLine("");
+        output.WriteLine($"  missing path: {missing.Message}");
     }
 
     private static string Trim(string s, int n) => s.Length <= n ? s : s[..n] + "…";

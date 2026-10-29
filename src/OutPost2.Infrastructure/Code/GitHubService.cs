@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
@@ -77,6 +78,43 @@ public sealed record CommitRef
     }
 }
 
+/// <summary>A size a person would say out loud, rather than a count of bytes.</summary>
+public static class ByteSize
+{
+    public static string Describe(long n) => n switch
+    {
+        < 1024 => $"{n} bytes",
+        < 1024 * 1024 => $"{n / 1024.0:0.#} KB",
+        _ => $"{n / (1024.0 * 1024):0.#} MB",
+    };
+}
+
+/// <summary>One entry in a repository directory listing.</summary>
+public sealed record RepoEntry
+{
+    public required string Name { get; init; }
+    public required string Path { get; init; }
+    public required bool IsDirectory { get; init; }
+
+    /// <summary>Bytes. Zero for a directory, and for a submodule or symlink.</summary>
+    public long Size { get; init; }
+}
+
+/// <summary>A file's text, with whatever had to be left out said plainly.</summary>
+public sealed record RepoFile
+{
+    public required string Path { get; init; }
+    public required string Text { get; init; }
+
+    /// <summary>The whole file's size, not the size of <see cref="Text"/>.</summary>
+    public required long Size { get; init; }
+
+    /// <summary>True when <see cref="Text"/> stops short of the end of the file.</summary>
+    public required bool Truncated { get; init; }
+
+    public string? Url { get; init; }
+}
+
 public enum PullRequestScope { AwaitingMyReview, Mine, Mentioning, AllOpen }
 
 public enum IssueScope { AssignedToMe, Mentioning, Unassigned, AllOpen }
@@ -97,6 +135,20 @@ public interface IGitHubService
         Connection c, IssueScope scope, string? repo, int count, CancellationToken ct = default);
 
     Task<CodeItem?> GetAsync(Connection c, string repo, int number, CancellationToken ct = default);
+
+    /// <summary>
+    /// What is at this path in the repository (OP2-168). Null path means the root.
+    /// </summary>
+    /// <returns>The directory's entries, or null when the path is a file.</returns>
+    Task<IReadOnlyList<RepoEntry>?> ListPathAsync(
+        Connection c, string repo, string? path, string? gitRef, CancellationToken ct = default);
+
+    /// <summary>
+    /// A file's text (OP2-168), truncated at <paramref name="maxChars"/>.
+    /// </summary>
+    /// <returns>The file, or null when the path is a directory rather than a file.</returns>
+    Task<RepoFile?> ReadFileAsync(
+        Connection c, string repo, string path, string? gitRef, int maxChars, CancellationToken ct = default);
 }
 
 public sealed class GitHubService(
@@ -324,6 +376,149 @@ public sealed class GitHubService(
 
         var item = await resp.Content.ReadFromJsonAsync<SearchItem>(ct);
         return item is null ? null : Map(item with { RepositoryUrl = $"x/repos/{repo}" });
+    }
+
+    /// <summary>
+    /// The contents endpoint, which answers for both a directory and a file: an ARRAY for
+    /// a directory, an OBJECT for a file. That is the only thing distinguishing them, so
+    /// both of the public methods below go through here and branch on the JSON shape
+    /// rather than guessing from the path (a file with no extension and a directory look
+    /// identical from outside).
+    /// </summary>
+    private async Task<JsonElement> ContentsAsync(
+        HttpClient http, string repo, string? path, string? gitRef, CancellationToken ct)
+    {
+        var url = $"repos/{repo.Trim('/')}/contents/{EncodePath(path)}"
+                  + (string.IsNullOrWhiteSpace(gitRef) ? "" : $"?ref={Uri.EscapeDataString(gitRef.Trim())}");
+
+        using var resp = await http.GetAsync(url, ct);
+
+        if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Three different things produce a 404 here and the user can only act on one
+            // of them, so all three are named rather than picking the likeliest.
+            var where = string.IsNullOrWhiteSpace(path) ? repo : $"{path} in {repo}";
+            throw new GitHubException(
+                $"Nothing at {where}"
+                + (string.IsNullOrWhiteSpace(gitRef) ? "" : $" on {gitRef}")
+                + ". Either the path is wrong, the branch is wrong, or this token cannot see the repository.");
+        }
+
+        if ((int)resp.StatusCode == 403)
+            throw new GitHubException(
+                $"GitHub refused to serve {path} in {repo}. Files over 100 MB cannot be read through the API.");
+
+        if (!resp.IsSuccessStatusCode)
+            throw new GitHubException($"GitHub returned HTTP {(int)resp.StatusCode} for contents of {repo}.");
+
+        using var doc = await JsonDocument.ParseAsync(
+            await resp.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+
+        return doc.RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Percent-encodes each segment but keeps the separators. Encoding the whole path
+    /// would turn every slash into %2F and ask GitHub for one file with slashes in its
+    /// name; encoding nothing would let a space or a hash break the URL.
+    /// </summary>
+    private static string EncodePath(string? path) =>
+        string.IsNullOrWhiteSpace(path)
+            ? ""
+            : string.Join('/', path.Trim().Trim('/').Split('/')
+                .Where(seg => seg.Length > 0)
+                .Select(Uri.EscapeDataString));
+
+    public async Task<IReadOnlyList<RepoEntry>?> ListPathAsync(
+        Connection c, string repo, string? path, string? gitRef, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(c, ct);
+        var root = await ContentsAsync(http, repo, path, gitRef, ct);
+
+        if (root.ValueKind != JsonValueKind.Array) return null;
+
+        var entries = root.EnumerateArray().Select(e => new RepoEntry
+        {
+            Name = e.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+            Path = e.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "",
+            IsDirectory = e.TryGetProperty("type", out var t) && t.GetString() == "dir",
+            Size = e.TryGetProperty("size", out var s) && s.TryGetInt64(out var bytes) ? bytes : 0,
+        });
+
+        // Directories first, then names. The same order every file browser uses, and the
+        // one that makes "is there a docs folder" answerable from the first line.
+        return entries
+            .OrderByDescending(e => e.IsDirectory)
+            .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public async Task<RepoFile?> ReadFileAsync(
+        Connection c, string repo, string path, string? gitRef, int maxChars, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(c, ct);
+        var root = await ContentsAsync(http, repo, path, gitRef, ct);
+
+        if (root.ValueKind == JsonValueKind.Array) return null;
+
+        var type = root.TryGetProperty("type", out var t) ? t.GetString() : null;
+
+        if (type is "submodule")
+            throw new GitHubException($"{path} is a submodule — its contents live in another repository.");
+
+        if (type is "symlink")
+            throw new GitHubException($"{path} is a symlink, not a file.");
+
+        var size = root.TryGetProperty("size", out var s) && s.TryGetInt64(out var bytes) ? bytes : 0;
+        var url = root.TryGetProperty("html_url", out var h) ? h.GetString() : null;
+
+        // base64 for anything up to 1 MB; above that GitHub sends the metadata with an
+        // empty content field and expects a second call for the bytes themselves.
+        var encoded = root.TryGetProperty("content", out var ce) ? ce.GetString() : null;
+
+        var raw = string.IsNullOrWhiteSpace(encoded)
+            ? await RawAsync(http, repo, path, gitRef, ct)
+            // GitHub wraps the base64 at 60 columns. Stripping the breaks is cheaper
+            // than finding out which runtimes tolerate them.
+            : Convert.FromBase64String(encoded.Replace("\n", "").Replace("\r", ""));
+
+        // A NUL byte in the first few kilobytes is the oldest binary test there is, and
+        // still the right one: returning a megabyte of mangled bytes as "the file" wastes
+        // the turn and tells the caller nothing it can act on.
+        if (raw.AsSpan(0, Math.Min(raw.Length, 8000)).IndexOf((byte)0) >= 0)
+            throw new GitHubException(
+                $"{path} is a binary file ({ByteSize.Describe(size)}), so there is no text to read.");
+
+        var text = Encoding.UTF8.GetString(raw);
+        var truncated = text.Length > maxChars;
+
+        return new RepoFile
+        {
+            Path = path,
+            Text = truncated ? text[..maxChars] : text,
+            Size = size,
+            Truncated = truncated,
+            Url = url,
+        };
+    }
+
+    /// <summary>The raw bytes, for the files the JSON response declines to inline.</summary>
+    private static async Task<byte[]> RawAsync(
+        HttpClient http, string repo, string path, string? gitRef, CancellationToken ct)
+    {
+        var url = $"repos/{repo.Trim('/')}/contents/{EncodePath(path)}"
+                  + (string.IsNullOrWhiteSpace(gitRef) ? "" : $"?ref={Uri.EscapeDataString(gitRef.Trim())}");
+
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Accept.Clear();
+        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.raw"));
+
+        using var resp = await http.SendAsync(req, ct);
+
+        if (!resp.IsSuccessStatusCode)
+            throw new GitHubException($"GitHub returned HTTP {(int)resp.StatusCode} reading {path} in {repo}.");
+
+        return await resp.Content.ReadAsByteArrayAsync(ct);
     }
 
     private static string RepoClause(string? repo) =>

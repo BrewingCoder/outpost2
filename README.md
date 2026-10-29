@@ -32,7 +32,7 @@ organisation, and you may not run it as a service for other people. See
 
 ## What it does
 
-**48 tools across three providers**, all resolved through the same named-connection model.
+**50 tools across three providers**, all resolved through the same named-connection model.
 
 | Area | Tools |
 |---|---|
@@ -46,7 +46,7 @@ organisation, and you may not run it as a service for other people. See
 | People | `find_person` `list_contacts` `save_contact` `update_contact` |
 | Teams chats | `list_chats` `read_chat` `send_chat_message` |
 | Issues (YouTrack) | `create_issue` `get_issue` `update_issue` `search_issues` `comment_on_issue` `list_projects` `create_project` |
-| Code (GitHub) | `github_repositories` `github_repo_names` `github_issues` `github_pull_requests` `github_commits` `github_item` `github_triage` |
+| Code (GitHub) | `github_repositories` `github_repo_names` `github_issues` `github_pull_requests` `github_commits` `github_item` `github_triage` `github_files` `github_file` |
 | Files and jobs | `list_files` `check_queue` + a web approval queue |
 | Feedback | `report_friction` — the agent files its own bug reports mid-task |
 
@@ -161,9 +161,10 @@ official MCP C# SDK v2 · Tamp · Cloudflare tunnel
 
 ## Status
 
-In daily use. **361 tests, none skipped** — the integration suites run against real
-Postgres, real Garage, real Vault and a real YouTrack server, because the things worth
-proving here are the ones a fake cannot.
+In daily use. **493 tests** — the integration suites run against real Postgres, real
+Garage, real Vault and a real YouTrack server, because the things worth proving here are
+the ones a fake cannot. The three that skip are live Microsoft probes, which need a
+mailbox reconnected since the Teams scopes went in.
 
 | Area | State |
 |---|---|

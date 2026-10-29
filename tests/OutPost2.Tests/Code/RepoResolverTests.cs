@@ -50,6 +50,12 @@ public sealed class RepoResolverTests : IAsyncLifetime
             => throw new NotSupportedException();
         public Task<CodeItem?> GetAsync(Connection c, string repo, int number, CancellationToken ct = default)
             => throw new NotSupportedException();
+        public Task<IReadOnlyList<RepoEntry>?> ListPathAsync(
+            Connection c, string repo, string? path, string? gitRef, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task<RepoFile?> ReadFileAsync(
+            Connection c, string repo, string path, string? gitRef, int maxChars, CancellationToken ct = default)
+            => throw new NotSupportedException();
     }
 
     private static RepoRef Repo(string fullName)
