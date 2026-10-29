@@ -63,6 +63,17 @@ public static class Capabilities
     // Separate, because saving a contact changes the mailbox and looking one up does not.
     public const string ContactsWrite = "contacts.write";
 
+    // Teams CHATS, never channels. The split is forced by consent rather than chosen:
+    // every chat permission is user-consentable, and ChannelMessage.Read.All is the one
+    // Teams permission that needs an administrator — asking for it would drag the whole
+    // app behind admin consent. So there is no channel capability to name yet.
+    public const string ChatRead = "chat.read";
+
+    // Separate from chat.read for the same reason mail.send is separate from mail.read,
+    // and more sharply: a Teams message arrives on a colleague's phone, under the user's
+    // own name, with no outbox to catch it on the way.
+    public const string ChatSend = "chat.send";
+
     public const string IssuesRead = "issues.read";
     public const string IssuesWrite = "issues.write";
     public const string IssuesAdmin = "issues.admin";

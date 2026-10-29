@@ -11,6 +11,7 @@ public enum ItemKind
     Mail,
     Event,
     Contact,
+    Chat,
 }
 
 /// <summary>

@@ -43,6 +43,13 @@ public static class CapabilityCatalog
         [Capabilities.PeopleRead]    = new("Look people up and read your contacts", CapabilityRisk.None),
         [Capabilities.ContactsWrite] = new("Add and change your contacts", CapabilityRisk.Writes),
 
+        [Capabilities.ChatRead]      = new("Read your Teams chats", CapabilityRisk.None),
+
+        // ActsAsYou. A Teams message is the most immediate thing this product can do in
+        // somebody else's name — it lands on a phone, it is attributed to the user, and
+        // unlike mail there is no delay and nothing to recall it with.
+        [Capabilities.ChatSend]      = new("Send Teams messages as you", CapabilityRisk.ActsAsYou),
+
         [Capabilities.IssuesRead]  = new("Read issues", CapabilityRisk.None),
         [Capabilities.IssuesWrite] = new("Create and update issues", CapabilityRisk.Writes),
         [Capabilities.IssuesAdmin] = new("Administer projects", CapabilityRisk.High),

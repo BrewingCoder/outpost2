@@ -3,9 +3,10 @@ using OutPost2.Web.Mcp;
 namespace OutPost2.Tests.Calendar;
 
 /// <summary>
-/// Mail and calendar share one handle index (OP2-75), so that "the second one" always
-/// means the second of whatever was listed LAST rather than depending on which family of
-/// tool the model reaches for next. These pin the two consequences of that choice.
+/// Mail, calendar, contacts and Teams chats share one handle index (OP2-75, OP2-79), so
+/// that "the second one" always means the second of whatever was listed LAST rather than
+/// depending on which family of tool the model reaches for next. These pin the
+/// consequences of that choice.
 /// </summary>
 public class SharedHandleSpaceTests
 {
@@ -64,6 +65,26 @@ public class SharedHandleSpaceTests
         // And each still resolves to its own item, which is the thing the uniqueness is for.
         Assert.Equal("evt-2", index.Resolve(User, events[1].Ref)!.ItemId);
         Assert.Equal("msg-1", index.Resolve(User, mail[0].ItemId is null ? "" : mail[0].Ref)!.ItemId);
+    }
+
+    [Fact]
+    public void A_chat_handle_is_distinguishable_from_every_other_family()
+    {
+        // The cost of one shared index is that a handle can arrive at the wrong family of
+        // tool, so each tool checks the kind before acting. Four families now share the
+        // space, and sending a Teams message to something that turns out to be a calendar
+        // event is exactly the mistake the check exists to catch.
+        var index = new ItemIndex();
+
+        var chat = index.Remember(User, [("19:abc@unq.gbl.spaces", "work", "Darren Jones", "")], ItemKind.Chat);
+        var mail = index.Remember(User, [("msg-1", "work", "Invoice", "darren@example.com")]);
+
+        Assert.Equal(ItemKind.Chat, index.Resolve(User, chat[0].Ref)!.Kind);
+        Assert.Equal(ItemKind.Mail, index.Resolve(User, mail[0].Ref)!.Kind);
+
+        // And the chat's subject is its display name, so a tool refusing a misaimed
+        // handle can say WHICH chat it was rather than quoting a thread id.
+        Assert.Equal("Darren Jones", index.Resolve(User, chat[0].Ref)!.Subject);
     }
 
     [Fact]

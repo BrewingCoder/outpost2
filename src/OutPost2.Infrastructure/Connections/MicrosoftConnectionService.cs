@@ -89,6 +89,19 @@ public sealed class EntraOptions
     /// User.Read.All, which does require admin consent, so it is deliberately not asked
     /// for and the feature is not offered.
     /// </para>
+    /// <para>
+    /// Chat.Read and ChatMessage.Send are Teams chats (OP2-79). Both verified against the
+    /// v1.0 permissions tables: Chat.Read is least-privileged for BOTH listing chats and
+    /// reading their messages, and ChatMessage.Send is least-privileged for posting — the
+    /// combined channel-or-chat reference page lists ChannelMessage.Send against the chat
+    /// endpoint, which is a documentation artefact of the two APIs sharing a page.
+    /// </para>
+    /// <para>
+    /// Conspicuously absent: ChannelMessage.Read.All. It is the only Teams permission
+    /// requiring ADMIN consent, and consent is all-or-nothing — one admin-consent scope
+    /// here would mean an administrator had to approve mail and calendar too. Teams
+    /// channels are a deliberate omission with a price attached, not an oversight.
+    /// </para>
     /// </remarks>
     public string[] OptionalScopes { get; set; } =
     [
@@ -98,6 +111,8 @@ public sealed class EntraOptions
         "https://graph.microsoft.com/People.Read",
         "https://graph.microsoft.com/User.ReadBasic.All",
         "https://graph.microsoft.com/Contacts.ReadWrite",
+        "https://graph.microsoft.com/Chat.Read",
+        "https://graph.microsoft.com/ChatMessage.Send",
     ];
 
     /// <summary>What to ask the user to consent to: everything we need plus everything we would like.</summary>
@@ -295,6 +310,18 @@ public sealed class MicrosoftConnectionService(
 
             new() { Name = Capabilities.ContactsWrite,
                     Granted = granted.Contains("Contacts.ReadWrite"),
+                    Enabled = true },
+
+            // Chat.ReadWrite is a superset and some tenants grant it in place of the
+            // narrower scope, so both count. Chat.ReadBasic deliberately does NOT: it can
+            // list chats but cannot read a single message, and claiming chat.read on it
+            // turns a consent decision into a 403 met halfway through a conversation.
+            new() { Name = Capabilities.ChatRead,
+                    Granted = granted.Contains("Chat.Read") || granted.Contains("Chat.ReadWrite"),
+                    Enabled = true },
+
+            new() { Name = Capabilities.ChatSend,
+                    Granted = granted.Contains("ChatMessage.Send") || granted.Contains("Chat.ReadWrite"),
                     Enabled = true },
         };
 

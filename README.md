@@ -32,7 +32,7 @@ organisation, and you may not run it as a service for other people. See
 
 ## What it does
 
-**45 tools across three providers**, all resolved through the same named-connection model.
+**48 tools across three providers**, all resolved through the same named-connection model.
 
 | Area | Tools |
 |---|---|
@@ -44,6 +44,7 @@ organisation, and you may not run it as a service for other people. See
 | Calendar — write | `create_event` `update_event` `cancel_event` `respond_to_invite` |
 | Calendar — scheduling | `check_availability` `suggest_meeting_times` |
 | People | `find_person` `list_contacts` `save_contact` `update_contact` |
+| Teams chats | `list_chats` `read_chat` `send_chat_message` |
 | Issues (YouTrack) | `create_issue` `get_issue` `update_issue` `search_issues` `comment_on_issue` `list_projects` `create_project` |
 | Code (GitHub) | `github_repositories` `github_repo_names` `github_issues` `github_pull_requests` `github_commits` `github_item` `github_triage` |
 | Files and jobs | `list_files` `check_queue` + a web approval queue |
@@ -55,6 +56,12 @@ buffer in memory, so sending is a resumable job rather than a tool call that tim
 Calendar times are the mailbox's own, not the server's: the mailbox timezone is read from
 Graph and every reading and writing of a time goes through it, so "move it to two" means
 two o'clock where you are and still does either side of a clock change.
+
+Teams is **chats only, and that is a permissions decision rather than an unfinished
+one**. Every chat permission is user-consentable; reading a *channel* needs
+`ChannelMessage.Read.All`, the one Teams permission requiring admin consent. Consent is
+all or nothing, so adding it would mean an administrator had to approve mail and calendar
+too. Channels stay out until that trade is worth making.
 
 `find_person` is what makes "email Justin" work: it merges the people you actually
 correspond with, the company directory and your own address book, and says which of the
@@ -163,8 +170,10 @@ proving here are the ones a fake cannot.
 | YouTrack and GitHub providers | done |
 | OAuth 2.1 server so an MCP client can connect | done |
 | Voice mode reaching the connector | verified in the field |
-| Calendar, contacts, free/busy | next |
-| Teams, Gmail, Atlassian, Azure DevOps | planned |
+| Calendar, contacts, free/busy | done |
+| Teams chats: list, read, send | done |
+| Teams channels | deferred — needs admin consent, see above |
+| Gmail, Atlassian, Azure DevOps | planned |
 | Cluster deployment | not started |
 
 ## Gotchas found the hard way
