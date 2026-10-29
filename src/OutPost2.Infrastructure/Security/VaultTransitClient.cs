@@ -51,23 +51,18 @@ public sealed class VaultTransitClient : IVaultTransitClient, IDisposable
         _o = options.Value;
         _log = log;
 
-        var handler = new HttpClientHandler();
-        if (!string.IsNullOrWhiteSpace(_o.CaCertPath) && File.Exists(_o.CaCertPath))
-        {
-            // The lab Vault presents a private-CA certificate. Pin to that CA explicitly
-            // rather than disabling validation — an unvalidated TLS connection to the thing
-            // holding the master key would defeat the point of having one.
-            var ca = X509CertificateLoader.LoadCertificateFromFile(_o.CaCertPath);
-            handler.ServerCertificateCustomValidationCallback = (_, cert, chain, errors) =>
-            {
-                if (errors == System.Net.Security.SslPolicyErrors.None) return true;
-                if (cert is null || chain is null) return false;
-                chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-                chain.ChainPolicy.CustomTrustStore.Add(ca);
-                chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-                return chain.Build(cert);
-            };
-        }
+        // The lab Vault presents a private-CA certificate. Pinned to that CA explicitly
+        // rather than disabling validation — an unvalidated TLS connection to the thing
+        // holding the master key would defeat the point of having one.
+        //
+        // Shared with the GitHub Enterprise path since OP2-45, which also fixed a hole
+        // the hand-rolled version here had: it forgave a certificate issued for the
+        // WRONG HOSTNAME as readily as an untrusted chain, so any host holding any
+        // certificate from that CA could stand in for Vault.
+        var handler = PrivateCaTrust.Handler(
+            string.IsNullOrWhiteSpace(_o.CaCertPath)
+                ? []
+                : PrivateCaTrust.Load([_o.CaCertPath], log));
 
         _http = new HttpClient(handler) { BaseAddress = new Uri(_o.Address), Timeout = TimeSpan.FromSeconds(20) };
     }

@@ -144,6 +144,10 @@ services:
       OutPost2__Feedback__Url: ${FEEDBACK_YOUTRACK_URL:-}
       OutPost2__Feedback__Token: ${FEEDBACK_YOUTRACK_TOKEN:-}
       OutPost2__Feedback__Project: ${FEEDBACK_YOUTRACK_PROJECT:-OP2}
+      # A private CA for a self-hosted GitHub Enterprise or YouTrack (OP2-45). Blank is
+      # the normal case and changes nothing: an empty path is skipped and the platform's
+      # own validation is left alone. Mount the PEM in if this is set.
+      OutPost2__TrustedRoots__CaCertPaths__0: ${OP2_TRUSTED_CA_PATH:-}
     ports:
       - "5080:8080"
 

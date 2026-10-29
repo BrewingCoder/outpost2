@@ -44,6 +44,8 @@ builder.Services.Configure<OutPost2.Infrastructure.Files.StorageOptions>(
     builder.Configuration.GetSection(OutPost2.Infrastructure.Files.StorageOptions.SectionName));
 builder.Services.Configure<OutPost2.Infrastructure.Feedback.FeedbackOptions>(
     builder.Configuration.GetSection(OutPost2.Infrastructure.Feedback.FeedbackOptions.SectionName));
+builder.Services.Configure<OutPost2.Infrastructure.Security.TrustedRootsOptions>(
+    builder.Configuration.GetSection(OutPost2.Infrastructure.Security.TrustedRootsOptions.SectionName));
 
 builder.Services.AddSingleton<OutPost2.Infrastructure.Security.IVaultTransitClient,
                               OutPost2.Infrastructure.Security.VaultTransitClient>();
@@ -98,8 +100,31 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Mail.ILargeAttachmentSender,
 builder.Services.AddScoped<OutPost2.Infrastructure.Jobs.IJobService, OutPost2.Infrastructure.Jobs.JobService>();
 builder.Services.AddHostedService<JobRunner>();
 builder.Services.AddHostedService<HousekeepingService>();
-builder.Services.AddHttpClient("youtrack").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
-builder.Services.AddHttpClient("github").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
+// Both of these reach SELF-HOSTED servers, which is where a private CA turns up: a
+// GitHub Enterprise instance or an on-premises YouTrack behind an internal authority
+// fails TLS against the OS trust store alone (OP2-45). Configure
+// OutPost2__TrustedRoots__CaCertPaths__0 and it is trusted; configure nothing and the
+// platform's own validation is left exactly as it was.
+//
+// Graph is deliberately NOT given this treatment. It is Microsoft's public endpoint, and
+// a deployment that needed a private root to reach it would be describing an
+// interception proxy rather than a self-hosted server.
+builder.Services.AddHttpClient("youtrack")
+    .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30))
+    .ConfigurePrimaryHttpMessageHandler(TrustedRootHandler);
+builder.Services.AddHttpClient("github")
+    .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30))
+    .ConfigurePrimaryHttpMessageHandler(TrustedRootHandler);
+
+static HttpMessageHandler TrustedRootHandler(IServiceProvider sp)
+{
+    var paths = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<OutPost2.Infrastructure.Security.TrustedRootsOptions>>()
+        .Value.CaCertPaths;
+
+    return OutPost2.Infrastructure.Security.PrivateCaTrust.Handler(
+        OutPost2.Infrastructure.Security.PrivateCaTrust.Load(paths,
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger("OutPost2.TrustedRoots")));
+}
 builder.Services.AddScoped<OutPost2.Infrastructure.Auth.IPreviewLinkService,
                            OutPost2.Infrastructure.Auth.PreviewLinkService>();
 builder.Services.AddScoped<IGitHubConnectionService, GitHubConnectionService>();

@@ -91,6 +91,14 @@ docker compose up -d
 | garage (S3) | http://localhost:3900 | buckets `op2-staging`, `op2-attachments` |
 | vault (dev) | http://localhost:8200 | throwaway; mirrors `op2-transit/op2-kek` |
 
+A **self-hosted** GitHub Enterprise or YouTrack behind a private certificate authority
+needs that CA named: mount the PEM into the container and set
+`OutPost2__TrustedRoots__CaCertPaths__0`. Nothing else changes — with no roots
+configured, the platform's own certificate validation is used untouched, and a root that
+is configured buys forgiveness for an untrusted *chain* only. A certificate issued for
+the wrong hostname is still refused, which inside an organisation running its own CA is
+the attack that matters.
+
 Vault's address, auth method and mount path are all configuration, so pointing at a real
 LAN Vault instead of the dev container needs no code change. In production it authenticates
 with a Kubernetes service-account JWT and stores no secret at all.
@@ -161,7 +169,7 @@ official MCP C# SDK v2 · Tamp · Cloudflare tunnel
 
 ## Status
 
-In daily use. **512 tests** — the integration suites run against real Postgres, real
+In daily use. **522 tests** — the integration suites run against real Postgres, real
 Garage, real Vault and a real YouTrack server, because the things worth proving here are
 the ones a fake cannot. The three that skip are live Microsoft probes, which need a
 mailbox reconnected since the Teams scopes went in.
