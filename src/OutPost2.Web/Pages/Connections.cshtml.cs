@@ -29,12 +29,17 @@ public class ConnectionsModel(IConnectionStore store) : PageModel
     public string? Replaced { get; private set; }
     public string? Reconnected { get; private set; }
 
-    public async Task OnGetAsync(string? error, string? added, string? replaced, string? reconnected)
+    /// <summary>The connection just parked because the tenant needs an admin to approve it.</summary>
+    public string? NeedsAdmin { get; private set; }
+
+    public async Task OnGetAsync(string? error, string? added, string? replaced, string? reconnected,
+        string? needsAdmin)
     {
         Error = error;
         Added = added;
         Replaced = replaced;
         Reconnected = reconnected;
+        NeedsAdmin = needsAdmin;
 
         var all = await store.ListAsync(User.UserId());
 
@@ -89,9 +94,17 @@ public class ConnectionsModel(IConnectionStore store) : PageModel
             $"{c.Provider} rejected this credential. It has to be set up again.",
             c.AuthKind == AuthKind.OAuth2 ? "Reconnect" : "Replace token"),
 
-        ConnectionState.NeedsAdminApproval => (
-            "Waiting on the tenant admin to approve Outpost. Nothing you can do from here until they act.",
-            "Reconnect"),
+        // Two sentences, because approval changes whose move it is. Before it, the user
+        // can only forward the link (shown separately, below this alert). After it, the
+        // ball is back with them — and telling someone to keep waiting on an admin who
+        // has already acted is how a connection sits parked forever (OP2-100).
+        ConnectionState.NeedsAdminApproval => c.AdminConsentGrantedAt is { } approved
+            ? ($"Your administrator approved Outpost on {approved:d MMM yyyy}. Sign in once to finish — " +
+               "the name, default and switches below are kept.",
+               "Finish connecting")
+            : ("Waiting on an administrator in your organisation to approve Outpost. " +
+               "Send them the link below; this entry stays here until they act.",
+               "Try again"),
 
         _ => null,
     };

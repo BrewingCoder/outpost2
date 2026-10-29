@@ -154,6 +154,59 @@ public class ConnectionResolverTests
     }
 
     [Fact]
+    public void A_connection_waiting_on_an_admin_hands_over_the_link_to_forward()
+    {
+        // The whole point of OP2-100: a user who cannot make their admin act must come
+        // away from the refusal holding something they can send. Saying "ask your admin"
+        // and stopping is the behaviour this replaces.
+        var c = Conn("work", ConnectionState.NeedsAdminApproval);
+        c.AdminConsentUrl = "https://login.microsoftonline.com/contoso.com/v2.0/adminconsent?client_id=x";
+
+        var r = ConnectionResolver.Resolve([c], Read, "work", isWrite: false);
+
+        Assert.Equal(ResolutionKind.Unavailable, r.Kind);
+        Assert.Contains(c.AdminConsentUrl, r.SpokenSummary);
+
+        // On its own line, so a voice client can speak the sentence and skip the URL.
+        Assert.Contains('\n', r.SpokenSummary);
+    }
+
+    [Fact]
+    public void Once_the_admin_has_approved_the_user_is_not_told_to_keep_waiting()
+    {
+        // The failure this guards against is a connection parked forever: the admin acted
+        // days ago, and we are still telling the user the ball is in the admin's court.
+        var c = Conn("work", ConnectionState.NeedsAdminApproval);
+        c.AdminConsentUrl = "https://login.microsoftonline.com/contoso.com/v2.0/adminconsent?client_id=x";
+        c.AdminConsentGrantedAt = DateTimeOffset.UtcNow.AddDays(-2);
+
+        var r = ConnectionResolver.Resolve([c], Read, "work", isWrite: false);
+
+        Assert.Equal(ResolutionKind.Unavailable, r.Kind);
+        Assert.Contains("approved", r.SpokenSummary);
+        Assert.Contains("sign in", r.SpokenSummary);
+
+        // And the link is spent — offering it again sends the admin round a second time.
+        Assert.DoesNotContain("adminconsent", r.SpokenSummary);
+    }
+
+    [Fact]
+    public void A_parked_connection_is_still_found_by_name()
+    {
+        // A parked connection declares every capability with none granted. If it declared
+        // none at all it would fall out of BOTH the capable and the unusable lists, and
+        // "check work email" would answer "no connection called work" for a connection
+        // the user can see on the settings page.
+        var parked = Conn("work", ConnectionState.NeedsAdminApproval,
+            caps: [(Read, false, true), (Send, false, true)]);
+
+        var r = ConnectionResolver.Resolve([parked], Read, "work", isWrite: false);
+
+        Assert.Equal(ResolutionKind.Unavailable, r.Kind);
+        Assert.NotEqual(ResolutionKind.UnknownLabel, r.Kind);
+    }
+
+    [Fact]
     public void Granted_but_disabled_capability_is_not_usable()
     {
         // "Off" must mean off. Granted-and-disabled is a legitimate state and the

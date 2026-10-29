@@ -36,6 +36,24 @@ public sealed class EntraOptions
     public string RedirectUri { get; set; } = "";
 
     /// <summary>
+    /// Where Entra sends an administrator after they approve (or refuse) tenant-wide
+    /// consent. Blank means "the same place as the sign-in callback", which is the
+    /// default on purpose: Entra string-matches redirect URIs, so a separate path would
+    /// have to be added to the app registration by hand before admin consent worked at
+    /// all — a silent AADSTS50011 for anybody who deployed without reading the notes.
+    /// <para>
+    /// The two responses are told apart by Entra's own <c>admin_consent=True</c>
+    /// parameter, which it sets on BOTH the success and the error redirect, and which
+    /// never appears on a sign-in callback.
+    /// </para>
+    /// </summary>
+    public string AdminConsentRedirectUri { get; set; } = "";
+
+    /// <summary>The admin-consent redirect, falling back to the sign-in one.</summary>
+    public string EffectiveAdminConsentRedirectUri =>
+        string.IsNullOrWhiteSpace(AdminConsentRedirectUri) ? RedirectUri : AdminConsentRedirectUri;
+
+    /// <summary>
     /// Delegated only, and deliberately minimal (D2: email first). Capabilities beyond mail
     /// arrive later through incremental consent, not by over-asking now — an app that
     /// requests calendar access while reading no calendars is how an admin is taught to say no.
@@ -127,6 +145,34 @@ public interface IMicrosoftConnectionService : OutPost2.Infrastructure.Mail.IMic
 
     /// <summary>Exchanges the authorization code and persists the connection.</summary>
     Task<Connection> CompleteAsync(PendingConnection pending, string code, CancellationToken ct = default);
+
+    /// <summary>
+    /// The link a blocked user forwards to their tenant administrator (OP2-100).
+    /// </summary>
+    /// <param name="tenant">
+    /// Tenant id, verified domain, or <see cref="Connection.UnknownTenant"/>. Never
+    /// <c>common</c>: Microsoft documents that a personal account cannot give admin
+    /// consent outside a tenant context, so <c>common</c> is the one value that is
+    /// explicitly wrong here even though it works everywhere else.
+    /// </param>
+    /// <param name="state">
+    /// Echoed back on the callback. This is how the approval finds its way to the right
+    /// connection, since the administrator arrives in their own browser, possibly days
+    /// later, and is not signed in to OutPost2 at all.
+    /// </param>
+    Uri BuildAdminConsentUrl(string tenant, string state);
+
+    /// <summary>
+    /// Every capability a Microsoft connection can have, with none of them granted — what
+    /// a connection parked for admin approval declares (OP2-100).
+    /// <para>
+    /// From the same list that a real sign-in populates, so the two cannot drift. A
+    /// parked connection that forgot to declare, say, the calendar would answer
+    /// "what's on my diary" with "no connection called work" rather than "waiting on
+    /// your admin", which is the one answer that is actively misleading.
+    /// </para>
+    /// </summary>
+    IReadOnlyList<Capability> DeclaredCapabilities { get; }
 
     // GetAccessTokenAsync is NOT redeclared here. It used to be, which hid the base
     // interface's identical member and produced CS0108 (OP2-147) — and on the token path
@@ -238,49 +284,20 @@ public sealed class MicrosoftConnectionService(
         return await builder.ExecuteAsync(ct);
     }
 
-    public async Task<Connection> CompleteAsync(PendingConnection pending, string code, CancellationToken ct = default)
+    /// <summary>
+    /// What a Microsoft connection can do, given the scopes Entra actually granted.
+    /// <para>
+    /// Extracted so a connection parked for admin approval can declare the same
+    /// capabilities with NOTHING granted (OP2-100). That is not bookkeeping: the resolver
+    /// only offers an explanation for a connection that DECLARES the capability, so a
+    /// parked mailbox with an empty list would answer "check work email" with "no
+    /// connection called work" — a lie that sends the user hunting for something they can
+    /// see on the page in front of them.
+    /// </para>
+    /// </summary>
+    private static List<Capability> CapabilitiesFor(HashSet<string> granted)
     {
-        var (app, _) = await BuildAppAsync(null, ct);
-
-        var result = await app.AcquireTokenByAuthorizationCode(_o.ConsentScopes, code)
-            .WithPkceCodeVerifier(pending.CodeVerifier)
-            .ExecuteAsync(ct);
-
-        var account = result.Account
-            ?? throw new InvalidOperationException("Microsoft returned no account for the authorization code.");
-
-        // Before anything is written. A reconnect reuses the existing label, and labels
-        // are uniquely indexed per user, so the wrong account here would not update the
-        // connection — it would try to insert a second one under a taken name and die on
-        // the constraint, after the user had already consented.
-        if (pending.ExpectedHomeAccountId is { } expected
-            && !string.Equals(expected, account.HomeAccountId?.Identifier, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException(
-                $"That signed in as {account.Username}, which is a different account from the one " +
-                $"'{pending.Label}' is connected to. Reconnect it and pick the original account, " +
-                "or add it as a new connection under its own name.");
-        }
-
-        var tenantId = result.TenantId ?? account.HomeAccountId?.TenantId ?? "common";
-
-        // Pull the freshly-populated cache out through a no-op access, since the serializer
-        // is only reachable from the callback. GetAccountAsync by identifier rather than
-        // the obsolete GetAccountsAsync() (OP2-147): it fires the same cache callbacks,
-        // and we already know exactly which account we just redeemed for.
-        byte[]? blob = null;
-        app.UserTokenCache.SetAfterAccess(args => blob = args.TokenCache.SerializeMsalV3());
-        await app.GetAccountAsync(account.HomeAccountId?.Identifier);
-
-        var cacheBlob = Convert.ToBase64String(
-            blob ?? throw new InvalidOperationException("MSAL token cache was empty after code redemption."));
-
-        // What Entra actually granted may be narrower than what we asked for, so record the
-        // response rather than our request. Claiming a capability we were refused turns a
-        // clear consent problem into a confusing runtime failure later.
-        var granted = (result.Scopes ?? []).Select(s => s.Split('/').Last()).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var capabilities = new List<Capability>
+        return new List<Capability>
         {
             new() { Name = Capabilities.MailRead,
                     Granted = granted.Contains("Mail.ReadWrite") || granted.Contains("Mail.Read"),
@@ -334,6 +351,85 @@ public sealed class MicrosoftConnectionService(
                     Granted = granted.Contains("ChatMessage.Send") || granted.Contains("Chat.ReadWrite"),
                     Enabled = true },
         };
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<Capability> DeclaredCapabilities =>
+        CapabilitiesFor(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+    /// <inheritdoc />
+    public Uri BuildAdminConsentUrl(string tenant, string state)
+    {
+        // The v2.0 endpoint with an explicit `scope`, NOT the bare /adminconsent that the
+        // ticket asked for. The difference matters for this app specifically: the v1-style
+        // endpoint consents to whatever is listed under the app registration's required
+        // permissions, and OutPost2 asks for everything dynamically at authorize time, so
+        // that list is not where the truth lives. An admin who approved it would approve
+        // a set that has nothing to do with what the user was refused.
+        //
+        // Asking for ConsentScopes — required plus optional — rather than just the
+        // required set, because the whole point of a trip to the administrator is to come
+        // back with as much as the tenant will give. Being sent back for a second approval
+        // because the calendar was left off the first one is the worst outcome here.
+        var query = new Dictionary<string, string>
+        {
+            ["client_id"] = _o.ClientId,
+            ["scope"] = string.Join(' ', _o.ConsentScopes),
+            ["redirect_uri"] = _o.EffectiveAdminConsentRedirectUri,
+            ["state"] = state,
+        };
+
+        var builder = new UriBuilder($"https://login.microsoftonline.com/{Uri.EscapeDataString(tenant)}/v2.0/adminconsent")
+        {
+            Query = string.Join('&', query.Select(kv => $"{kv.Key}={Uri.EscapeDataString(kv.Value)}")),
+        };
+
+        return builder.Uri;
+    }
+
+    public async Task<Connection> CompleteAsync(PendingConnection pending, string code, CancellationToken ct = default)
+    {
+        var (app, _) = await BuildAppAsync(null, ct);
+
+        var result = await app.AcquireTokenByAuthorizationCode(_o.ConsentScopes, code)
+            .WithPkceCodeVerifier(pending.CodeVerifier)
+            .ExecuteAsync(ct);
+
+        var account = result.Account
+            ?? throw new InvalidOperationException("Microsoft returned no account for the authorization code.");
+
+        // Before anything is written. A reconnect reuses the existing label, and labels
+        // are uniquely indexed per user, so the wrong account here would not update the
+        // connection — it would try to insert a second one under a taken name and die on
+        // the constraint, after the user had already consented.
+        if (pending.ExpectedHomeAccountId is { } expected
+            && !string.Equals(expected, account.HomeAccountId?.Identifier, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"That signed in as {account.Username}, which is a different account from the one " +
+                $"'{pending.Label}' is connected to. Reconnect it and pick the original account, " +
+                "or add it as a new connection under its own name.");
+        }
+
+        var tenantId = result.TenantId ?? account.HomeAccountId?.TenantId ?? "common";
+
+        // Pull the freshly-populated cache out through a no-op access, since the serializer
+        // is only reachable from the callback. GetAccountAsync by identifier rather than
+        // the obsolete GetAccountsAsync() (OP2-147): it fires the same cache callbacks,
+        // and we already know exactly which account we just redeemed for.
+        byte[]? blob = null;
+        app.UserTokenCache.SetAfterAccess(args => blob = args.TokenCache.SerializeMsalV3());
+        await app.GetAccountAsync(account.HomeAccountId?.Identifier);
+
+        var cacheBlob = Convert.ToBase64String(
+            blob ?? throw new InvalidOperationException("MSAL token cache was empty after code redemption."));
+
+        // What Entra actually granted may be narrower than what we asked for, so record the
+        // response rather than our request. Claiming a capability we were refused turns a
+        // clear consent problem into a confusing runtime failure later.
+        var granted = (result.Scopes ?? []).Select(s => s.Split('/').Last()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var capabilities = CapabilitiesFor(granted);
 
         // Unreachable via /organizations, but a silently-wrong mailbox is bad enough to
         // be worth a second check that does not depend on the IdP behaving.

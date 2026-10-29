@@ -301,4 +301,128 @@ public sealed class ConnectionStoreTests : IAsyncLifetime
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => _store.RenameAsync(_alice, home.Id, "WORK"));
     }
+
+    // ── waiting on an administrator (OP2-100) ────────────────────────────────
+
+    private Task<Connection> Park(Guid user, string label, string instance = Connection.UnknownTenant) =>
+        _store.ParkForAdminApprovalAsync(user, ProviderKind.Microsoft, instance, label,
+            [new Capability { Name = Capabilities.MailRead, Granted = false, Enabled = true }],
+            id => $"https://login.microsoftonline.com/{instance}/v2.0/adminconsent?state={id}");
+
+    [SkippableFact]
+    public async Task A_parked_connection_carries_a_link_naming_its_own_id()
+    {
+        Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
+
+        var parked = await Park(_alice, "work");
+
+        Assert.Equal(ConnectionState.NeedsAdminApproval, parked.State);
+        Assert.Null(parked.AdminConsentGrantedAt);
+
+        // The id in the link is the `state` Entra echoes back, and it is how an
+        // administrator arriving days later in a browser with no session of their own
+        // reaches the right connection. A link naming a different id reaches nothing.
+        Assert.Contains($"state={parked.Id}", parked.AdminConsentUrl);
+    }
+
+    [SkippableFact]
+    public async Task Retrying_a_blocked_sign_in_refreshes_the_link_rather_than_piling_up_rows()
+    {
+        Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
+
+        var first = await Park(_alice, "work");
+        var second = await Park(_alice, "work", "contoso.com");
+
+        Assert.Equal(first.Id, second.Id);
+        Assert.Equal("contoso.com", second.Instance);
+        Assert.Contains("contoso.com", second.AdminConsentUrl);
+
+        // Still one connection. The label is uniquely indexed, so a second insert would
+        // not merely duplicate — it would throw, in the user's face, on a retry.
+        Assert.Single(await _store.ListAsync(_alice));
+    }
+
+    [SkippableFact]
+    public async Task Approval_is_recorded_without_making_the_connection_usable()
+    {
+        Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
+
+        var parked = await Park(_alice, "work");
+        var approved = await _store.MarkAdminConsentGrantedAsync(parked.Id);
+
+        Assert.NotNull(approved);
+        Assert.NotNull(approved!.AdminConsentGrantedAt);
+
+        // Tenant-wide consent grants the PERMISSION; it does not mint a delegated token.
+        // Flipping this to Active here would make every tool believe it could reach a
+        // mailbox it holds no credential for.
+        Assert.Equal(ConnectionState.NeedsAdminApproval, approved.State);
+    }
+
+    [SkippableFact]
+    public async Task Approving_twice_does_not_move_the_clock()
+    {
+        Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
+
+        var parked = await Park(_alice, "work");
+        var first = await _store.MarkAdminConsentGrantedAsync(parked.Id);
+        var second = await _store.MarkAdminConsentGrantedAsync(parked.Id);
+
+        // An administrator refreshing the page, or a mail client prefetching the link,
+        // must not be an error and must not look like a second approval.
+        Assert.Equal(first!.AdminConsentGrantedAt, second!.AdminConsentGrantedAt);
+    }
+
+    [SkippableFact]
+    public async Task Approving_an_unknown_id_reports_nothing_rather_than_throwing()
+    {
+        Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
+
+        Assert.Null(await _store.MarkAdminConsentGrantedAsync(Guid.CreateVersion7()));
+
+        // A connection that is not waiting is not a candidate either, so a replayed link
+        // cannot disturb one that has since been completed.
+        var live = await Add(_alice, "work");
+        Assert.Null(await _store.MarkAdminConsentGrantedAsync(live.Id));
+    }
+
+    [SkippableFact]
+    public async Task Signing_in_after_approval_adopts_the_parked_row_instead_of_clashing_on_its_name()
+    {
+        Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
+
+        var parked = await Park(_alice, "work");
+        await _store.MarkAdminConsentGrantedAsync(parked.Id);
+
+        // The real sign-in brings a tenant id and an account that the parked row could
+        // not have known. Matched on identity it finds nothing; without adoption this
+        // inserts a second "work" and dies on the unique label index — a 500 at the
+        // exact moment the user finally got through.
+        var real = await Add(_alice, "work", instance: "aaaa-tenant", account: "oid.tid");
+
+        Assert.Equal(parked.Id, real.Id);
+        Assert.Equal(ConnectionState.Active, real.State);
+        Assert.Equal("aaaa-tenant", real.Instance);
+        Assert.Equal("oid.tid", real.HomeAccountId);
+
+        // The link and the approval are spent; leaving them would keep offering the user
+        // a link to forward for a mailbox that already works.
+        Assert.Null(real.AdminConsentUrl);
+        Assert.Null(real.AdminConsentGrantedAt);
+
+        Assert.Single(await _store.ListAsync(_alice));
+    }
+
+    [SkippableFact]
+    public async Task Adoption_does_not_reach_across_users()
+    {
+        Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
+
+        var alices = await Park(_alice, "work");
+        var bobs = await Add(_bob, "work", instance: "aaaa-tenant", account: "oid.tid");
+
+        Assert.NotEqual(alices.Id, bobs.Id);
+        Assert.Equal(ConnectionState.NeedsAdminApproval,
+            (await _store.GetAsync(_alice, alices.Id))!.State);
+    }
 }

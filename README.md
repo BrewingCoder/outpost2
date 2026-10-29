@@ -73,6 +73,12 @@ You need Docker, and a **multi-tenant Entra app registration** with delegated pe
 only — never application permissions, which would grant access to every mailbox in a
 tenant. That app registration is the one genuinely fiddly step; everything else is compose.
 
+One redirect URI is enough. Tenant admin approval comes back to the same
+`/signin-microsoft` callback, told apart by Entra's own `admin_consent` parameter, so there
+is nothing extra to register. Set `OutPost2__Entra__AdminConsentRedirectUri` only if you
+want that trip to land somewhere else — and then register that URI too, or Entra refuses
+it with AADSTS50011.
+
 ```bash
 cp .env.example .env     # Entra + GitHub OAuth credentials, tunnel token, public URL
 docker compose up -d

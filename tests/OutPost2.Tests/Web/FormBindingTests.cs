@@ -520,4 +520,152 @@ public sealed class FormBindingTests : IClassFixture<FormBindingTests.Factory>, 
         Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
         Assert.Contains("invalid_token", resp.Headers.WwwAuthenticate.ToString());
     }
+
+    // ── the administrator's return trip (OP2-100) ────────────────────────────
+
+    [SkippableFact]
+    public async Task The_admin_consent_callback_works_while_signed_out()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        // The whole point. The person on this request is a tenant administrator who in
+        // most cases has no OutPost2 account at all — if this redirects to /signin, the
+        // approval is unreachable and the feature does not exist.
+        var req = new HttpRequestMessage(HttpMethod.Get,
+            "/signin-microsoft?admin_consent=True&tenant=contoso&state=" + Guid.CreateVersion7());
+        req.Headers.Add("X-Skip-Test-Auth", "1");
+
+        var res = await _client.SendAsync(req);
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.DoesNotContain("signin", res.Headers.Location?.ToString() ?? "");
+    }
+
+    [SkippableFact]
+    public async Task An_admin_consent_response_is_not_mistaken_for_an_incomplete_sign_in()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        // It carries no `code`, so the sign-in path's completeness check would send the
+        // administrator to a page about a sign-in they never attempted. admin_consent is
+        // tested first precisely to stop that.
+        var res = await _client.GetAsync(
+            "/signin-microsoft?admin_consent=True&tenant=contoso&state=" + Guid.CreateVersion7());
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.DoesNotContain("incomplete", await res.Content.ReadAsStringAsync(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [SkippableFact]
+    public async Task Approving_flips_the_parked_connection_and_nothing_else()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        Guid id;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OutPostDbContext>();
+            if (!await db.Users.AnyAsync(u => u.Id == StubAuth.UserId))
+            {
+                db.Users.Add(new OutPost2.Core.Users.User
+                {
+                    Id = StubAuth.UserId, GitHubUserId = 4242, GitHubLogin = "tester",
+                });
+            }
+
+            var parked = new Connection
+            {
+                UserId = StubAuth.UserId,
+                Label = "work-awaiting-admin",
+                Provider = ProviderKind.Microsoft,
+                Instance = Connection.UnknownTenant,
+                AuthKind = AuthKind.OAuth2,
+                SealedCredential = "",
+                State = ConnectionState.NeedsAdminApproval,
+                AdminConsentUrl = "https://login.microsoftonline.com/organizations/v2.0/adminconsent",
+            };
+
+            db.Connections.Add(parked);
+            await db.SaveChangesAsync();
+            id = parked.Id;
+        }
+
+        var res = await _client.GetAsync($"/signin-microsoft?admin_consent=True&tenant=contoso&state={id}");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OutPostDbContext>();
+            var after = await db.Connections.SingleAsync(c => c.Id == id);
+
+            Assert.NotNull(after.AdminConsentGrantedAt);
+
+            // Still not usable. Admin consent grants the permission; it does not mint a
+            // delegated token, and marking this Active would have every tool believe it
+            // could reach a mailbox there is no credential for.
+            Assert.Equal(ConnectionState.NeedsAdminApproval, after.State);
+
+            // And the tenant Entra sent back is NOT written anywhere. Microsoft's own
+            // documentation warns that the value can be forged; the real tenant is read
+            // from the token when the user finally signs in.
+            Assert.Equal(Connection.UnknownTenant, after.Instance);
+        }
+    }
+
+    [SkippableFact]
+    public async Task A_refused_admin_consent_says_so_without_touching_anything()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        var res = await _client.GetAsync(
+            "/signin-microsoft?admin_consent=True&error=access_denied&error_description=AADSTS65004&state=x");
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Contains("Nothing was approved", await res.Content.ReadAsStringAsync());
+    }
+
+    [SkippableFact]
+    public async Task The_connections_page_hands_a_parked_connection_its_link()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        const string Url = "https://login.microsoftonline.com/contoso.com/v2.0/adminconsent?client_id=abc";
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OutPostDbContext>();
+            if (!await db.Users.AnyAsync(u => u.Id == StubAuth.UserId))
+            {
+                db.Users.Add(new OutPost2.Core.Users.User
+                {
+                    Id = StubAuth.UserId, GitHubUserId = 4242, GitHubLogin = "tester",
+                });
+            }
+
+            db.Connections.Add(new Connection
+            {
+                UserId = StubAuth.UserId,
+                Label = "work-parked-render",
+                Provider = ProviderKind.Microsoft,
+                Instance = "contoso.com",
+                AuthKind = AuthKind.OAuth2,
+                SealedCredential = "",
+                State = ConnectionState.NeedsAdminApproval,
+                AdminConsentUrl = Url,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var html = await _client.GetStringAsync("/connections");
+
+        // Rendered, not merely stored. A Razor mistake in this block only shows at
+        // runtime, and the one page that must not 500 is the one a blocked user is sent
+        // to in order to get unblocked.
+        Assert.Contains(Url, html);
+        Assert.Contains("Send this to your administrator", html);
+
+        // And the alert tells them it is the admin's move, not theirs.
+        Assert.Contains("Waiting on an administrator", html);
+    }
 }

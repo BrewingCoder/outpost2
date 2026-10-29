@@ -74,8 +74,17 @@ public static class ConnectionEndpoints
 
             // The tenant id, not a domain: it targets the exact directory this connection
             // already belongs to, so the user cannot land in the wrong one by habit.
+            //
+            // Except on a connection parked for admin approval (OP2-100), which has never
+            // been signed in to: its "tenant" is whatever the user hinted, or the
+            // `organizations` placeholder, and handing that placeholder to MSAL as a
+            // tenant id would produce an authority it cannot build. Null means "ask the
+            // normal way", which is exactly right for a connection that has no directory
+            // of its own yet.
+            var hint = connection.Instance == Connection.UnknownTenant ? null : connection.Instance;
+
             var pending = await pendings.CreateAsync(
-                userId, ProviderKind.Microsoft, connection.Label, connection.Instance,
+                userId, ProviderKind.Microsoft, connection.Label, hint,
                 connection.HomeAccountId);
 
             var url = await microsoft.BuildAuthorizeUrlAsync(pending);
@@ -90,19 +99,34 @@ public static class ConnectionEndpoints
             HttpContext ctx,
             IPendingConnectionStore pendings,
             IMicrosoftConnectionService microsoft,
+            IConnectionStore connections,
             ILoggerFactory logs,
             string? code,
             string? state,
             string? error,
-            string? error_description) =>
+            string? error_description,
+            string? admin_consent) =>
         {
             var log = logs.CreateLogger("OutPost2.Connections");
+
+            // The administrator coming back from the admin-consent endpoint, which shares
+            // this URI (see EntraOptions.AdminConsentRedirectUri). Entra sets
+            // admin_consent=True on BOTH its success and its error redirect and never on
+            // a sign-in callback, so it is the discriminator — and it has to be tested
+            // before the code/state check below, because an admin consent response
+            // carries no code at all and would otherwise read as "incomplete".
+            if (!string.IsNullOrEmpty(admin_consent))
+                return await HandleAdminConsentAsync(connections, log, state, error, error_description, ctx);
 
             if (!string.IsNullOrEmpty(error))
             {
                 // AADSTS65004 = user declined. Anything else is usually consent policy,
                 // and the description is the only useful thing we will ever get.
                 log.LogWarning("Microsoft returned {Error}: {Description}", error, error_description);
+
+                if (NeedsAdminApproval(error, error_description) && !string.IsNullOrEmpty(state))
+                    return await ParkAsync(ctx, pendings, microsoft, connections, log, state);
+
                 return Results.Redirect($"/connections?error={Uri.EscapeDataString(Describe(error, error_description))}");
             }
 
@@ -279,6 +303,165 @@ public static class ConnectionEndpoints
             await s.DeleteAsync(ctx.User.UserId(), id);
             return Results.Redirect("/connections");
         });
+    }
+
+    /// <summary>
+    /// Whether Entra refused because the tenant's administrator has to consent (OP2-100),
+    /// as opposed to any of the other reasons a sign-in comes back empty-handed.
+    /// <para>
+    /// Both forms are checked. <c>consent_required</c> is the clean one, but Entra also
+    /// answers <c>access_denied</c> with AADSTS90094 ("the grant requires admin
+    /// permission") in the description, and AADSTS65001 where an administrator has
+    /// previously declined — and the description is the only place either appears.
+    /// </para>
+    /// </summary>
+    private static bool NeedsAdminApproval(string? error, string? description) =>
+        error == "consent_required"
+        || description?.Contains("AADSTS90094", StringComparison.Ordinal) == true
+        || description?.Contains("AADSTS65001", StringComparison.Ordinal) == true;
+
+    /// <summary>
+    /// Turn a refusal that needs an administrator into something durable the user can
+    /// act on: a connection parked in <see cref="ConnectionState.NeedsAdminApproval"/>,
+    /// carrying the link to forward (OP2-100).
+    /// </summary>
+    private static async Task<IResult> ParkAsync(
+        HttpContext ctx,
+        IPendingConnectionStore pendings,
+        IMicrosoftConnectionService microsoft,
+        IConnectionStore connections,
+        ILogger log,
+        string state)
+    {
+        if (ctx.User.Identity?.IsAuthenticated != true) return Results.Redirect("/signin");
+
+        // Same consume as the success path: this state is spent either way, and a refused
+        // attempt that left it live would leave a usable sign-in link lying around.
+        var pending = await pendings.ConsumeAsync(state, ctx.User.UserId());
+        if (pending is null)
+            return Results.Redirect("/connections?error=That+sign-in+link+has+expired+or+was+already+used.+Please+try+again.");
+
+        // Whatever the user told us, or Entra's own multi-tenant placeholder. A hint is
+        // usually present precisely because a user who knows their tenant is blocked is
+        // the user who typed it in — and where it is absent, `organizations` still works:
+        // the administrator signs in and consent lands in whichever directory they
+        // administer. `common` would NOT work, and Microsoft documents why: a personal
+        // account cannot grant admin consent outside a tenant context.
+        var tenant = string.IsNullOrWhiteSpace(pending.TenantHint)
+            ? Connection.UnknownTenant
+            : pending.TenantHint.Trim();
+
+        await connections.ParkForAdminApprovalAsync(
+            pending.UserId, ProviderKind.Microsoft, tenant, pending.Label,
+
+            // Nothing was granted, so nothing is Granted — but every capability we would
+            // have asked for is declared, or the resolver would answer a request against
+            // this connection with "no connection by that name".
+            microsoft.DeclaredCapabilities,
+
+            // The connection's own id is the `state` Entra echoes back. Durable, which a
+            // PendingConnection deliberately is not: the administrator may follow this
+            // link days later, in a different browser, with no OutPost2 session at all.
+            id => microsoft.BuildAdminConsentUrl(tenant, id.ToString()).ToString());
+
+        log.LogInformation(
+            "Parked Microsoft connection '{Label}' for tenant {Tenant} awaiting admin approval.",
+            pending.Label, tenant);
+
+        return Results.Redirect($"/connections?needsadmin={Uri.EscapeDataString(pending.Label)}");
+    }
+
+    /// <summary>
+    /// The administrator's return trip from Entra's admin-consent endpoint (OP2-100).
+    /// <para>
+    /// Anonymous by necessity: the person on this request is a tenant administrator, who
+    /// usually has no OutPost2 account and is certainly not signed in to one. Everything
+    /// it is allowed to do is therefore bounded by what a stranger holding a connection
+    /// id may do — which is to record that an approval happened, and nothing else.
+    /// </para>
+    /// <para>
+    /// In particular the <c>tenant</c> parameter Entra returns is read and discarded.
+    /// Microsoft's own documentation warns against trusting it ("the tenant ID value can
+    /// be updated and sent by bad actors to impersonate a response"), and we do not need
+    /// it: the tenant this connection belongs to is whatever the user actually signs in
+    /// to afterwards, recorded then from the token rather than from a query string.
+    /// </para>
+    /// </summary>
+    private static async Task<IResult> HandleAdminConsentAsync(
+        IConnectionStore connections,
+        ILogger log,
+        string? state,
+        string? error,
+        string? description,
+        HttpContext ctx)
+    {
+        if (!string.IsNullOrEmpty(error))
+        {
+            log.LogWarning("Admin consent was refused: {Error} {Description}", error, description);
+            return AdminPage(ctx,
+                "Nothing was approved",
+                "Microsoft reported that the request was declined or could not be completed. " +
+                "Whoever sent you this link can generate a fresh one from their Outpost settings.");
+        }
+
+        if (!Guid.TryParse(state, out var connectionId))
+        {
+            log.LogWarning("Admin consent callback carried an unusable state.");
+            return AdminPage(ctx, "That link is not valid",
+                "Ask the person who sent it to generate a new one.");
+        }
+
+        var connection = await connections.MarkAdminConsentGrantedAsync(connectionId);
+
+        if (connection is null)
+        {
+            // Already completed, deleted, or an id that never existed. All three are the
+            // same sentence to this reader, and distinguishing them would tell a stranger
+            // whether a given id is real.
+            log.LogInformation("Admin consent callback for {ConnectionId} matched nothing waiting.", connectionId);
+            return AdminPage(ctx, "Nothing left to approve",
+                "This request has already been dealt with, or was withdrawn. No action is needed.");
+        }
+
+        log.LogInformation("Admin consent granted for connection {ConnectionId}.", connectionId);
+
+        return AdminPage(ctx, "Approved — thank you",
+            "Outpost can now be used in your organisation. The person who sent you this link " +
+            "needs to sign in once more to finish connecting their mailbox; they will see that " +
+            "on their settings page.");
+    }
+
+    /// <summary>
+    /// The page the administrator sees. Deliberately a self-contained response rather than
+    /// a Razor page in the signed-in site: this reader is not a user, has no session, and
+    /// should be shown one sentence and no navigation into an app that is not theirs.
+    /// <para>
+    /// Nothing from the query string reaches it. The two arguments are both literals
+    /// chosen above, so there is no untrusted text to encode and no way to turn a crafted
+    /// callback into a page that says whatever the caller wanted it to say.
+    /// </para>
+    /// </summary>
+    private static IResult AdminPage(HttpContext ctx, string heading, string body)
+    {
+        ctx.Response.Headers.CacheControl = "no-store";
+
+        // $$ and {{…}}: a raw string literal has no {{ escape, so the CSS braces below
+        // would otherwise each need doubling and the stylesheet would stop being readable.
+        return Results.Content($$"""
+            <!doctype html>
+            <html lang="en"><head><meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>Outpost</title>
+            <style>
+              :root { color-scheme: light dark; }
+              body { font: 16px/1.6 system-ui, sans-serif; margin: 0;
+                     display: grid; place-items: center; min-height: 100vh; padding: 24px; }
+              main { max-width: 34rem; }
+              h1 { font-size: 1.4rem; margin: 0 0 .6rem; }
+              p { margin: 0; opacity: .85; }
+            </style></head>
+            <body><main><h1>{{heading}}</h1><p>{{body}}</p></main></body></html>
+            """, "text/html; charset=utf-8");
     }
 
     /// <summary>

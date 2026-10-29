@@ -38,6 +38,33 @@ public interface IConnectionStore
         CancellationToken ct = default);
 
     Task TouchAsync(Guid connectionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Records a connection the tenant's administrator has to approve before it can
+    /// exist for real (OP2-100), holding the link the user forwards them.
+    /// <para>
+    /// A real row rather than a note on the side, because the durability is the feature:
+    /// the user may wait days, and when they come back the label, the page entry and the
+    /// answer to "check work email" all have to still be there.
+    /// </para>
+    /// </summary>
+    Task<Connection> ParkForAdminApprovalAsync(
+        Guid userId, ProviderKind provider, string instance, string label,
+        IEnumerable<Capability> capabilities, Func<Guid, string> adminConsentUrl,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Marks a parked connection as approved, by id alone and across every user.
+    /// <para>
+    /// Deliberately NOT scoped to a user, which every other lookup here is: the caller is
+    /// an administrator arriving from Entra in their own browser, who is very often not
+    /// an OutPost2 user at all. It is safe to leave unscoped only because approving
+    /// grants nothing — the connection stays unusable until its owner signs in — so the
+    /// worst a guessed id achieves is a wrong sentence on somebody's settings page.
+    /// </para>
+    /// </summary>
+    /// <returns>The connection, or null if the id is unknown or was not waiting.</returns>
+    Task<Connection?> MarkAdminConsentGrantedAsync(Guid connectionId, CancellationToken ct = default);
 }
 
 public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector protector) : IConnectionStore
@@ -80,6 +107,23 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
             c => c.UserId == userId && c.Provider == provider
                  && c.Instance == instance && c.HomeAccountId == homeAccountId, ct);
 
+        // A connection parked for admin approval (OP2-100) cannot match on identity: it
+        // was created before anybody signed in, so it holds no account id and whatever
+        // tenant the user happened to hint. Matching it by LABEL is the exception that
+        // the rule above exists to avoid — and it is safe precisely here, because the
+        // label is uniquely indexed per user, so there is exactly one candidate and no
+        // ambiguity to resolve.
+        //
+        // Without this the first successful sign-in after approval would insert a SECOND
+        // row under a name already taken, hit the unique index, and surface as a 500 the
+        // moment the user finally got through. The parked row is adopted instead: its
+        // placeholder tenant and null account are replaced by the real ones, and the
+        // label, default and capability toggles the user chose along the way survive.
+        existing ??= await db.Connections.FirstOrDefaultAsync(
+            c => c.UserId == userId && c.Provider == provider
+                 && c.State == ConnectionState.NeedsAdminApproval
+                 && c.HomeAccountId == null && c.Label == label, ct);
+
         var sealedCredential = (await protector.ProtectAsync(credential, ct)).ToJson();
 
         if (existing is not null)
@@ -87,6 +131,16 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
             existing.SealedCredential = sealedCredential;
             existing.State = ConnectionState.Active;
             existing.LastHealthyAt = DateTimeOffset.UtcNow;
+
+            // Set rather than asserted, because this is also how an adopted parked row
+            // learns which tenant and which account it turned out to be.
+            existing.Instance = instance;
+            existing.HomeAccountId = homeAccountId;
+
+            // The approval did its job and the link is spent. Leaving them behind would
+            // keep offering the user a link to forward for a mailbox that already works.
+            existing.AdminConsentUrl = null;
+            existing.AdminConsentGrantedAt = null;
 
             // Re-consent can widen what was granted; preserve the user's enabled choices
             // so a reconnect does not silently switch capabilities back on.
@@ -122,6 +176,75 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
         db.Connections.Add(created);
         await db.SaveChangesAsync(ct);
         return created;
+    }
+
+    /// <inheritdoc />
+    public async Task<Connection> ParkForAdminApprovalAsync(
+        Guid userId, ProviderKind provider, string instance, string label,
+        IEnumerable<Capability> capabilities, Func<Guid, string> adminConsentUrl,
+        CancellationToken ct = default)
+    {
+        // Re-running a blocked sign-in must not pile up rows. Matched on label for the
+        // same reason adoption is: a parked connection has no identity to match on yet.
+        var existing = await db.Connections.FirstOrDefaultAsync(
+            c => c.UserId == userId && c.Provider == provider
+                 && c.State == ConnectionState.NeedsAdminApproval
+                 && c.HomeAccountId == null && c.Label == label, ct);
+
+        if (existing is not null)
+        {
+            // Refresh the link rather than keep the first one: the configured scopes or
+            // redirect URI may have moved since, and a stale link sends the administrator
+            // to approve the wrong set.
+            existing.Instance = instance;
+            existing.AdminConsentUrl = adminConsentUrl(existing.Id);
+            await db.SaveChangesAsync(ct);
+            return existing;
+        }
+
+        var parked = new Connection
+        {
+            UserId = userId,
+            Label = label,
+            Provider = provider,
+            Instance = instance,
+            AuthKind = AuthKind.OAuth2,
+
+            // There is no credential and there must not be one. An empty string, not a
+            // placeholder that could be mistaken for a sealed blob: GetCredentialAsync
+            // already treats blank as "nothing stored" and returns null.
+            SealedCredential = "",
+
+            State = ConnectionState.NeedsAdminApproval,
+            IsDefaultForProvider = false,
+            Capabilities = capabilities.ToList(),
+        };
+
+        // A delegate rather than a string, because the link has to carry this
+        // connection's own id as the `state` Entra echoes back — so it cannot be built
+        // until the id exists, and it has to be rebuilt against the EXISTING id on the
+        // branch above. Taking a ready-made string would mean either two writes or a
+        // link pointing at a row that is not the one being updated.
+        parked.AdminConsentUrl = adminConsentUrl(parked.Id);
+
+        db.Connections.Add(parked);
+        await db.SaveChangesAsync(ct);
+        return parked;
+    }
+
+    /// <inheritdoc />
+    public async Task<Connection?> MarkAdminConsentGrantedAsync(Guid connectionId, CancellationToken ct = default)
+    {
+        var c = await db.Connections.FirstOrDefaultAsync(
+            x => x.Id == connectionId && x.State == ConnectionState.NeedsAdminApproval, ct);
+
+        if (c is null) return null;
+
+        // Idempotent: an administrator who opens the link twice, or whose browser
+        // prefetches it, must not move the clock and must not fail.
+        c.AdminConsentGrantedAt ??= DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return c;
     }
 
     public async Task<string?> GetCredentialAsync(Connection connection, CancellationToken ct = default)

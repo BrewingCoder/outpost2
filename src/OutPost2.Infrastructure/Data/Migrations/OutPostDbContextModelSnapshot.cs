@@ -245,6 +245,12 @@ namespace OutPost2.Infrastructure.Data.Migrations
                     b.Property<DateTimeOffset>("AddedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTimeOffset?>("AdminConsentGrantedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("AdminConsentUrl")
+                        .HasColumnType("text");
+
                     b.Property<string>("AuthKind")
                         .IsRequired()
                         .HasMaxLength(40)

@@ -33,6 +33,16 @@
         @Icons.Check()<span>Reconnected <b class="op-mono">@Model.Reconnected</b>. Its name, default and switches are unchanged.</span>
     </div>
 }
+@if (Model.NeedsAdmin is not null)
+{
+    <div class="op-note op-note--warn" role="status">
+        @Icons.Clock()<span>
+            <b class="op-mono">@Model.NeedsAdmin</b> needs an administrator in your organisation to
+            approve Outpost first. It is saved below with a link to send them — nothing is lost while
+            you wait, and you will not have to set it up again.
+        </span>
+    </div>
+}
 @if (Model.Replaced is not null)
 {
     <div class="op-note op-note--info" role="status">
@@ -125,12 +135,45 @@
                             }
                             else
                             {
-                                <form method="post" action="/connections/microsoft/start">
+                                @*
+                                    /reconnect, NOT /microsoft/start. Start rejects a label
+                                    that already exists — correctly, since finding out after
+                                    consent would waste the user's time — so pointing this
+                                    button there bounced every expired OAuth connection off
+                                    its own name instead of renewing it.
+                                *@
+                                <form method="post" action="/connections/@c.Id/reconnect">
                                     @Html.AntiForgeryToken()
-                                    <input type="hidden" name="label" value="@c.Label" />
                                     <button class="op-btn op-btn--primary op-btn--sm">@a.Action</button>
                                 </form>
                             }
+                        </div>
+                    }
+
+                    @*
+                        The artifact a blocked user forwards to their administrator
+                        (OP2-100). Shown on the connection itself rather than only in a
+                        banner, because the wait is measured in days: the user will come
+                        back to this page to find the link long after the banner is gone.
+                    *@
+                    @if (c.State == ConnectionState.NeedsAdminApproval
+                         && c.AdminConsentGrantedAt is null
+                         && c.AdminConsentUrl is { Length: > 0 } consentUrl)
+                    {
+                        <div class="op-panel" style="margin-block:12px">
+                            <h2 class="op-h2">Send this to your administrator</h2>
+                            <p class="op-muted" style="margin:0">
+                                They sign in, see exactly what Outpost is asking for, and approve it for
+                                your organisation. They do not need an Outpost account.
+                            </p>
+                            <input class="op-input op-input--mono" id="consent-@c.Id" readonly value="@consentUrl"
+                                   onclick="this.select()" aria-label="Admin approval link for @c.Label" />
+                            <div class="op-row">
+                                <button class="op-btn op-btn--primary op-btn--sm" type="button"
+                                        data-copy="@consentUrl" data-copy-field="consent-@c.Id">
+                                    @Icons.Copy()<span data-copy-label>Copy link</span>
+                                </button>
+                            </div>
                         </div>
                     }
 

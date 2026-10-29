@@ -87,6 +87,14 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.Property(c => c.HomeAccountId).HasMaxLength(200);
             e.Property(c => c.AccountIdentifier).HasMaxLength(320);
 
+            // No length cap, like SealedCredential and for the same kind of reason: the
+            // admin-consent URL carries every requested scope, URL-encoded, and already
+            // runs past 800 characters. A cap would be a number chosen today that
+            // silently truncates the link the first time a scope is added — and a
+            // truncated consent URL fails in the administrator's browser, where nobody
+            // here would see it.
+            e.Property(c => c.AdminConsentUrl);
+
             e.Property(c => c.Provider).HasConversion<string>().HasMaxLength(40);
             e.Property(c => c.AuthKind).HasConversion<string>().HasMaxLength(40);
             e.Property(c => c.State).HasConversion<string>().HasMaxLength(40);

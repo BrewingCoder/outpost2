@@ -192,7 +192,7 @@ public sealed record ConnectionResolution
             return c.State switch
             {
                 ConnectionState.Expired => $"{c.Label} needs re-authorising — I'll send you a link.",
-                ConnectionState.NeedsAdminApproval => $"{c.Label} is still waiting on your admin to approve it.",
+                ConnectionState.NeedsAdminApproval => AwaitingAdmin(c),
                 ConnectionState.Revoked => $"{c.Label} has been revoked and needs setting up again.",
                 _ => $"{c.Label} isn't connected yet.",
             };
@@ -202,6 +202,28 @@ public sealed record ConnectionResolution
         if (!cap.Granted) return $"{c.Label} hasn't been given permission for that yet.";
         if (!cap.Enabled) return $"That's switched off for {c.Label}. You can turn it on in settings.";
         return $"{c.Label} can't do that right now.";
+    }
+
+    /// <summary>
+    /// What to say about a connection waiting on an administrator (OP2-100).
+    /// <para>
+    /// Three different sentences because they call for three different actions. Before
+    /// approval the user's only move is to forward the link, so the link is the answer —
+    /// spoken last and on its own line, so a voice client can read the sentence and skip
+    /// the URL, and a text client can still hand it over. After approval nobody needs the
+    /// link again and the next step is a sign-in, so saying "waiting on your admin" then
+    /// would send the user to chase somebody who has already acted.
+    /// </para>
+    /// </summary>
+    private static string AwaitingAdmin(Connection c)
+    {
+        if (c.AdminConsentGrantedAt is not null)
+            return $"{c.Label} has been approved by your admin — it just needs you to sign in once " +
+                   "on the connections page to finish.";
+
+        return c.AdminConsentUrl is { Length: > 0 } url
+            ? $"{c.Label} needs your tenant admin to approve Outpost. Here's the link to forward them:\n{url}"
+            : $"{c.Label} is still waiting on your admin to approve it.";
     }
 
     public static ConnectionResolution UnknownLabel(string label, IReadOnlyList<Connection> all) => new()
