@@ -57,6 +57,12 @@ Calendar times are the mailbox's own, not the server's: the mailbox timezone is 
 Graph and every reading and writing of a time goes through it, so "move it to two" means
 two o'clock where you are and still does either side of a clock change.
 
+Some things happen when nobody is watching — a tenant administrator approving a
+connection days after the user gave up, a long send finishing. Set a Telegram chat id on
+the notifications page and you hear about those; set nothing and the settings page and
+the next spoken answer still tell you, which is how it worked before and is why no
+channel is required.
+
 Teams is **chats only, and that is a permissions decision rather than an unfinished
 one**. Every chat permission is user-consentable; reading a *channel* needs
 `ChannelMessage.Read.All`, the one Teams permission requiring admin consent. Consent is
@@ -169,7 +175,7 @@ official MCP C# SDK v2 · Tamp · Cloudflare tunnel
 
 ## Status
 
-In daily use. **522 tests** — the integration suites run against real Postgres, real
+In daily use. **532 tests** — the integration suites run against real Postgres, real
 Garage, real Vault and a real YouTrack server, because the things worth proving here are
 the ones a fake cannot. The three that skip are live Microsoft probes, which need a
 mailbox reconnected since the Teams scopes went in.
@@ -188,6 +194,7 @@ mailbox reconnected since the Teams scopes went in.
 | Calendar, contacts, free/busy | done |
 | Teams chats: list, read, send | done |
 | Teams channels | deferred — needs admin consent, see above |
+| Telegram notifications (admin approval, job finished) | done; optional |
 | Gmail, Atlassian, Azure DevOps | planned |
 | Cluster deployment | not started |
 

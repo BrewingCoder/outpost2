@@ -148,6 +148,10 @@ services:
       # the normal case and changes nothing: an empty path is skipped and the platform's
       # own validation is left alone. Mount the PEM in if this is set.
       OutPost2__TrustedRoots__CaCertPaths__0: ${OP2_TRUSTED_CA_PATH:-}
+      # Telling a user something happened while they were not looking (OP2-165). Blank
+      # is supported and changes nothing: without a bot token there is no channel, and
+      # the settings page and the next tool call still say it.
+      OutPost2__Telegram__BotToken: ${TELEGRAM_BOT_TOKEN:-}
     ports:
       - "5080:8080"
 

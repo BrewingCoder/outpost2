@@ -715,4 +715,21 @@ public sealed class FormBindingTests : IClassFixture<FormBindingTests.Factory>, 
         // store declares it on the way out.
         Assert.Contains(Capabilities.CalendarRead, html);
     }
+
+    [SkippableFact]
+    public async Task The_notifications_page_explains_itself_when_no_bot_is_configured()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        // The test host has no Telegram bot token, which is also the default for a fresh
+        // deployment. The page must say so rather than offer a field that could never
+        // work: a setting that silently does nothing is worse than an absent one.
+        var html = await _client.GetStringAsync("/notifications");
+
+        Assert.Contains("no bot token configured", html);
+        Assert.Contains("Nothing here is required", html);
+
+        // And the nav has to reach it, or nobody finds the setting at all.
+        Assert.Contains("/notifications", html);
+    }
 }

@@ -519,6 +519,9 @@ namespace OutPost2.Infrastructure.Data.Migrations
                     b.Property<DateTimeOffset?>("LastSignInAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("TelegramChatId")
+                        .HasColumnType("text");
+
                     b.HasKey("Id");
 
                     b.HasIndex("GitHubUserId")

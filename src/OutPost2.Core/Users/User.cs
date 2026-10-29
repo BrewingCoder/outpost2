@@ -25,6 +25,19 @@ public sealed class User
 
     public string? AvatarUrl { get; set; }
 
+    /// <summary>
+    /// Where to reach this user when something happens while they are not looking
+    /// (OP2-165). Null means no channel, which is the ordinary state and not an error.
+    /// <para>
+    /// A chat id rather than a username: a username can be changed by its owner, and a
+    /// notification quietly going to whoever took the name next is worse than one not
+    /// arriving. Stored unverified on purpose — Telegram offers no way to check a chat
+    /// id short of sending to it, so the settings page sends a test message and the user
+    /// looks at their phone, which is a better check than any field validation.
+    /// </para>
+    /// </summary>
+    public string? TelegramChatId { get; set; }
+
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? LastSignInAt { get; set; }
 }

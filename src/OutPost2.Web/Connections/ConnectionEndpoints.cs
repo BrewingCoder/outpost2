@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using OutPost2.Core.Connections;
+using OutPost2.Core.Notifications;
 using OutPost2.Infrastructure.Connections;
 
 namespace OutPost2.Web.Connections;
@@ -100,6 +101,8 @@ public static class ConnectionEndpoints
             IPendingConnectionStore pendings,
             IMicrosoftConnectionService microsoft,
             IConnectionStore connections,
+            INotifier notifier,
+            PublicUrls urls,
             ILoggerFactory logs,
             string? code,
             string? state,
@@ -116,7 +119,7 @@ public static class ConnectionEndpoints
             // before the code/state check below, because an admin consent response
             // carries no code at all and would otherwise read as "incomplete".
             if (!string.IsNullOrEmpty(admin_consent))
-                return await HandleAdminConsentAsync(connections, log, state, error, error_description, ctx);
+                return await HandleAdminConsentAsync(connections, notifier, urls, log, state, error, error_description, ctx);
 
             if (!string.IsNullOrEmpty(error))
             {
@@ -389,6 +392,8 @@ public static class ConnectionEndpoints
     /// </summary>
     private static async Task<IResult> HandleAdminConsentAsync(
         IConnectionStore connections,
+        INotifier notifier,
+        PublicUrls urls,
         ILogger log,
         string? state,
         string? error,
@@ -424,6 +429,20 @@ public static class ConnectionEndpoints
         }
 
         log.LogInformation("Admin consent granted for connection {ConnectionId}.", connectionId);
+
+        // The whole point of OP2-165. The approval happens in the ADMINISTRATOR's
+        // browser, days after the user gave up and went back to work, so without this
+        // the user only finds out by going and looking — which is exactly the polling
+        // OP2-100 asked not to need. Awaited rather than fired and forgotten: the
+        // notifier swallows every failure itself, so there is nothing to protect the
+        // response from, and a background task here would outlive the request scope
+        // this DbContext belongs to.
+        await notifier.NotifyAsync(connection.UserId, new Notification(
+            $"{connection.Label} has been approved",
+            "Your administrator approved Outpost for your organisation. Sign in once more to "
+            + "finish connecting — the name, default and switches you chose are all still there.",
+            urls.Connections,
+            NotificationKind.AdminApproval));
 
         return AdminPage(ctx, "Approved — thank you",
             "Outpost can now be used in your organisation. The person who sent you this link " +

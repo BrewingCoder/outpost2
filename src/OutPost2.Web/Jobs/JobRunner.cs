@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using OutPost2.Core.Jobs;
+using OutPost2.Core.Notifications;
 using OutPost2.Infrastructure.Connections;
 using OutPost2.Infrastructure.Data;
 using OutPost2.Infrastructure.Files;
@@ -164,6 +165,22 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
             progress, ct);
 
         await jobs.CompleteAsync(job.Id, outcome.Ok, outcome.Error, outcome.Retryable, ct);
+
+        // A send with attachments is a job precisely because it takes long enough that
+        // nobody waits for it, and until now there was nowhere to say it had landed
+        // (OP2-11 left progress with no destination; OP2-165 gave it one). Failure is
+        // worth more than success here: an unsent message the user believes went is the
+        // expensive outcome.
+        await sp.GetRequiredService<INotifier>().NotifyAsync(job.UserId, outcome.Ok
+            ? new Notification($"Sent: {job.Description}", Kind: NotificationKind.JobFinished)
+            : new Notification(
+                $"Could not send: {job.Description}",
+                (outcome.Error ?? "No reason given.")
+                + (outcome.Retryable ? " Worth trying again." : "")
+                + " Nothing was sent.",
+                sp.GetRequiredService<PublicUrls>().Jobs,
+                NotificationKind.JobFinished),
+            ct);
     }
 }
 

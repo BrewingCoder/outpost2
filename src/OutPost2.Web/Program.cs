@@ -46,6 +46,8 @@ builder.Services.Configure<OutPost2.Infrastructure.Feedback.FeedbackOptions>(
     builder.Configuration.GetSection(OutPost2.Infrastructure.Feedback.FeedbackOptions.SectionName));
 builder.Services.Configure<OutPost2.Infrastructure.Security.TrustedRootsOptions>(
     builder.Configuration.GetSection(OutPost2.Infrastructure.Security.TrustedRootsOptions.SectionName));
+builder.Services.Configure<OutPost2.Infrastructure.Notifications.TelegramOptions>(
+    builder.Configuration.GetSection(OutPost2.Infrastructure.Notifications.TelegramOptions.SectionName));
 
 builder.Services.AddSingleton<OutPost2.Infrastructure.Security.IVaultTransitClient,
                               OutPost2.Infrastructure.Security.VaultTransitClient>();
@@ -98,6 +100,16 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Files.IStagingService, OutPos
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.ILargeAttachmentSender,
                            OutPost2.Infrastructure.Mail.LargeAttachmentSender>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Jobs.IJobService, OutPost2.Infrastructure.Jobs.JobService>();
+
+// Reaching a user who is not looking (OP2-165). Channels are registered as a set and
+// the notifier offers each of them every message; adding a second one later is a line
+// here and nothing at any call site. Registering none is a supported configuration --
+// the notifier says so in the log and the product behaves exactly as it did before.
+builder.Services.AddScoped<OutPost2.Infrastructure.Notifications.TelegramChannel>();
+builder.Services.AddScoped<OutPost2.Core.Notifications.INotificationChannel>(
+    sp => sp.GetRequiredService<OutPost2.Infrastructure.Notifications.TelegramChannel>());
+builder.Services.AddScoped<OutPost2.Core.Notifications.INotifier,
+                           OutPost2.Infrastructure.Notifications.Notifier>();
 builder.Services.AddHostedService<JobRunner>();
 builder.Services.AddHostedService<HousekeepingService>();
 // Both of these reach SELF-HOSTED servers, which is where a private CA turns up: a
@@ -109,6 +121,7 @@ builder.Services.AddHostedService<HousekeepingService>();
 // Graph is deliberately NOT given this treatment. It is Microsoft's public endpoint, and
 // a deployment that needed a private root to reach it would be describing an
 // interception proxy rather than a self-hosted server.
+builder.Services.AddHttpClient("telegram").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(15));
 builder.Services.AddHttpClient("youtrack")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30))
     .ConfigurePrimaryHttpMessageHandler(TrustedRootHandler);

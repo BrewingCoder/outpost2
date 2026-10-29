@@ -1,0 +1,105 @@
+@page "/notifications"
+@using OutPost2.Web.Pages
+@model NotificationsModel
+@{
+    ViewData["Title"] = "Notifications";
+}
+
+<div class="op-pagehead">
+    <div>
+        <h1 class="op-h1">Notifications</h1>
+        <p class="op-lede">
+            How Outpost reaches you when something happens while you are not looking &mdash;
+            an administrator approving a connection days later, a long send finishing.
+        </p>
+    </div>
+</div>
+
+@if (Model.Saved == "on")
+{
+    <div class="op-note op-note--info">@Icons.Check()<span>Saved. Send a test to check it works.</span></div>
+}
+else if (Model.Saved == "off")
+{
+    <div class="op-note op-note--info">@Icons.Check()<span>Turned off. Nothing will be sent, and nothing else changes.</span></div>
+}
+else if (Model.Saved == "test")
+{
+    <div class="op-note op-note--info">@Icons.Check()<span>Sent. If it did not arrive, the chat id is wrong.</span></div>
+}
+
+@if (Model.Problem is { Length: > 0 } problem)
+{
+    <div class="op-note op-note--warn">@Icons.Warn()<span>@problem</span></div>
+}
+
+<div class="op-note op-note--info">
+    @Icons.Clock()
+    <span>
+        <strong>Nothing here is required.</strong> With no channel set up, the connections
+        page still says what happened and the next thing you ask Claude still tells you.
+        This only means you hear about it sooner.
+    </span>
+</div>
+
+@if (!Model.TelegramAvailable)
+{
+    <section class="op-panel" aria-label="Telegram">
+        <h2 class="op-h2">Telegram</h2>
+        <p class="op-muted" style="margin:0">
+            This deployment has no bot token configured, so there is nothing to connect to.
+            Whoever runs it sets <code>OutPost2__Telegram__BotToken</code> to a token from
+            <strong>&commat;BotFather</strong>; until then this page has nothing to offer.
+        </p>
+    </section>
+}
+else
+{
+    <section class="op-panel" aria-label="Telegram">
+        <h2 class="op-h2">Telegram</h2>
+        <p class="op-muted" style="margin:0">
+            Chosen first because this product is mostly used from a phone, and because the
+            thing most worth being told &mdash; that your mailbox is finally reachable &mdash;
+            is the one thing email cannot tell you.
+        </p>
+
+        <form method="post" class="op-grid2">
+            @Html.AntiForgeryToken()
+            <div class="op-field">
+                <label class="op-field__label" for="chatid">Your chat id</label>
+                <input class="op-input op-input--mono" id="chatid" name="chatId"
+                       value="@Model.ChatId" autocomplete="off" maxlength="64"
+                       placeholder="123456789" />
+                <span class="op-field__help">
+                    Message the bot once, then ask <strong>&commat;userinfobot</strong> for your id.
+                    A number, not a username: a username can be changed by its owner, and a
+                    notification going to whoever took the name next is worse than one not arriving.
+                    Leave it empty to turn notifications off.
+                </span>
+            </div>
+            <div class="op-field">
+                <span class="op-field__label">&nbsp;</span>
+                <div class="op-row">
+                    <button class="op-btn op-btn--primary" type="submit">Save</button>
+                    <button class="op-btn" type="submit" asp-page-handler="Test">Send a test</button>
+                </div>
+                <span class="op-field__help">
+                    The test is the only real check there is &mdash; Telegram will not confirm a
+                    chat id without sending to it.
+                </span>
+            </div>
+        </form>
+    </section>
+}
+
+<section class="op-panel" aria-label="What gets sent">
+    <h2 class="op-h2">What you would be told</h2>
+    <ul class="op-list">
+        <li>An administrator approved a connection that was waiting on them.</li>
+        <li>A queued send finished, or failed with something you can act on.</li>
+    </ul>
+    <p class="op-muted" style="margin:0">
+        Deliberately short. A channel that carries everything gets muted, and then it
+        carries nothing.
+    </p>
+</section>
