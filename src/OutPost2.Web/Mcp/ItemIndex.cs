@@ -10,6 +10,7 @@ public enum ItemKind
 {
     Mail,
     Event,
+    Contact,
 }
 
 /// <summary>

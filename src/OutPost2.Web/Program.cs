@@ -79,6 +79,8 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailService, OutPost2.I
 // per-mailbox timezone it caches therefore lives in IMemoryCache, not in a field.
 builder.Services.AddScoped<OutPost2.Infrastructure.Calendar.ICalendarService,
                            OutPost2.Infrastructure.Calendar.CalendarService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.People.IPeopleService,
+                           OutPost2.Infrastructure.People.PeopleService>();
 builder.Services.AddSingleton<OutPost2.Infrastructure.Mail.IAttachmentExtractor,
                               OutPost2.Infrastructure.Mail.AttachmentExtractor>();
 builder.Services.AddSingleton<OutPost2.Infrastructure.Files.IObjectStore, OutPost2.Infrastructure.Files.S3ObjectStore>();

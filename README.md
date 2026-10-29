@@ -32,7 +32,7 @@ organisation, and you may not run it as a service for other people. See
 
 ## What it does
 
-**39 tools across three providers**, all resolved through the same named-connection model.
+**45 tools across three providers**, all resolved through the same named-connection model.
 
 | Area | Tools |
 |---|---|
@@ -42,6 +42,8 @@ organisation, and you may not run it as a service for other people. See
 | Mail — manage | `mark_mail` `move_mail` `flag_mail` `categorise_mail` `list_categories` `report_junk` |
 | Calendar — read | `list_events` `read_event` |
 | Calendar — write | `create_event` `update_event` `cancel_event` `respond_to_invite` |
+| Calendar — scheduling | `check_availability` `suggest_meeting_times` |
+| People | `find_person` `list_contacts` `save_contact` `update_contact` |
 | Issues (YouTrack) | `create_issue` `get_issue` `update_issue` `search_issues` `comment_on_issue` `list_projects` `create_project` |
 | Code (GitHub) | `github_repositories` `github_repo_names` `github_issues` `github_pull_requests` `github_commits` `github_item` `github_triage` |
 | Files and jobs | `list_files` `check_queue` + a web approval queue |
@@ -53,6 +55,10 @@ buffer in memory, so sending is a resumable job rather than a tool call that tim
 Calendar times are the mailbox's own, not the server's: the mailbox timezone is read from
 Graph and every reading and writing of a time goes through it, so "move it to two" means
 two o'clock where you are and still does either side of a clock change.
+
+`find_person` is what makes "email Justin" work: it merges the people you actually
+correspond with, the company directory and your own address book, and says which of the
+three each match came from, because that is usually how you tell two Justins apart.
 
 ## Getting started
 

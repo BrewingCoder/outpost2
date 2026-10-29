@@ -74,11 +74,30 @@ public sealed class EntraOptions
     /// reason above: a connection made before it existed keeps working and simply has no
     /// calendar, instead of every mailbox needing a browser the moment this shipped.
     /// </para>
+    /// <para>
+    /// Calendars.Read.Shared is for <c>findMeetingTimes</c> ALONE (OP2-78). Checked
+    /// against the v1.0 permissions table rather than assumed: the neighbouring
+    /// <c>getSchedule</c> needs only Calendars.ReadBasic, which Calendars.ReadWrite
+    /// already covers — so plain free/busy works without this and only the ranked
+    /// suggestions need it.
+    /// </para>
+    /// <para>
+    /// People.Read, User.ReadBasic.All and Contacts.ReadWrite are people lookup and the
+    /// address book (OP2-77). User.ReadBasic.All, not User.Read.All: the basic one needs
+    /// no admin consent and still carries name, address, job title and department, which
+    /// is everything "email Justin" has to resolve. Reading a person's MANAGER needs
+    /// User.Read.All, which does require admin consent, so it is deliberately not asked
+    /// for and the feature is not offered.
+    /// </para>
     /// </remarks>
     public string[] OptionalScopes { get; set; } =
     [
         "https://graph.microsoft.com/MailboxSettings.ReadWrite",
         "https://graph.microsoft.com/Calendars.ReadWrite",
+        "https://graph.microsoft.com/Calendars.Read.Shared",
+        "https://graph.microsoft.com/People.Read",
+        "https://graph.microsoft.com/User.ReadBasic.All",
+        "https://graph.microsoft.com/Contacts.ReadWrite",
     ];
 
     /// <summary>What to ask the user to consent to: everything we need plus everything we would like.</summary>
@@ -260,6 +279,22 @@ public sealed class MicrosoftConnectionService(
             // consent decision into a 403 met halfway through rescheduling.
             new() { Name = Capabilities.CalendarWrite,
                     Granted = granted.Contains("Calendars.ReadWrite"),
+                    Enabled = true },
+
+            // Any one of the three is enough to answer "who is Justin" from SOME source,
+            // and each degrades on its own: no People.Read loses the relevance ranking,
+            // no User.ReadBasic.All loses the directory, no Contacts.Read loses the
+            // address book. Requiring all three would switch the whole feature off over
+            // one scope a tenant happened to withhold.
+            new() { Name = Capabilities.PeopleRead,
+                    Granted = granted.Contains("People.Read")
+                              || granted.Contains("User.ReadBasic.All")
+                              || granted.Contains("Contacts.ReadWrite")
+                              || granted.Contains("Contacts.Read"),
+                    Enabled = true },
+
+            new() { Name = Capabilities.ContactsWrite,
+                    Granted = granted.Contains("Contacts.ReadWrite"),
                     Enabled = true },
         };
 

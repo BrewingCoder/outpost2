@@ -46,6 +46,23 @@ public interface ICalendarService
     /// says about time is in this zone, and it is cached per connection.
     /// </summary>
     Task<TimeZoneInfo> TimeZoneAsync(Connection connection, CancellationToken ct = default);
+
+    /// <summary>
+    /// Free/busy for a set of addresses over a window (OP2-78). One row per address asked
+    /// about, including the ones Exchange could not answer for — a missing row would read
+    /// as "free all day", which is the wrong way round for a mistake to fall.
+    /// </summary>
+    Task<IReadOnlyList<ScheduleInformation>> GetScheduleAsync(
+        Connection connection, IReadOnlyList<string> addresses,
+        DateTime from, DateTime to, int intervalMinutes = 30, CancellationToken ct = default);
+
+    /// <summary>
+    /// Slots Microsoft's own scheduler proposes, ranked by confidence. Needs a scope
+    /// beyond the rest of the calendar, so it can be refused where everything else works.
+    /// </summary>
+    Task<MeetingSuggestions> SuggestMeetingTimesAsync(
+        Connection connection, IReadOnlyList<string> attendees, TimeSpan duration,
+        DateTime from, DateTime to, int maxCandidates = 5, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -372,6 +389,125 @@ public sealed class CalendarService(
         await ThrowIfFailed(resp, connection, $"{verb} that invitation", ct);
     }
 
+    // ── availability (OP2-78) ────────────────────────────────────────────────
+
+    public async Task<IReadOnlyList<ScheduleInformation>> GetScheduleAsync(
+        Connection connection, IReadOnlyList<string> addresses,
+        DateTime from, DateTime to, int intervalMinutes = 30, CancellationToken ct = default)
+    {
+        if (addresses.Count == 0) return [];
+
+        var zone = await ZoneAsync(connection, ct);
+        using var http = await ClientAsync(connection, ct);
+
+        // getSchedule needs only Calendars.ReadBasic, and Calendars.ReadWrite is a
+        // superset of it — so this works on any connection that can read the calendar at
+        // all, with no extra consent. Checked against the v1.0 permissions table rather
+        // than assumed; the neighbouring findMeetingTimes is NOT the same.
+        var payload = new
+        {
+            schedules = addresses,
+            startTime = Naive(from, zone.GraphName),
+            endTime = Naive(to, zone.GraphName),
+            availabilityViewInterval = Math.Clamp(intervalMinutes, 5, 1440),
+        };
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, "me/calendar/getSchedule")
+        {
+            Content = JsonContent.Create(payload),
+        };
+        WithZone(req, zone.GraphName);
+
+        using var resp = await http.SendAsync(req, ct);
+        await ThrowIfFailed(resp, connection, "check availability", ct);
+
+        var page = await resp.Content.ReadFromJsonAsync<GraphList<GraphScheduleInformation>>(ct);
+        var rows = (page?.Value ?? []).Select(r => r.ToSchedule(zone.Zone)).ToList();
+
+        // Exchange returns a row per address, but it has been known to drop one for an
+        // address it cannot resolve at all. Anything asked about and not answered is
+        // reported as unknown rather than quietly omitted.
+        var answered = rows.Select(r => r.Address).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        rows.AddRange(addresses
+            .Where(a => !answered.Contains(a))
+            .Select(a => new ScheduleInformation
+            {
+                Address = a,
+                Error = "no free/busy information published",
+            }));
+
+        return rows;
+    }
+
+    public async Task<MeetingSuggestions> SuggestMeetingTimesAsync(
+        Connection connection, IReadOnlyList<string> attendees, TimeSpan duration,
+        DateTime from, DateTime to, int maxCandidates = 5, CancellationToken ct = default)
+    {
+        var zone = await ZoneAsync(connection, ct);
+        using var http = await ClientAsync(connection, ct);
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["attendees"] = attendees.Select(a => new
+            {
+                type = "required",
+                emailAddress = new { address = a },
+            }).ToArray(),
+
+            ["timeConstraint"] = new
+            {
+                // Suggestions inside everyone's working hours. "unrestricted" would
+                // cheerfully propose 2am, which is a worse answer than none.
+                activityDomain = "work",
+                timeSlots = new[]
+                {
+                    new { start = Naive(from, zone.GraphName), end = Naive(to, zone.GraphName) },
+                },
+            },
+
+            // ISO 8601, in whole minutes. Graph rejects a fractional duration.
+            ["meetingDuration"] = $"PT{(int)duration.TotalMinutes}M",
+            ["maxCandidates"] = Math.Clamp(maxCandidates, 1, 20),
+            ["returnSuggestionReasons"] = false,
+
+            // Graph defaults this to 50%, at which a slot where one of three attendees is
+            // simply unreadable still qualifies. Asking for everyone keeps "they are both
+            // free" an honest sentence; the confidence is reported either way.
+            ["minimumAttendeePercentage"] = 100.0,
+        };
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, "me/findMeetingTimes")
+        {
+            Content = JsonContent.Create(payload),
+        };
+        WithZone(req, zone.GraphName);
+
+        using var resp = await http.SendAsync(req, ct);
+
+        // findMeetingTimes is the one calendar call needing Calendars.Read.Shared, so a
+        // connection consented before that scope existed gets a 403 here and works
+        // everywhere else. Saying "forbidden" would send the user hunting in their tenant.
+        if (resp.StatusCode is System.Net.HttpStatusCode.Forbidden)
+            throw new CalendarException(
+                $"{connection.Label} can read calendars but hasn't been given permission to "
+                + "suggest times across other people's — reconnect it to grant that. "
+                + "Checking one person's availability still works.");
+
+        await ThrowIfFailed(resp, connection, "suggest meeting times", ct);
+
+        var result = await resp.Content.ReadFromJsonAsync<GraphMeetingTimeSuggestionsResult>(ct);
+
+        return new MeetingSuggestions
+        {
+            Suggestions = (result?.MeetingTimeSuggestions ?? [])
+                .Select(sg => sg.ToSuggestion(zone.Zone))
+                .ToList(),
+            EmptyReason = string.IsNullOrWhiteSpace(result?.EmptySuggestionsReason)
+                ? null
+                : result.EmptySuggestionsReason,
+        };
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -594,6 +730,122 @@ public sealed class CalendarService(
         private static string Capitalise(string d) =>
             d.Length == 0 ? d : char.ToUpperInvariant(d[0]) + d[1..];
     }
+
+    // ── availability wire types ──────────────────────────────────────────────
+
+    private sealed record GraphScheduleInformation(
+        [property: JsonPropertyName("scheduleId")] string? ScheduleId,
+        [property: JsonPropertyName("availabilityView")] string? AvailabilityView,
+        [property: JsonPropertyName("scheduleItems")] List<GraphScheduleItem>? ScheduleItems,
+        [property: JsonPropertyName("workingHours")] GraphWorkingHours? WorkingHours,
+        [property: JsonPropertyName("error")] GraphScheduleError? Error)
+    {
+        public ScheduleInformation ToSchedule(TimeZoneInfo zone) => new()
+        {
+            Address = ScheduleId ?? "(unknown)",
+
+            // Exchange reports a per-address failure INSIDE a 200 response rather than
+            // failing the call, so an unresolvable address looks exactly like a free one
+            // unless this is read.
+            Error = Error?.Message,
+
+            Busy = (ScheduleItems ?? [])
+                .Select(i => new BusyPeriod
+                {
+                    Start = i.Start.Resolve(zone),
+                    End = i.End.Resolve(zone),
+                    Status = ParseShowAs(i.Status),
+
+                    // Present only where the viewer has more than free/busy access. A
+                    // colleague's lunch usually comes back with neither.
+                    Subject = string.IsNullOrWhiteSpace(i.Subject) ? null : i.Subject,
+                    Location = string.IsNullOrWhiteSpace(i.Location) ? null : i.Location,
+                })
+                .OrderBy(b => b.Start)
+                .ToList(),
+
+            WorkingHours = WorkingHours?.ToHours(),
+        };
+    }
+
+    private sealed record GraphScheduleError(
+        [property: JsonPropertyName("message")] string? Message);
+
+    private sealed record GraphScheduleItem(
+        [property: JsonPropertyName("status")] string? Status,
+        [property: JsonPropertyName("subject")] string? Subject,
+        [property: JsonPropertyName("location")] string? Location,
+        [property: JsonPropertyName("isPrivate")] bool IsPrivate,
+        [property: JsonPropertyName("start")] GraphTime? Start,
+        [property: JsonPropertyName("end")] GraphTime? End);
+
+    private sealed record GraphWorkingHours(
+        [property: JsonPropertyName("daysOfWeek")] List<string>? DaysOfWeek,
+        [property: JsonPropertyName("startTime")] string? StartTime,
+        [property: JsonPropertyName("endTime")] string? EndTime)
+    {
+        public Core.Calendar.WorkingHours? ToHours()
+        {
+            if (!TimeOnly.TryParse(StartTime, System.Globalization.CultureInfo.InvariantCulture, out var s)
+                || !TimeOnly.TryParse(EndTime, System.Globalization.CultureInfo.InvariantCulture, out var e))
+                return null;
+
+            var days = (DaysOfWeek ?? [])
+                .Select(d => Enum.TryParse<DayOfWeek>(d, ignoreCase: true, out var dow) ? dow : (DayOfWeek?)null)
+                .Where(d => d is not null)
+                .Select(d => d!.Value)
+                .ToList();
+
+            return new Core.Calendar.WorkingHours { Days = days, Start = s, End = e };
+        }
+    }
+
+    private sealed record GraphMeetingTimeSuggestionsResult(
+        [property: JsonPropertyName("emptySuggestionsReason")] string? EmptySuggestionsReason,
+        [property: JsonPropertyName("meetingTimeSuggestions")] List<GraphMeetingTimeSuggestion>? MeetingTimeSuggestions);
+
+    private sealed record GraphMeetingTimeSuggestion(
+        [property: JsonPropertyName("confidence")] double Confidence,
+        [property: JsonPropertyName("organizerAvailability")] string? OrganizerAvailability,
+        [property: JsonPropertyName("attendeeAvailability")] List<GraphAttendeeAvailability>? AttendeeAvailability,
+        [property: JsonPropertyName("meetingTimeSlot")] GraphTimeSlot? MeetingTimeSlot)
+    {
+        public MeetingSuggestion ToSuggestion(TimeZoneInfo zone)
+        {
+            var availability = AttendeeAvailability ?? [];
+
+            return new MeetingSuggestion
+            {
+                Start = MeetingTimeSlot?.Start.Resolve(zone) ?? default,
+                End = MeetingTimeSlot?.End.Resolve(zone) ?? default,
+                Confidence = Confidence,
+                OrganiserAvailability = ParseShowAs(OrganizerAvailability),
+
+                Unavailable = availability
+                    .Where(a => ParseShowAs(a.Availability) is Core.Calendar.Availability.Busy
+                                                            or Core.Calendar.Availability.OutOfOffice)
+                    .Select(a => a.Attendee?.EmailAddress?.Describe() ?? "(unknown)")
+                    .ToList(),
+
+                // Unknown is NOT busy, and conflating them is how a slot everybody can
+                // actually make gets reported as a clash. Graph scores unknown at 49%,
+                // which is why a confidence just under half means "could not read a
+                // calendar" rather than "probably booked".
+                Unknown = availability
+                    .Where(a => ParseShowAs(a.Availability) is Core.Calendar.Availability.Unknown)
+                    .Select(a => a.Attendee?.EmailAddress?.Describe() ?? "(unknown)")
+                    .ToList(),
+            };
+        }
+    }
+
+    private sealed record GraphAttendeeAvailability(
+        [property: JsonPropertyName("availability")] string? Availability,
+        [property: JsonPropertyName("attendee")] GraphRecipient? Attendee);
+
+    private sealed record GraphTimeSlot(
+        [property: JsonPropertyName("start")] GraphTime? Start,
+        [property: JsonPropertyName("end")] GraphTime? End);
 
     private sealed record GraphRecurrencePattern(
         [property: JsonPropertyName("type")] string? Type,

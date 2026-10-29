@@ -40,6 +40,9 @@ public static class CapabilityCatalog
         // any more than a sent message can.
         [Capabilities.CalendarWrite] = new("Create, change and cancel meetings as you", CapabilityRisk.ActsAsYou),
 
+        [Capabilities.PeopleRead]    = new("Look people up and read your contacts", CapabilityRisk.None),
+        [Capabilities.ContactsWrite] = new("Add and change your contacts", CapabilityRisk.Writes),
+
         [Capabilities.IssuesRead]  = new("Read issues", CapabilityRisk.None),
         [Capabilities.IssuesWrite] = new("Create and update issues", CapabilityRisk.Writes),
         [Capabilities.IssuesAdmin] = new("Administer projects", CapabilityRisk.High),

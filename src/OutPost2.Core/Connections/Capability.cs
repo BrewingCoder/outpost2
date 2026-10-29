@@ -55,6 +55,14 @@ public static class Capabilities
     // eight attendees is not meaningfully safer than an invitation that does.
     public const string CalendarWrite = "calendar.write";
 
+    // Looking somebody up and reading the address book. One capability rather than two,
+    // because the user's question is "can it find people", not "which of three Graph
+    // collections may it consult".
+    public const string PeopleRead = "people.read";
+
+    // Separate, because saving a contact changes the mailbox and looking one up does not.
+    public const string ContactsWrite = "contacts.write";
+
     public const string IssuesRead = "issues.read";
     public const string IssuesWrite = "issues.write";
     public const string IssuesAdmin = "issues.admin";

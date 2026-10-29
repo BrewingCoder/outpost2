@@ -5,9 +5,11 @@ using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Server;
 using OutPost2.Core.Calendar;
 using OutPost2.Core.Connections;
+using OutPost2.Core.People;
 using OutPost2.Infrastructure.Calendar;
 using OutPost2.Infrastructure.Connections;
 using OutPost2.Infrastructure.Mail;
+using OutPost2.Infrastructure.People;
 using OutPost2.Web.Connections;
 
 namespace OutPost2.Web.Mcp;
@@ -39,6 +41,7 @@ public sealed class CalendarTools(
     IHttpContextAccessor http,
     IConnectionStore connections,
     ICalendarService calendar,
+    IPeopleService people,
     IItemIndex index,
     PublicUrls urls)
 {
@@ -61,6 +64,12 @@ public sealed class CalendarTools(
         if (!resolution.IsActionable) return resolution.SpokenSummary;
 
         days = Math.Clamp(days, 1, 31);
+
+        // Validated here rather than inside Window, which falls back to today for
+        // anything it cannot read. Silently answering about the wrong day is worse than
+        // refusing: the user hears a confident list and has no reason to doubt it.
+        if (date is not null && !TryParseLocal(date, out _))
+            return $"I couldn't read \"{date}\" as a date. Use yyyy-MM-dd, e.g. 2026-11-03.";
 
         var found = new List<(string Label, CalendarEventSummary Item)>();
         var failures = new List<string>();
@@ -443,6 +452,242 @@ public sealed class CalendarTools(
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (CalendarException ex) { return ex.Message; }
     }
+
+    // ── availability (OP2-78) ────────────────────────────────────────────────
+
+    [McpServerTool(Name = "check_availability", ReadOnly = true, OpenWorld = true)]
+    [Description("Whether people are free at a given time. Give names or email addresses — names are looked up. Answers 'is Darren free at three?' and shows what is blocking the time where that is visible.")]
+    public async Task<string> CheckAvailability(
+        [Description("Who to check, comma separated. Names or email addresses; names are resolved against the directory and your contacts.")] string who,
+        [Description("The day, as yyyy-MM-dd in the mailbox's local time. Omit for today.")] string? date = null,
+        [Description("Start of the window, as HH:mm in the mailbox's local time. Defaults to 08:00.")] string? from = null,
+        [Description("End of the window, as HH:mm. Defaults to 18:00.")] string? to = null,
+        [Description("Which connection's calendar to ask from, e.g. 'work'.")] string? connection = null,
+        CancellationToken ct = default)
+    {
+        var resolution = ConnectionResolver.Resolve(
+            await connections.ListAsync(UserId, ct), Capabilities.CalendarRead, connection, isWrite: false);
+
+        if (!resolution.IsActionable) return resolution.SpokenSummary;
+
+        // Free/busy is asked FROM one mailbox ABOUT many people, so fanning out would ask
+        // the same question twice and merge two answers that are already the same.
+        var c = resolution.Kind is ResolutionKind.FanOut
+            ? resolution.Connections[0]
+            : resolution.Connection!;
+
+        var zone = await calendar.TimeZoneAsync(c, ct);
+        var (addresses, unresolved, ambiguous) = await ResolveAddressesAsync(c, who, ct);
+
+        if (ambiguous.Count > 0) return string.Join("\n", ambiguous);
+        if (addresses.Count == 0)
+            return unresolved.Count > 0
+                ? $"I couldn't find an address for {string.Join(", ", unresolved)}."
+                : "Tell me who to check.";
+
+        if (date is not null && !TryParseLocal(date, out _))
+            return $"I couldn't read \"{date}\" as a date. Use yyyy-MM-dd, e.g. 2026-11-03.";
+
+        var day = date is not null && TryParseLocal(date, out var said)
+            ? said.Date
+            : TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).Date;
+
+        if (!TryParseClock(from, new TimeOnly(8, 0), out var startAt))
+            return $"I couldn't read \"{from}\" as a time of day. Use HH:mm, e.g. 09:00.";
+        if (!TryParseClock(to, new TimeOnly(18, 0), out var endAt))
+            return $"I couldn't read \"{to}\" as a time of day. Use HH:mm, e.g. 17:30.";
+        if (endAt <= startAt) return "That window ends before it starts.";
+
+        try
+        {
+            var rows = await calendar.GetScheduleAsync(
+                c, addresses, day.Add(startAt.ToTimeSpan()), day.Add(endAt.ToTimeSpan()), 30, ct);
+
+            var sb = new StringBuilder($"{day:dddd d MMMM}, {Clock(startAt)}–{Clock(endAt)}:\n");
+
+            foreach (var r in rows)
+            {
+                sb.Append($"- {Untrusted.Scrub(r.Address)}: ");
+
+                if (!r.IsKnown)
+                {
+                    // NOT "free". An address Exchange cannot answer for is the one case
+                    // where saying nothing would actively mislead.
+                    sb.AppendLine($"unknown — {Untrusted.Scrub(r.Error!)}");
+                    continue;
+                }
+
+                var blocking = r.Busy.Where(b => b.Blocks).ToList();
+                if (blocking.Count == 0)
+                {
+                    sb.AppendLine("free all window");
+                    continue;
+                }
+
+                sb.AppendLine($"busy {string.Join(", ", blocking.Select(Period))}");
+            }
+
+            foreach (var u in unresolved)
+                sb.AppendLine($"Note: couldn't find an address for {Untrusted.Scrub(u)}.");
+
+            return sb.ToString().TrimEnd();
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (CalendarException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "suggest_meeting_times", ReadOnly = true, OpenWorld = true)]
+    [Description("Find times when everybody is free, ranked. Give names or email addresses. Looks only inside working hours. Use create_event afterwards to actually book one.")]
+    public async Task<string> SuggestMeetingTimes(
+        [Description("Who needs to be there, comma separated. Names or email addresses.")] string who,
+        [Description("How long the meeting needs to be, in minutes.")] int minutes = 30,
+        [Description("How many days ahead to look.")] int days = 5,
+        [Description("The first day to consider, as yyyy-MM-dd. Omit for today.")] string? from = null,
+        [Description("Which connection's calendar to schedule from, e.g. 'work'.")] string? connection = null,
+        CancellationToken ct = default)
+    {
+        var resolution = ConnectionResolver.Resolve(
+            await connections.ListAsync(UserId, ct), Capabilities.CalendarRead, connection, isWrite: false);
+
+        if (!resolution.IsActionable) return resolution.SpokenSummary;
+
+        var c = resolution.Kind is ResolutionKind.FanOut
+            ? resolution.Connections[0]
+            : resolution.Connection!;
+
+        var zone = await calendar.TimeZoneAsync(c, ct);
+        var (addresses, unresolved, ambiguous) = await ResolveAddressesAsync(c, who, ct);
+
+        if (ambiguous.Count > 0) return string.Join("\n", ambiguous);
+
+        if (from is not null && !TryParseLocal(from, out _))
+            return $"I couldn't read \"{from}\" as a date. Use yyyy-MM-dd, e.g. 2026-11-03.";
+
+        var window = Window(zone, from, Math.Clamp(days, 1, 30));
+
+        try
+        {
+            var result = await calendar.SuggestMeetingTimesAsync(
+                c, addresses, TimeSpan.FromMinutes(Math.Clamp(minutes, 5, 8 * 60)),
+                window.From.DateTime, window.To.DateTime, 5, ct);
+
+            var sb = new StringBuilder();
+
+            if (result.Suggestions.Count == 0)
+            {
+                // Microsoft's own reason, because "no times found" and "you asked about
+                // last week" need different things from the user.
+                sb.AppendLine(result.EmptyReason is { } why
+                    ? $"No times work for everyone. Microsoft says: {Untrusted.Scrub(why)}."
+                    : "No times in that window work for everyone.");
+            }
+            else
+            {
+                sb.AppendLine($"{result.Suggestions.Count} option{(result.Suggestions.Count == 1 ? "" : "s")}, best first:");
+
+                foreach (var sg in result.Suggestions)
+                {
+                    sb.Append($"- {When(sg.Start, sg.End, allDay: false, full: true)}");
+
+                    if (sg.Confidence < 100)
+                        sb.Append($" ({sg.Confidence:0}% confidence)");
+
+                    if (sg.Unknown.Count > 0)
+                        sb.Append($" — couldn't read the diary for {string.Join(", ", sg.Unknown.Select(Untrusted.Scrub))}");
+
+                    if (sg.OrganiserAvailability is Availability.Tentative)
+                        sb.Append(" — you have something tentative then");
+
+                    sb.AppendLine();
+                }
+            }
+
+            foreach (var u in unresolved)
+                sb.AppendLine($"Note: couldn't find an address for {Untrusted.Scrub(u)}, so they were left out.");
+
+            return sb.ToString().TrimEnd();
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (CalendarException ex) { return ex.Message; }
+    }
+
+    /// <summary>
+    /// Turns what was said into addresses. Anything with an @ is taken as given; anything
+    /// else is looked up, because "is Darren free" is the form the question actually
+    /// arrives in and making the model chain two tools costs a turn of a conversation
+    /// happening at 70mph.
+    /// <para>
+    /// An ambiguous name stops the whole call rather than picking the best match. Checking
+    /// the wrong Darren's calendar is a quiet wrong answer, and quiet wrong answers are
+    /// the ones that get acted on.
+    /// </para>
+    /// </summary>
+    private async Task<(List<string> Addresses, List<string> Unresolved, List<string> Ambiguous)>
+        ResolveAddressesAsync(Connection c, string who, CancellationToken ct)
+    {
+        var said = (who ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var addresses = new List<string>();
+        var unresolved = new List<string>();
+        var ambiguous = new List<string>();
+
+        var canLookUp = c.Capabilities.Any(x => x.Name == Capabilities.PeopleRead && x.Usable);
+
+        foreach (var one in said)
+        {
+            if (one.Contains('@', StringComparison.Ordinal)) { addresses.Add(one); continue; }
+
+            if (!canLookUp)
+            {
+                unresolved.Add($"{one} (give me an email address — {c.Label} can't look people up yet)");
+                continue;
+            }
+
+            List<Person> matches;
+            try { matches = (await people.FindAsync(c, one, 5, ct)).Where(p => p.Address.Length > 0).ToList(); }
+            catch (Exception) { unresolved.Add(one); continue; }
+
+            if (matches.Count == 0) { unresolved.Add(one); continue; }
+
+            // One clear winner, or Graph's relevance ranking puts somebody well ahead.
+            // Anything closer than that is a question, not a guess.
+            if (matches.Count == 1 || matches[0].Relevance >= matches[1].Relevance + 1.0)
+            {
+                addresses.Add(matches[0].Address);
+                continue;
+            }
+
+            ambiguous.Add($"Which {one}? "
+                + string.Join("; ", matches.Take(4).Select(m =>
+                    $"{Untrusted.Scrub(m.Name)} ({Untrusted.Scrub(m.Address)}"
+                    + (m.JobTitle is not null ? $", {Untrusted.Scrub(m.JobTitle)}" : "") + ")")));
+        }
+
+        return (addresses, unresolved, ambiguous);
+    }
+
+    private static string Period(BusyPeriod b)
+    {
+        var when = $"{Clock(b.Start)}–{Clock(b.End)}";
+
+        // Subject and location come back only where the viewer has more than free/busy
+        // access, so most of the time this is just the times — which is the honest answer.
+        if (b.Subject is { } subject) when += $" ({Untrusted.Scrub(subject)})";
+        if (b.Status is Availability.Tentative) when += " [tentative]";
+        if (b.Status is Availability.OutOfOffice) when += " [out of office]";
+
+        return when;
+    }
+
+    private static bool TryParseClock(string? said, TimeOnly fallback, out TimeOnly value)
+    {
+        if (string.IsNullOrWhiteSpace(said)) { value = fallback; return true; }
+        return TimeOnly.TryParse(said.Trim(), CultureInfo.InvariantCulture, out value);
+    }
+
+    private static string Clock(TimeOnly t) =>
+        (t.Minute == 0 ? t.ToString("h tt", CultureInfo.InvariantCulture)
+                       : t.ToString("h:mm tt", CultureInfo.InvariantCulture)).ToLowerInvariant();
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
