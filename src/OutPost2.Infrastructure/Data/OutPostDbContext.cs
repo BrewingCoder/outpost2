@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using OutPost2.Core.Auth;
 using OutPost2.Core.Code;
@@ -9,7 +10,7 @@ using OutPost2.Core.Users;
 namespace OutPost2.Infrastructure.Data;
 
 public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
-    : DbContext(options)
+    : DbContext(options), IDataProtectionKeyContext
 {
     public DbSet<User> Users => Set<User>();
     public DbSet<Connection> Connections => Set<Connection>();
@@ -21,6 +22,20 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
     public DbSet<Job> Jobs => Set<Job>();
     public DbSet<PreviewLink> PreviewLinks => Set<PreviewLink>();
     public DbSet<RepoAlias> RepoAliases => Set<RepoAlias>();
+
+    /// <summary>
+    /// ASP.NET Core's data protection key ring (OP2-56). Here because the alternative is
+    /// the container filesystem, which is new on every deploy: the ring would be
+    /// regenerated, and every auth cookie and antiforgery token minted before the deploy
+    /// would be rejected after it. Shared storage also means replicas agree on the ring
+    /// rather than each minting its own.
+    /// <para>
+    /// The rows hold key material, so they are encrypted at rest under the same Vault KEK
+    /// as the mailbox credentials — see <c>VaultXmlEncryptor</c>. A database copy on its
+    /// own decrypts nothing.
+    /// </para>
+    /// </summary>
+    public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -172,6 +187,17 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.Property(f => f.Sha256).HasMaxLength(64);
 
             e.HasIndex(f => new { f.UserId, f.ExpiresAt });
+        });
+
+        b.Entity<DataProtectionKey>(e =>
+        {
+            e.ToTable("data_protection_keys");
+            e.HasKey(k => k.Id);
+            e.Property(k => k.FriendlyName).HasMaxLength(200);
+
+            // No length cap: the value is a sealed XML element, and its size depends on
+            // the Vault envelope rather than on anything we choose.
+            e.Property(k => k.Xml).IsRequired();
         });
 
         b.Entity<Job>(e =>

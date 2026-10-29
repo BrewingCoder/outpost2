@@ -5,7 +5,9 @@ using Microsoft.AspNetCore.Authentication.OAuth.Claims;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.DataProtection;
 using OutPost2.Infrastructure.Data;
+using OutPost2.Infrastructure.Security;
 using OutPost2.Infrastructure.Users;
 using OutPost2.Infrastructure.Connections;
 using OutPost2.Web;
@@ -45,8 +47,25 @@ builder.Services.Configure<OutPost2.Infrastructure.Feedback.FeedbackOptions>(
 
 builder.Services.AddSingleton<OutPost2.Infrastructure.Security.IVaultTransitClient,
                               OutPost2.Infrastructure.Security.VaultTransitClient>();
-builder.Services.AddScoped<OutPost2.Infrastructure.Security.ICredentialProtector,
-                           OutPost2.Infrastructure.Security.CredentialProtector>();
+
+// Singleton rather than scoped: it holds no state, its only dependency is the singleton
+// Vault client, and the data protection key ring resolves it from the ROOT provider —
+// where a scoped registration cannot be resolved at all.
+builder.Services.AddSingleton<OutPost2.Infrastructure.Security.ICredentialProtector,
+                              OutPost2.Infrastructure.Security.CredentialProtector>();
+
+// OP2-56. Without this the key ring is generated fresh in the container filesystem on
+// every start, so a deploy rejects every auth cookie and every antiforgery token minted
+// before it — observed directly, as a preview session that stopped working across a
+// rebuild, and it would break an OAuth consent that happened to be in flight.
+//
+// The application name is fixed and must stay fixed: it is part of the purpose chain
+// every payload is derived with, so changing it has the same effect as losing the keys.
+builder.Services.AddDataProtection()
+    .SetApplicationName("outpost2")
+    .PersistKeysToDbContext<OutPostDbContext>()
+    .ProtectKeysWithVault();
+
 builder.Services.AddScoped<IConnectionStore, ConnectionStore>();
 builder.Services.AddScoped<IPendingConnectionStore, PendingConnectionStore>();
 builder.Services.AddScoped<IMicrosoftConnectionService, MicrosoftConnectionService>();
