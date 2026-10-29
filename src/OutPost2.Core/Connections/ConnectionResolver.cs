@@ -169,9 +169,17 @@ public sealed record ConnectionResolution
     {
         Kind = ResolutionKind.None,
         Degraded = degraded ?? [],
-        SpokenSummary = (degraded ?? []).Count > 0
-            ? $"{Names(degraded!)} could do that, but needs reconnecting first."
-            : $"No connection set up for that yet.",
+
+        // With exactly one candidate the full explanation is the whole answer, and
+        // summarising it as "needs reconnecting first" throws away the only part that
+        // says WHY — which, for a missing consent, is the part that gets it fixed.
+        SpokenSummary = (degraded ?? []) switch
+        {
+            [] => "No connection set up for that yet.",
+            [var only] => Explain(only, capability),
+            var many => $"{Names(many)} could do that, but none of them has permission for it yet. "
+                        + $"Name one and I'll tell you what it needs.",
+        },
     };
 
     public static ConnectionResolution Unavailable(Connection c, string capability) => new()
@@ -199,9 +207,50 @@ public sealed record ConnectionResolution
 
         var cap = c.Capabilities.FirstOrDefault(x => x.Name == capability);
         if (cap is null) return $"{c.Label} can't do that.";
-        if (!cap.Granted) return $"{c.Label} hasn't been given permission for that yet.";
+        if (!cap.Granted) return NotConsented(c, cap);
         if (!cap.Enabled) return $"That's switched off for {c.Label}. You can turn it on in settings.";
         return $"{c.Label} can't do that right now.";
+    }
+
+    /// <summary>
+    /// A missing CONSENT, said so plainly that neither a person nor a model can read it
+    /// as anything else (OP2-166, OP2-167).
+    /// <para>
+    /// The sentence this replaced was "work hasn't been given permission for that yet",
+    /// which names neither the permission nor the fix — and in the field it was not even
+    /// reached: a capability the connection predated was absent rather than ungranted, so
+    /// resolution fell through to "no connection called work", and an agent duly filed a
+    /// bug saying the connection lookup was broken. Hence both halves: the capability is
+    /// now always declared, and this says exactly which consent is missing and what
+    /// grants it.
+    /// </para>
+    /// <para>
+    /// Two sentences, because the next move differs. Never asked is one reconnect away.
+    /// Asked and refused may well be refused again, and the honest advice there is that
+    /// an administrator has to approve it — telling someone to reconnect in that case
+    /// sends them round a loop that cannot terminate.
+    /// </para>
+    /// </summary>
+    private static string NotConsented(Connection c, Capability cap)
+    {
+        // Lower-cased because the catalog phrase is written to start a sentence
+        // ("Read your calendar") and here it is always mid-sentence.
+        var verb = char.ToLowerInvariant(CapabilityCatalog.Verb(cap.Name)[0])
+                   + CapabilityCatalog.Verb(cap.Name)[1..];
+
+        if (cap.NeverRequested)
+            return $"{c.Label} has not consented to \"{verb}\" — that permission was added to "
+                   + $"Outpost after {c.Label} was connected, so it was never asked for. "
+                   + $"Reconnect {c.Label} on the connections page to grant it. "
+                   + $"The missing capability is {cap.Name}.";
+
+        var admin = c.Provider == ProviderKind.Microsoft
+            ? " If the sign-in doesn't offer it, your tenant administrator has to approve it first."
+            : "";
+
+        return $"{c.Label} has not consented to \"{verb}\" — the permission was asked for and "
+               + $"not granted. Reconnect {c.Label} on the connections page and approve it.{admin} "
+               + $"The missing capability is {cap.Name}.";
     }
 
     /// <summary>

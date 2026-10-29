@@ -23,6 +23,20 @@ public sealed class Capability
     public bool Enabled { get; set; }
 
     /// <summary>
+    /// This capability was never asked for, because it did not exist in OutPost2 when the
+    /// connection was made — it is declared onto the connection at read time so the
+    /// resolver can see it (OP2-166).
+    /// <para>
+    /// The difference from a plain ungranted capability is the user's next move, which is
+    /// why it is worth a flag rather than being collapsed into <see cref="Granted"/>.
+    /// Ungranted means we asked and the tenant said no, so reconnecting may well fail the
+    /// same way and an administrator is the real answer. Never-requested means nobody has
+    /// asked at all, and one reconnect fixes it.
+    /// </para>
+    /// </summary>
+    public bool NeverRequested { get; set; }
+
+    /// <summary>
     /// True where we cannot technically constrain ourselves to this capability — notably
     /// PAT providers, where whatever the user pasted is what we hold. The toggle is then
     /// our own restraint, not an enforced boundary, and the UI must say so honestly.

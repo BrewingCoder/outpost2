@@ -82,7 +82,29 @@ public class ConnectionsModel(IConnectionStore store) : PageModel
     /// The sentence shown when a connection cannot serve. Every one of them names the next
     /// step, because "expired" on its own tells the user nothing they can act on.
     /// </summary>
-    public static (string Text, string Action)? Alert(Connection c) => c.State switch
+    public static (string Text, string Action)? Alert(Connection c)
+    {
+        // A working connection can still be short of something, and until now nothing
+        // said so (OP2-166). Capabilities are a snapshot taken at connect time, so a
+        // mailbox connected before the calendar shipped has never been asked about it —
+        // and the first the user heard of that was a tool refusing to find the
+        // connection at all. Shown above the state cases because it is the only alert
+        // that applies to a connection in perfectly good standing.
+        var unasked = c.Capabilities.Count(x => x.NeverRequested);
+
+        if (c.State is ConnectionState.Active or ConnectionState.Consented && unasked > 0)
+            return ($"Outpost has gained {Plural(unasked, "permission")} since {c.Label} was connected, so "
+                    + $"{(unasked == 1 ? "it has" : "they have")} never been asked for. "
+                    + $"{(unasked == 1 ? "It is" : "They are")} marked below. Reconnect to grant "
+                    + $"{(unasked == 1 ? "it" : "them")} — your name, default and switches are kept.",
+                    "Reconnect");
+
+        return AlertForState(c);
+    }
+
+    private static string Plural(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
+
+    private static (string Text, string Action)? AlertForState(Connection c) => c.State switch
     {
         ConnectionState.Expired => (
             c.CredentialExpiresAt is { } when

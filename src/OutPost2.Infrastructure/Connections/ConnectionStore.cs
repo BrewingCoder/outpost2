@@ -69,16 +69,36 @@ public interface IConnectionStore
 
 public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector protector) : IConnectionStore
 {
+    // Every read goes through this (OP2-166). A connection's capability list is a
+    // snapshot of what the provider offered the day it was connected, so one made before
+    // the calendar shipped carries no calendar.read whatsoever — and a capability that is
+    // absent rather than ungranted is invisible to the resolver, which produced "no
+    // connection called work" for the connection the user was looking at.
+    //
+    // Nothing is saved. The declaration is true of the running build, not of the row, and
+    // writing it back would bake this build's capability list into data that outlives it.
+    private static Connection? Declare(Connection? connection)
+    {
+        if (connection is not null) CapabilityCatalog.DeclareMissing(connection);
+        return connection;
+    }
+
+    private static IReadOnlyList<Connection> Declare(List<Connection> connections)
+    {
+        foreach (var c in connections) CapabilityCatalog.DeclareMissing(c);
+        return connections;
+    }
+
     public async Task<IReadOnlyList<Connection>> ListAsync(Guid userId, CancellationToken ct = default) =>
-        await db.Connections.Where(c => c.UserId == userId)
+        Declare(await db.Connections.Where(c => c.UserId == userId)
             .OrderBy(c => c.Provider).ThenBy(c => c.Label)
-            .ToListAsync(ct);
+            .ToListAsync(ct));
 
     // Every read is scoped by userId as well as id. Looking a connection up by id alone
     // would let a guessed or leaked id reach another user's mailbox — the single most
     // damaging bug this class could have, so the signature makes it impossible to write.
-    public Task<Connection?> GetAsync(Guid userId, Guid connectionId, CancellationToken ct = default) =>
-        db.Connections.FirstOrDefaultAsync(c => c.UserId == userId && c.Id == connectionId, ct);
+    public async Task<Connection?> GetAsync(Guid userId, Guid connectionId, CancellationToken ct = default) =>
+        Declare(await db.Connections.FirstOrDefaultAsync(c => c.UserId == userId && c.Id == connectionId, ct));
 
     // RCS1155 wants StringComparison here and it cannot have it: this lambda is an
     // expression tree that Npgsql has to turn into SQL, and string.Equals with a
@@ -90,9 +110,9 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
     // case-insensitive at all, which matters more here than it looks: these labels are
     // spoken, and "Work" and "work" have to be the same mailbox.
 #pragma warning disable RCS1155
-    public Task<Connection?> FindByLabelAsync(Guid userId, string label, CancellationToken ct = default) =>
-        db.Connections.FirstOrDefaultAsync(
-            c => c.UserId == userId && c.Label.ToLower() == label.ToLower(), ct);
+    public async Task<Connection?> FindByLabelAsync(Guid userId, string label, CancellationToken ct = default) =>
+        Declare(await db.Connections.FirstOrDefaultAsync(
+            c => c.UserId == userId && c.Label.ToLower() == label.ToLower(), ct));
 #pragma warning restore RCS1155
 
     public async Task<Connection> UpsertAsync(
@@ -147,8 +167,15 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
             foreach (var incoming in capabilities)
             {
                 var current = existing.Capabilities.FirstOrDefault(x => x.Name == incoming.Name);
-                if (current is null) existing.Capabilities.Add(incoming);
-                else current.Granted = incoming.Granted;
+                if (current is null) { existing.Capabilities.Add(incoming); continue; }
+
+                current.Granted = incoming.Granted;
+
+                // It has now been asked for, whatever the answer was. Leaving this set
+                // would keep telling the user "nobody has asked yet, reconnect" after
+                // the reconnect they were told to do, which is the one piece of advice
+                // guaranteed not to help twice.
+                current.NeverRequested = false;
             }
 
             await db.SaveChangesAsync(ct);

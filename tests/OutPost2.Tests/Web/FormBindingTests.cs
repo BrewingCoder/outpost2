@@ -668,4 +668,51 @@ public sealed class FormBindingTests : IClassFixture<FormBindingTests.Factory>, 
         // And the alert tells them it is the admin's move, not theirs.
         Assert.Contains("Waiting on an administrator", html);
     }
+
+    [SkippableFact]
+    public async Task The_connections_page_says_which_permissions_were_never_requested()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OutPostDbContext>();
+            if (!await db.Users.AnyAsync(u => u.Id == StubAuth.UserId))
+            {
+                db.Users.Add(new OutPost2.Core.Users.User
+                {
+                    Id = StubAuth.UserId, GitHubUserId = 4242, GitHubLogin = "tester",
+                });
+            }
+
+            // Mail only — the shape of a connection made before the calendar, people and
+            // Teams tools existed. Until OP2-166 the page showed it as entirely healthy
+            // while every calendar tool denied the connection existed.
+            db.Connections.Add(new Connection
+            {
+                UserId = StubAuth.UserId,
+                Label = "work-predates-render",
+                Provider = ProviderKind.Microsoft,
+                Instance = "contoso.com",
+                AuthKind = AuthKind.OAuth2,
+                SealedCredential = "sealed",
+                State = ConnectionState.Active,
+                Capabilities =
+                [
+                    new() { Name = Capabilities.MailRead, Granted = true, Enabled = true },
+                ],
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var html = await _client.GetStringAsync("/connections");
+
+        Assert.Contains("work-predates-render", html);
+        Assert.Contains("Never requested", html);
+        Assert.Contains("has gained", html);
+
+        // The capability has to be on the page at all, which it only is because the
+        // store declares it on the way out.
+        Assert.Contains(Capabilities.CalendarRead, html);
+    }
 }

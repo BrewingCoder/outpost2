@@ -206,7 +206,14 @@
                                         </span>
                                         <span class="op-cap__scope">@cap.Name</span>
                                     </span>
-                                    @if (!cap.Granted)
+                                    @if (cap.NeverRequested)
+                                    {
+                                        @* Different words from "not granted" on purpose: nobody
+                                           refused this, nobody asked. One reconnect fixes it,
+                                           where a refusal may need an administrator (OP2-166). *@
+                                        <span class="op-cap__na">Never requested &mdash; reconnect to grant</span>
+                                    }
+                                    else if (!cap.Granted)
                                     {
                                         <span class="op-cap__na">Not granted by this token</span>
                                     }

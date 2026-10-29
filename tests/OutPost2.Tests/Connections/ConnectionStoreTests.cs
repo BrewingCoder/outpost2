@@ -425,4 +425,72 @@ public sealed class ConnectionStoreTests : IAsyncLifetime
         Assert.Equal(ConnectionState.NeedsAdminApproval,
             (await _store.GetAsync(_alice, alices.Id))!.State);
     }
+
+    // ── capabilities added after the connection was made (OP2-166) ───────────
+
+    [SkippableFact]
+    public async Task A_connection_stored_before_a_capability_existed_comes_back_declaring_it()
+    {
+        Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
+
+        // Add() writes mail.read and nothing else, which is exactly the shape of the two
+        // live connections that produced "No connection called work" for a calendar
+        // request: the capability was absent rather than ungranted, so the resolver
+        // could not see the connection at all.
+        var stored = await Add(_alice, "work");
+        Assert.Single(stored.Capabilities);
+
+        foreach (var read in new[]
+                 {
+                     (await _store.ListAsync(_alice)).Single(),
+                     (await _store.GetAsync(_alice, stored.Id))!,
+                     (await _store.FindByLabelAsync(_alice, "work"))!,
+                 })
+        {
+            var cal = Assert.Single(read.Capabilities, x => x.Name == Capabilities.CalendarRead);
+            Assert.False(cal.Granted);
+            Assert.True(cal.NeverRequested);
+        }
+    }
+
+    [SkippableFact]
+    public async Task Declaring_a_missing_capability_is_not_written_back_to_the_row()
+    {
+        Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
+
+        // The declaration is true of the running build, not of the row. Persisting it
+        // would bake this build's capability list into data that outlives it — and the
+        // next build to drop a capability would leave a dead entry nobody can explain.
+        var stored = await Add(_alice, "work");
+        _ = await _store.ListAsync(_alice);
+
+        await using var fresh = new OutPostDbContext(new DbContextOptionsBuilder<OutPostDbContext>()
+            .UseNpgsql(Admin.Replace("Database=postgres", $"Database={_dbName}")).Options);
+
+        var row = await fresh.Connections.AsNoTracking().SingleAsync(c => c.Id == stored.Id);
+        Assert.Single(row.Capabilities);
+        Assert.Equal(Capabilities.MailRead, row.Capabilities[0].Name);
+    }
+
+    [SkippableFact]
+    public async Task Reconnecting_stops_calling_a_capability_never_requested()
+    {
+        Skip.IfNot(_available, "Postgres not reachable on localhost:5435");
+
+        var stored = await Add(_alice, "work");
+        _ = await _store.GetAsync(_alice, stored.Id);   // declares calendar.read in memory
+
+        // The reconnect the user was told to do. Whatever the tenant answered, the
+        // question has now been asked — continuing to say "nobody has asked yet, try
+        // reconnecting" is the one piece of advice guaranteed not to help twice.
+        await _store.UpsertAsync(_alice, ProviderKind.Microsoft, "work.tenant", "work-acct",
+            "work", AuthKind.OAuth2, "credential-blob",
+            [new Capability { Name = Capabilities.CalendarRead, Granted = true, Enabled = true }]);
+
+        var after = (await _store.GetAsync(_alice, stored.Id))!;
+        var cal = after.Capabilities.Single(x => x.Name == Capabilities.CalendarRead);
+
+        Assert.True(cal.Granted);
+        Assert.False(cal.NeverRequested);
+    }
 }

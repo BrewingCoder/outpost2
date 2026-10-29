@@ -61,6 +61,73 @@ public static class CapabilityCatalog
         [Capabilities.CodeWrite]   = new("Comment, review and push", CapabilityRisk.ActsAsYou),
     };
 
+    /// <summary>
+    /// Every capability a provider offers IN THIS BUILD, in the order they are shown.
+    /// <para>
+    /// This exists because a connection's capability list is a snapshot taken when it was
+    /// connected, and adding a capability to the code does not go back and add it to rows
+    /// written by an older build. A connection made before the calendar existed holds no
+    /// <c>calendar.read</c> at all — not an ungranted one, none — and the resolver's
+    /// "cannot serve this" list is built from connections that DECLARE the capability, so
+    /// such a connection fell out of every list and answered "no connection called work"
+    /// for a connection the user was looking at. See OP2-166.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<string> DeclaredFor(ProviderKind provider) => provider switch
+    {
+        ProviderKind.Microsoft =>
+        [
+            Capabilities.MailRead, Capabilities.MailWrite, Capabilities.MailSend,
+            Capabilities.CalendarRead, Capabilities.CalendarWrite,
+            Capabilities.PeopleRead, Capabilities.ContactsWrite,
+            Capabilities.ChatRead, Capabilities.ChatSend,
+        ],
+        ProviderKind.YouTrack =>
+            [Capabilities.IssuesRead, Capabilities.IssuesWrite, Capabilities.IssuesAdmin],
+        ProviderKind.GitHub =>
+            [Capabilities.CodeRead, Capabilities.CodeWrite],
+        _ => [],
+    };
+
+    /// <summary>
+    /// Adds any capability this provider now offers that the connection does not carry,
+    /// ungranted and marked <see cref="Capability.NeverRequested"/>.
+    /// <para>
+    /// Deliberately in memory, on the way out of the store, rather than as a migration.
+    /// A migration fixes the rows that exist on the day it runs; this keeps being right
+    /// for every capability added afterwards, and it cannot drift from the list above
+    /// because it IS the list above. It never touches an existing entry, so a grant or a
+    /// user's switch is never overwritten by it.
+    /// </para>
+    /// </summary>
+    /// <returns>True if anything was added, i.e. the connection predates a capability.</returns>
+    public static bool DeclareMissing(Connection connection)
+    {
+        var added = false;
+
+        foreach (var name in DeclaredFor(connection.Provider))
+        {
+            if (connection.Capabilities.Any(c => c.Name == name)) continue;
+
+            connection.Capabilities.Add(new Capability
+            {
+                Name = name,
+                Granted = false,
+
+                // Enabled, not off. The switch is the user's statement about a capability
+                // they have; this one they have never been offered, so defaulting it off
+                // would mean a reconnect granted the permission and still did nothing
+                // until they found a second switch they never knew they had turned off.
+                Enabled = true,
+                NeverRequested = true,
+            });
+
+            added = true;
+        }
+
+        return added;
+    }
+
     /// <summary>A plain verb phrase. Falls back to the scope code rather than inventing one.</summary>
     public static string Verb(string capability) =>
         Map.TryGetValue(capability, out var e) ? e.Phrase : capability;
