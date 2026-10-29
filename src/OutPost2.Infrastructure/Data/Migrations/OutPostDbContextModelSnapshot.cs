@@ -422,6 +422,9 @@ namespace OutPost2.Infrastructure.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -457,6 +460,9 @@ namespace OutPost2.Infrastructure.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)");
+
+                    b.Property<DateTimeOffset?>("LastProgressAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Payload")
                         .IsRequired()
@@ -560,6 +566,8 @@ namespace OutPost2.Infrastructure.Data.Migrations
                             b1.Property<string>("Name")
                                 .IsRequired()
                                 .HasMaxLength(60);
+
+                            b1.Property<bool>("NeverRequested");
 
                             b1.HasKey("ConnectionId", "__synthesizedOrdinal");
 

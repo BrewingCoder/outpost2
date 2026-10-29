@@ -26,6 +26,22 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
     /// </summary>
     private static readonly TimeSpan Idle = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// How long a claimed job may go without a heartbeat before another worker takes it
+    /// back (OP2-101). Progress is reported once per 8 MiB chunk, so five minutes of
+    /// silence is a dead process rather than a slow one.
+    /// </summary>
+    private static readonly TimeSpan Abandoned = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Picked up this many times and still not finishing, a job is failed rather than
+    /// requeued again. Something about it is killing the worker.
+    /// </summary>
+    private const int MaxAttempts = 5;
+
+    private static readonly TimeSpan SweepEvery = TimeSpan.FromMinutes(1);
+    private DateTimeOffset _lastSweep = DateTimeOffset.MinValue;
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         log.LogInformation("Job runner started.");
@@ -36,6 +52,14 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
             {
                 await using var scope = scopes.CreateAsyncScope();
                 var jobs = scope.ServiceProvider.GetRequiredService<IJobService>();
+
+                // Swept on the idle path, so a busy queue is never slowed by it and a
+                // deploy in the middle of an upload is picked up within the minute.
+                if (DateTimeOffset.UtcNow - _lastSweep > SweepEvery)
+                {
+                    _lastSweep = DateTimeOffset.UtcNow;
+                    await jobs.RequeueAbandonedAsync(Abandoned, MaxAttempts, ct);
+                }
 
                 var job = await jobs.ClaimNextAsync(ct);
                 if (job is null)
@@ -122,10 +146,22 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
 
         await jobs.UpdateProgressAsync(job.Id, JobState.Staging, 0, "preparing", ct);
 
+        // What a previous attempt got as far as. Null on a first run, and unreadable
+        // state is treated as none — a resume that cannot be parsed is a send that
+        // starts again, which is slow, where guessing at it is a send that goes wrong.
+        SendResumeState? resume = null;
+        if (!string.IsNullOrWhiteSpace(job.ResumeState))
+        {
+            try { resume = JsonSerializer.Deserialize<SendResumeState>(job.ResumeState); }
+            catch (JsonException) { resume = null; }
+        }
+
         var outcome = await sender.SendAsync(connection, new Core.Mail.OutgoingMail
         {
             To = payload.To, Cc = payload.Cc, Subject = payload.Subject, Body = payload.Body, IsHtml = true,
-        }, attachments, progress, ct);
+        }, attachments, resume,
+            (state, c) => jobs.SetResumeStateAsync(job.Id, JsonSerializer.Serialize(state), c),
+            progress, ct);
 
         await jobs.CompleteAsync(job.Id, outcome.Ok, outcome.Error, outcome.Retryable, ct);
     }

@@ -45,6 +45,23 @@ public sealed class Job
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
 
+    /// <summary>
+    /// Last sign of life from the worker running this job (OP2-101).
+    /// <para>
+    /// A heartbeat rather than <see cref="StartedAt"/>, because the question being asked
+    /// is "did the process holding this die" and a legitimately long upload has been
+    /// started for just as long as an abandoned one. Progress is reported per chunk, so
+    /// silence here really is silence.
+    /// </para>
+    /// </summary>
+    public DateTimeOffset? LastProgressAt { get; set; }
+
+    /// <summary>
+    /// How many times this job has been picked up. Carried so a job that kills its
+    /// worker cannot be requeued forever — the queue would spend every cycle on it.
+    /// </summary>
+    public int Attempts { get; set; }
+
     public bool IsTerminal => State is JobState.Sent or JobState.Failed or JobState.Cancelled;
 
     /// <summary>

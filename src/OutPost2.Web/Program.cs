@@ -70,6 +70,12 @@ builder.Services.AddScoped<IConnectionStore, ConnectionStore>();
 builder.Services.AddScoped<IPendingConnectionStore, PendingConnectionStore>();
 builder.Services.AddScoped<IMicrosoftConnectionService, MicrosoftConnectionService>();
 builder.Services.AddHttpClient("graph").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(60));
+
+// Upload-session chunks, which carry their own authorisation in the URL and must NOT
+// be given our bearer token. Ten minutes because one chunk is 8 MiB over whatever
+// connection the server happens to have (OP2-101); the sender sets this itself, and
+// registering the name keeps it out of the default client's configuration.
+builder.Services.AddHttpClient("graph-upload").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromMinutes(10));
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMicrosoftConnectionServiceAccessor>(
     sp => sp.GetRequiredService<IMicrosoftConnectionService>());
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailService, OutPost2.Infrastructure.Mail.MailService>();
