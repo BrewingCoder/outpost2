@@ -93,7 +93,7 @@ public sealed class OAuthService(OutPostDbContext db) : IOAuthService
 
         record.ConsumedAt = DateTimeOffset.UtcNow;
 
-        var grant = await IssueTokenAsync(record.UserId, clientId, record.ConnectionScope, ct);
+        var grant = IssueToken(record.UserId, clientId, record.ConnectionScope);
         await db.SaveChangesAsync(ct);
         return grant;
     }
@@ -110,13 +110,16 @@ public sealed class OAuthService(OutPostDbContext db) : IOAuthService
         // after use cannot be distinguished from a stolen one being replayed.
         existing.RevokedAt = DateTimeOffset.UtcNow;
 
-        var grant = await IssueTokenAsync(existing.UserId, clientId, existing.ConnectionScope, ct, existing.Label);
+        var grant = IssueToken(existing.UserId, clientId, existing.ConnectionScope, existing.Label);
         await db.SaveChangesAsync(ct);
         return grant;
     }
 
-    private async Task<TokenGrant> IssueTokenAsync(
-        Guid userId, string clientId, string connectionScope, CancellationToken ct, string? label = null)
+    // Not async, and no CancellationToken: it adds a row to the change tracker and
+    // nothing here goes near the network. The caller's SaveChangesAsync is what can be
+    // cancelled, and taking a token that is never observed says otherwise.
+    private TokenGrant IssueToken(
+        Guid userId, string clientId, string connectionScope, string? label = null)
     {
         var access = Base64Url(RandomNumberGenerator.GetBytes(32));
         var refresh = Base64Url(RandomNumberGenerator.GetBytes(32));
@@ -134,7 +137,6 @@ public sealed class OAuthService(OutPostDbContext db) : IOAuthService
             Label = label,
         });
 
-        await Task.CompletedTask;
         return new TokenGrant(access, refresh, (int)AccessLifetime.TotalSeconds);
     }
 

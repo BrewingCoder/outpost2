@@ -61,7 +61,7 @@ public static class PrivateCaTrust
 
                 if (loaded.Count == 0) loaded.Add(X509CertificateLoader.LoadCertificateFromFile(path));
 
-                foreach (var cert in loaded) roots.Add(cert);
+                roots.AddRange(loaded);
                 log?.LogInformation("Trusting {Count} additional root(s) from {Path}.", loaded.Count, path);
             }
             catch (Exception ex)

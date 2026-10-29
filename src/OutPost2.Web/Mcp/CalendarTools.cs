@@ -513,7 +513,7 @@ public sealed class CalendarTools(
                 {
                     // NOT "free". An address Exchange cannot answer for is the one case
                     // where saying nothing would actively mislead.
-                    sb.AppendLine($"unknown — {Untrusted.Scrub(r.Error!)}");
+                    sb.AppendLine($"unknown — {Untrusted.Scrub(r.Error)}");
                     continue;
                 }
 
@@ -685,10 +685,6 @@ public sealed class CalendarTools(
         return TimeOnly.TryParse(said.Trim(), CultureInfo.InvariantCulture, out value);
     }
 
-    private static string Clock(TimeOnly t) =>
-        (t.Minute == 0 ? t.ToString("h tt", CultureInfo.InvariantCulture)
-                       : t.ToString("h:mm tt", CultureInfo.InvariantCulture)).ToLowerInvariant();
-
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private sealed record Resolved(ItemRef? Item, Connection? Connection, string? Problem);
@@ -818,6 +814,11 @@ public sealed class CalendarTools(
     /// <summary>12-hour, because that is how the time gets read out loud.</summary>
     private static string Clock(DateTimeOffset t) =>
         t.Minute == 0 ? t.ToString("h tt").ToLowerInvariant() : t.ToString("h:mm tt").ToLowerInvariant();
+
+    /// <inheritdoc cref="Clock(DateTimeOffset)" />
+    private static string Clock(TimeOnly t) =>
+        (t.Minute == 0 ? t.ToString("h tt", CultureInfo.InvariantCulture)
+                       : t.ToString("h:mm tt", CultureInfo.InvariantCulture)).ToLowerInvariant();
 
     private static string DayHeading(DateTimeOffset t)
     {

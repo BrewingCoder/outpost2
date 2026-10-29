@@ -16,7 +16,7 @@ namespace OutPost2.Web.Pages;
 /// </summary>
 public static class Icons
 {
-    private static IHtmlContent Svg(string body, string? extraClass = null) =>
+    private static HtmlString Svg(string body, string? extraClass = null) =>
         new HtmlString(
             $"""<svg class="op-ico{(extraClass is null ? "" : " " + extraClass)}" viewBox="0 0 16 16" aria-hidden="true">{body}</svg>""");
 

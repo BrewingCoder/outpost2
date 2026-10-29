@@ -44,7 +44,12 @@ public interface IObjectStore
 
 public sealed class S3ObjectStore : IObjectStore, IDisposable
 {
+    // CA1859 wants AmazonS3Client here for the devirtualised calls. Declined: the
+    // interface is what lets a test or a second backend stand in for Garage, and the
+    // saving is unmeasurable next to the network round trip on the other side of it.
+#pragma warning disable CA1859
     private readonly IAmazonS3 _s3;
+#pragma warning restore CA1859
     private readonly StorageOptions _o;
     private readonly ILogger<S3ObjectStore> _log;
 

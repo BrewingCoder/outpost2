@@ -330,7 +330,7 @@ app.MapWhen(c => c.Request.Path.StartsWithSegments("/mcp"),
         branch.UseEndpoints(e => e.MapMcp("/mcp"));
     });
 
-app.MapGet("/signin/github", (HttpContext ctx, GitHubOptions o) =>
+app.MapGet("/signin/github", (GitHubOptions o) =>
     o.IsConfigured
         ? Results.Challenge(
             new() { RedirectUri = "/" },

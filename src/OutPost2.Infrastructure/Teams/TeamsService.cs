@@ -220,7 +220,7 @@ public sealed class TeamsService(
         };
     }
 
-    private async Task<Chat> OneChatAsync(
+    private static async Task<Chat> OneChatAsync(
         HttpClient http, Connection connection, string chatId, CancellationToken ct)
     {
         var url = $"chats/{Uri.EscapeDataString(chatId)}?$expand=members";

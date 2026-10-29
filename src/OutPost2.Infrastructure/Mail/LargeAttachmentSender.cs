@@ -160,7 +160,7 @@ public sealed class LargeAttachmentSender(
                 foreach (var a in small)
                 {
                     await using var s = await staging.OpenAsync(a, ct);
-                    using var ms = new MemoryStream();
+                    await using var ms = new MemoryStream();
                     await s.CopyToAsync(ms, ct);
 
                     inline.Add(new
@@ -187,7 +187,7 @@ public sealed class LargeAttachmentSender(
                     foreach (var a in small)
                     {
                         await using var s = await staging.OpenAsync(a, ct);
-                        using var ms = new MemoryStream();
+                        await using var ms = new MemoryStream();
                         await s.CopyToAsync(ms, ct);
 
                         arr.Add(new System.Text.Json.Nodes.JsonObject
@@ -320,7 +320,7 @@ public sealed class LargeAttachmentSender(
         }
 
         static int Percent(int done, int total, int inner) =>
-            total == 0 ? 90 : Math.Clamp((int)((done + inner / 100.0) / total * 90), 0, 90);
+            total == 0 ? 90 : Math.Clamp((int)((done + (inner / 100.0)) / total * 90), 0, 90);
     }
 
     /// <summary>Opens an upload session for one attachment. Null if Graph refuses.</summary>
@@ -390,7 +390,7 @@ public sealed class LargeAttachmentSender(
 
             // Ranged read straight from object storage — the file is never held whole.
             await using var slice = await staging.OpenRangeAsync(file, sent, end, ct);
-            using var buffer = new MemoryStream(length);
+            await using var buffer = new MemoryStream(length);
             await slice.CopyToAsync(buffer, ct);
             buffer.Position = 0;
 

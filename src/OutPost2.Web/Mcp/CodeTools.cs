@@ -80,7 +80,7 @@ public sealed class CodeTools(
 
         if (t.AwaitingMyReview == 0 && t.MyOpenPullRequests == 0 && t.IssuesAssignedToMe == 0)
             return $"Nothing waiting on you in {c.Label}. No reviews requested, no open pull requests " +
-                   $"of your own, no issues assigned.";
+                   "of your own, no issues assigned.";
 
         var sb = new StringBuilder($"In {c.Label}, as {t.Login}:\n");
 
@@ -233,7 +233,7 @@ public sealed class CodeTools(
                 return string.IsNullOrWhiteSpace(match)
                     ? $"{c.Label} can see no repositories at all. The token may lack the repo scope."
                     : $"Nothing matching '{match}' among the {all.Count} repositories {c.Label} can see, " +
-                      $"and no configured name matches either.";
+                      "and no configured name matches either.";
             }
 
             if (hits.Count == 0)

@@ -31,8 +31,8 @@ public static class ConnectionResolver
         // Only usable connections are ever candidates: the right answer to "check work email"
         // when work needs re-auth is to say so, not to silently answer from home.
         var capable = candidates
-            .Where(c => c.State is ConnectionState.Active or ConnectionState.Consented)
-            .Where(c => c.Capabilities.Any(x => x.Name == capability && x.Usable))
+            .Where(c => c.State is ConnectionState.Active or ConnectionState.Consented
+                        && c.Capabilities.Any(x => x.Name == capability && x.Usable))
             .ToList();
 
         // Everything that DECLARES the capability but cannot currently serve it — whether
@@ -77,12 +77,12 @@ public static class ConnectionResolver
         // and that has to hold at one connection as well as at five — otherwise adding a
         // second tracker silently changes what the first unlabelled request does.
         var preferred = capable.FirstOrDefault(c => c.IsDefaultForProvider);
-        if (preferred is null) return ConnectionResolution.Ambiguous(capable, capability);
+        if (preferred is null) return ConnectionResolution.Ambiguous(capable);
 
         // A default is a convenience for reading. It is not standing permission to write
         // from an identity the user did not name in the moment, and other people see which
         // identity acted, so once there is a choice to get wrong, ask.
-        if (isWrite && capable.Count > 1) return ConnectionResolution.Ambiguous(capable, capability);
+        if (isWrite && capable.Count > 1) return ConnectionResolution.Ambiguous(capable);
 
         return ConnectionResolution.Single(preferred, unusable);
     }
@@ -152,7 +152,7 @@ public sealed record ConnectionResolution
         SpokenSummary = $"Checking {Names(cs)}." + DegradedSuffix(degraded ?? []),
     };
 
-    public static ConnectionResolution Ambiguous(IReadOnlyList<Connection> cs, string capability) => new()
+    public static ConnectionResolution Ambiguous(IReadOnlyList<Connection> cs) => new()
     {
         Kind = ResolutionKind.Ambiguous,
         Connections = cs,
@@ -178,7 +178,7 @@ public sealed record ConnectionResolution
             [] => "No connection set up for that yet.",
             [var only] => Explain(only, capability),
             var many => $"{Names(many)} could do that, but none of them has permission for it yet. "
-                        + $"Name one and I'll tell you what it needs.",
+                        + "Name one and I'll tell you what it needs.",
         },
     };
 

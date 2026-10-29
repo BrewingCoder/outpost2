@@ -656,6 +656,10 @@ public sealed class CalendarService(
         }
     }
 
+    // S3398 would move this inside GraphEvent, which is where its only caller lives.
+    // Left here beside ParseShowAs and the other Graph-string parsers: they are one
+    // family and reading them together is what makes an unmapped value obvious.
+#pragma warning disable S3398
     private static InviteStatus ParseResponse(string? r) => r?.ToLowerInvariant() switch
     {
         "organizer" => InviteStatus.Organiser,
@@ -665,6 +669,7 @@ public sealed class CalendarService(
         "notresponded" => InviteStatus.NotResponded,
         _ => InviteStatus.None,
     };
+#pragma warning restore S3398
 
     private static Availability ParseShowAs(string? s) => s?.ToLowerInvariant() switch
     {

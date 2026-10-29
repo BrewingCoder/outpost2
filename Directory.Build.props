@@ -22,6 +22,21 @@
     <IsTestProject Condition="$(MSBuildProjectName.EndsWith('Tests'))">true</IsTestProject>
   </PropertyGroup>
 
+  <!--
+    Two of OP2-154's decisions that .editorconfig cannot carry out, for the same reason
+    in both cases: the diagnostic is not attributed to a file any section header matches.
+
+    SYSLIB1044 is raised by the regex source generator against the compilation rather
+    than through a syntax tree. S3267 against a Razor view is raised on the generated
+    tree and mapped back to the .cshtml, so neither [*.cs] nor [*.cshtml] reaches it.
+
+    The reasoning for both is written out in .editorconfig beside the rules it could
+    carry; these two lines are the mechanism, not the decision.
+  -->
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);SYSLIB1044;S3267</NoWarn>
+  </PropertyGroup>
+
   <ItemGroup Condition="'$(IncludeSecurityAnalyzers)' == 'true' AND '$(IsTestProject)' != 'true'">
     <PackageReference Include="SonarAnalyzer.CSharp" Version="10.25.0.139117" PrivateAssets="all" IncludeAssets="analyzers;build" />
     <PackageReference Include="Roslynator.Analyzers" Version="4.15.0" PrivateAssets="all" IncludeAssets="analyzers;build" />

@@ -186,7 +186,7 @@ public sealed class GitHubService(
         "search/issues?advanced_search=true&sort=updated&order=desc" +
         $"&per_page={Math.Clamp(perPage, 1, 100)}&q={Uri.EscapeDataString(query)}";
 
-    private async Task<SearchResponse> SearchAsync(HttpClient http, string query, int perPage, CancellationToken ct)
+    private static async Task<SearchResponse> SearchAsync(HttpClient http, string query, int perPage, CancellationToken ct)
     {
         using var resp = await http.GetAsync(SearchUrl(query, perPage), ct);
 
@@ -201,7 +201,7 @@ public sealed class GitHubService(
         return await resp.Content.ReadFromJsonAsync<SearchResponse>(ct) ?? new SearchResponse(0, []);
     }
 
-    private async Task<int> CountAsync(HttpClient http, string query, CancellationToken ct) =>
+    private static async Task<int> CountAsync(HttpClient http, string query, CancellationToken ct) =>
         (await SearchAsync(http, query, 1, ct)).TotalCount;
 
     public async Task<CodeTriage> TriageAsync(Connection c, CancellationToken ct = default)
@@ -385,7 +385,7 @@ public sealed class GitHubService(
     /// rather than guessing from the path (a file with no extension and a directory look
     /// identical from outside).
     /// </summary>
-    private async Task<JsonElement> ContentsAsync(
+    private static async Task<JsonElement> ContentsAsync(
         HttpClient http, string repo, string? path, string? gitRef, CancellationToken ct)
     {
         var url = $"repos/{repo.Trim('/')}/contents/{EncodePath(path)}"

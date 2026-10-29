@@ -42,11 +42,11 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
     private static readonly TimeSpan SweepEvery = TimeSpan.FromMinutes(1);
     private DateTimeOffset _lastSweep = DateTimeOffset.MinValue;
 
-    protected override async Task ExecuteAsync(CancellationToken ct)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         log.LogInformation("Job runner started.");
 
-        while (!ct.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
@@ -58,19 +58,19 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
                 if (DateTimeOffset.UtcNow - _lastSweep > SweepEvery)
                 {
                     _lastSweep = DateTimeOffset.UtcNow;
-                    await jobs.RequeueAbandonedAsync(Abandoned, MaxAttempts, ct);
+                    await jobs.RequeueAbandonedAsync(Abandoned, MaxAttempts, stoppingToken);
                 }
 
-                var job = await jobs.ClaimNextAsync(ct);
+                var job = await jobs.ClaimNextAsync(stoppingToken);
                 if (job is null)
                 {
-                    await Task.Delay(Idle, ct);
+                    await Task.Delay(Idle, stoppingToken);
                     continue;
                 }
 
-                await RunAsync(scope.ServiceProvider, jobs, job, ct);
+                await RunAsync(scope.ServiceProvider, jobs, job, stoppingToken);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 break;
             }
@@ -79,7 +79,7 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
                 // The loop must survive anything a single job can throw, or one bad payload
                 // stops every other user's work.
                 log.LogError(ex, "Job runner loop error.");
-                await Task.Delay(Idle, ct);
+                await Task.Delay(Idle, stoppingToken);
             }
         }
 
@@ -171,37 +171,37 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
 public sealed class HousekeepingService(IServiceScopeFactory scopes, ILogger<HousekeepingService> log)
     : BackgroundService
 {
-    protected override async Task ExecuteAsync(CancellationToken ct)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Wait before the first pass so startup is never slowed by housekeeping.
-        await Task.Delay(TimeSpan.FromMinutes(1), ct);
+        await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
 
-        while (!ct.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 await using var scope = scopes.CreateAsyncScope();
 
                 var purged = await scope.ServiceProvider
-                    .GetRequiredService<IStagingService>().PurgeExpiredAsync(ct);
+                    .GetRequiredService<IStagingService>().PurgeExpiredAsync(stoppingToken);
 
                 var pendings = await scope.ServiceProvider
-                    .GetRequiredService<IPendingConnectionStore>().PurgeExpiredAsync(ct);
+                    .GetRequiredService<IPendingConnectionStore>().PurgeExpiredAsync(stoppingToken);
 
                 var db = scope.ServiceProvider.GetRequiredService<OutPostDbContext>();
                 var codes = await db.OAuthAuthCodes
                     .Where(c => c.ExpiresAt < DateTimeOffset.UtcNow.AddHours(-1))
-                    .ExecuteDeleteAsync(ct);
+                    .ExecuteDeleteAsync(stoppingToken);
 
                 if (purged + pendings + codes > 0)
                     log.LogInformation(
                         "Housekeeping removed {Files} staged file(s), {Pendings} pending connection(s), {Codes} auth code(s).",
                         purged, pendings, codes);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception ex) { log.LogError(ex, "Housekeeping pass failed."); }
 
-            await Task.Delay(TimeSpan.FromHours(1), ct);
+            await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
         }
     }
 }

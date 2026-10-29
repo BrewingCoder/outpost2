@@ -14,6 +14,12 @@ namespace OutPost2.Infrastructure.Mail;
 /// </summary>
 public static partial class HtmlToText
 {
+    // The source generator cannot compile a backreference, so this one falls back to
+    // the interpreted engine (SYSLIB1044, answered in .editorconfig — the generator
+    // reports it against the compilation, where a pragma here cannot reach it). Kept as
+    // written: the backreference is what makes the closing tag match the opening one,
+    // and without it a stray </style> ends a <script> block and the rest of the page
+    // comes through as text.
     [GeneratedRegex(@"<(script|style|head|svg)\b[^>]*>.*?</\1>",
         RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex NonContentBlocks();

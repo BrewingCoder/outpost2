@@ -427,7 +427,7 @@ public sealed class MicrosoftConnectionService(
         // What Entra actually granted may be narrower than what we asked for, so record the
         // response rather than our request. Claiming a capability we were refused turns a
         // clear consent problem into a confusing runtime failure later.
-        var granted = (result.Scopes ?? []).Select(s => s.Split('/').Last()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var granted = (result.Scopes ?? []).Select(s => s.Split('/')[^1]).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var capabilities = CapabilitiesFor(granted);
 

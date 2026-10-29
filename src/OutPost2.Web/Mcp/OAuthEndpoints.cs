@@ -17,6 +17,15 @@ namespace OutPost2.Web.Mcp;
 /// </summary>
 public static class OAuthEndpoints
 {
+    // Fixed values from RFC 8414 and RFC 9728. Hoisted out of the handlers because they
+    // are constants of the protocol rather than of a request, and a discovery document
+    // should not allocate six arrays to say the same thing it said last time.
+    private static readonly string[] BearerMethods = ["header"];
+    private static readonly string[] ResponseTypes = ["code"];
+    private static readonly string[] GrantTypes = ["authorization_code", "refresh_token"];
+    private static readonly string[] CodeChallengeMethods = ["S256"];
+    private static readonly string[] NoClientAuth = ["none"];
+
     public static void MapMcpOAuth(this WebApplication app, string publicBaseUrl)
     {
         var baseUrl = publicBaseUrl.TrimEnd('/');
@@ -28,14 +37,14 @@ public static class OAuthEndpoints
         {
             resource = baseUrl,
             authorization_servers = new[] { baseUrl },
-            bearer_methods_supported = new[] { "header" },
+            bearer_methods_supported = BearerMethods,
         })).AllowAnonymous();
 
         app.MapGet("/.well-known/oauth-protected-resource/mcp", () => Results.Json(new
         {
             resource = $"{baseUrl}/mcp",
             authorization_servers = new[] { baseUrl },
-            bearer_methods_supported = new[] { "header" },
+            bearer_methods_supported = BearerMethods,
         })).AllowAnonymous();
 
         // RFC 8414.
@@ -45,12 +54,12 @@ public static class OAuthEndpoints
             authorization_endpoint = $"{baseUrl}/oauth/authorize",
             token_endpoint = $"{baseUrl}/oauth/token",
             registration_endpoint = $"{baseUrl}/oauth/register",
-            response_types_supported = new[] { "code" },
-            grant_types_supported = new[] { "authorization_code", "refresh_token" },
+            response_types_supported = ResponseTypes,
+            grant_types_supported = GrantTypes,
             // S256 only. "plain" offers no protection and exists solely for clients that
             // cannot hash, which is not a category we need to serve.
-            code_challenge_methods_supported = new[] { "S256" },
-            token_endpoint_auth_methods_supported = new[] { "none" },
+            code_challenge_methods_supported = CodeChallengeMethods,
+            token_endpoint_auth_methods_supported = NoClientAuth,
         })).AllowAnonymous();
 
         // ── dynamic client registration (RFC 7591) ──────────────────────────
@@ -68,7 +77,7 @@ public static class OAuthEndpoints
                 client_name = client.ClientName,
                 redirect_uris = client.Redirects(),
                 token_endpoint_auth_method = "none",
-                grant_types = new[] { "authorization_code", "refresh_token" },
+                grant_types = GrantTypes,
             }, statusCode: 201);
         }).AllowAnonymous();
 

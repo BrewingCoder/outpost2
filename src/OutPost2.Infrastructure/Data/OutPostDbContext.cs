@@ -37,9 +37,9 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
     /// </summary>
     public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
 
-    protected override void OnModelCreating(ModelBuilder b)
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        b.Entity<User>(e =>
+        modelBuilder.Entity<User>(e =>
         {
             e.ToTable("users");
             e.HasKey(u => u.Id);
@@ -51,7 +51,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.Property(u => u.AvatarUrl).HasMaxLength(500);
         });
 
-        b.Entity<RepoAlias>(e =>
+        modelBuilder.Entity<RepoAlias>(e =>
         {
             e.ToTable("repo_aliases");
             e.HasKey(a => a.Id);
@@ -70,7 +70,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.HasIndex(a => new { a.ConnectionId, a.Alias }).IsUnique();
         });
 
-        b.Entity<Connection>(e =>
+        modelBuilder.Entity<Connection>(e =>
         {
             e.ToTable("connections");
             e.HasKey(c => c.Id);
@@ -125,7 +125,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             });
         });
 
-        b.Entity<PendingConnection>(e =>
+        modelBuilder.Entity<PendingConnection>(e =>
         {
             e.ToTable("pending_connections");
             e.HasKey(p => p.State);
@@ -140,7 +140,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.HasIndex(p => p.ExpiresAt);
         });
 
-        b.Entity<OAuthClient>(e =>
+        modelBuilder.Entity<OAuthClient>(e =>
         {
             e.ToTable("oauth_clients");
             e.HasKey(c => c.ClientId);
@@ -149,7 +149,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.Property(c => c.RedirectUris).IsRequired();
         });
 
-        b.Entity<OAuthAuthCode>(e =>
+        modelBuilder.Entity<OAuthAuthCode>(e =>
         {
             e.ToTable("oauth_auth_codes");
             e.HasKey(c => c.Code);
@@ -160,7 +160,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.HasIndex(c => c.ExpiresAt);
         });
 
-        b.Entity<PreviewLink>(e =>
+        modelBuilder.Entity<PreviewLink>(e =>
         {
             e.ToTable("preview_links");
             e.HasKey(l => l.TokenHash);
@@ -170,7 +170,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.HasIndex(l => l.UserId);
         });
 
-        b.Entity<OAuthToken>(e =>
+        modelBuilder.Entity<OAuthToken>(e =>
         {
             e.ToTable("oauth_tokens");
             e.HasKey(t => t.TokenHash);
@@ -184,7 +184,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.HasIndex(t => new { t.UserId, t.RevokedAt });
         });
 
-        b.Entity<StagedFile>(e =>
+        modelBuilder.Entity<StagedFile>(e =>
         {
             e.ToTable("staged_files");
             e.HasKey(f => f.Id);
@@ -197,7 +197,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.HasIndex(f => new { f.UserId, f.ExpiresAt });
         });
 
-        b.Entity<DataProtectionKey>(e =>
+        modelBuilder.Entity<DataProtectionKey>(e =>
         {
             e.ToTable("data_protection_keys");
             e.HasKey(k => k.Id);
@@ -208,7 +208,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.Property(k => k.Xml).IsRequired();
         });
 
-        b.Entity<Job>(e =>
+        modelBuilder.Entity<Job>(e =>
         {
             e.ToTable("jobs");
             e.HasKey(j => j.Id);

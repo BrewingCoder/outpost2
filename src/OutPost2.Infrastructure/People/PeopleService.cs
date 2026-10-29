@@ -195,7 +195,7 @@ public sealed class PeopleService(
                 OtherAddresses = c.Addresses.Skip(1).ToList(),
                 JobTitle = c.JobTitle,
                 Company = c.Company,
-                Phone = c.MobilePhone ?? c.BusinessPhones.FirstOrDefault(),
+                Phone = c.MobilePhone ?? (c.BusinessPhones.Count > 0 ? c.BusinessPhones[0] : null),
                 Source = PersonSource.Contact,
 
                 // Above an unweighted directory hit and below a real relevance score: a

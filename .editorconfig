@@ -42,3 +42,64 @@ dotnet_diagnostic.RCS1003.severity = none
 # MailAuthRequiredException. The parameterless and (message, inner) constructors the rule
 # wants would be seven sets of three dead members that no caller can use correctly.
 dotnet_diagnostic.RCS1194.severity = none
+
+# ── OP2-154: the rules that are not findings in this codebase ───────────────
+#
+# Each of these was looked at site by site and answered the same way every time. They
+# are turned off here, with the reason, rather than suppressed at eighty call sites —
+# the same bargain RCS1001/RCS1003/RCS1194 above already take. Everything OP2-154 listed
+# that WAS worth doing has been done; what is left is this.
+
+# "Avoid potentially expensive logging", x33. The rule's premise is that the arguments
+# are evaluated for a message that will be thrown away. That premise is false here:
+# appsettings.json and appsettings.Development.json both set the default level to
+# Information, so every one of these messages is emitted and every argument is used.
+# The alternative, a [LoggerMessage] partial per message, would move 33 sentences away
+# from the code they describe to avoid boxing an int on a path that runs once per tool
+# call. If the default level ever drops to Warning, turn this back on first.
+dotnet_diagnostic.CA1873.severity = none
+
+# "Optimize LINQ method call", x22. Every one is Select(...).ToList() on a List<T>,
+# which the rule would have as ConvertAll. That is faster and it is also List-only, so
+# taking the advice means the same projection is written two ways depending on what the
+# source happened to be — and the sources here are Graph pages and search results whose
+# cost is the HTTP call, not the allocation.
+dotnet_diagnostic.RCS1077.severity = none
+
+# "URIs should not be hardcoded", x8. All eight are the provider's own API root —
+# graph.microsoft.com/v1.0, api.github.com. A protocol endpoint is not configuration:
+# the thing a deployment varies is the INSTANCE, and that already is configurable
+# (Connection.Instance, and OP2-45's GitHub Enterprise handling). Moving these to
+# settings would invite someone to point Graph somewhere else, which is not a feature.
+dotnet_diagnostic.S1075.severity = none
+
+# "Extract this nested ternary", x8. Six of the eight are a pluralisation inside an
+# interpolated string inside a ternary — $"{n} chat{(n == 1 ? "" : "s")}" — which the
+# rule cannot tell apart from a genuinely nested conditional. The other two are guard
+# chains that read top to bottom. Every tool here answers in prose, so this shape is
+# going to keep appearing.
+dotnet_diagnostic.S3358.severity = none
+
+# "Loop should be simplified by calling Select/Where", x5. At the StagingService site
+# the loop body is a try/catch around a delete, which cannot move into a Where at all;
+# at the rest it is one guarded append, and hoisting the guard into a Where buys nothing
+# and costs the reader a hop.
+dotnet_diagnostic.S3267.severity = none
+
+# "Use conditional access", x5. `if (token is null || !token.IsUsable(now))` becomes
+# `if (token?.IsUsable(now) != true)`, which is shorter and says less. The null case is
+# a different thing from the unusable case at every one of these sites.
+dotnet_diagnostic.RCS1146.severity = none
+
+# One regex in HtmlToText uses a backreference, which the regex source generator cannot
+# compile; it falls back to the interpreted engine and says so. The backreference is
+# what makes </style> close a <style> rather than a <script>, so the alternative is a
+# wrong parse — and a #pragma in the file cannot reach a diagnostic the generator reports
+# against the compilation rather than through the syntax tree.
+dotnet_diagnostic.SYSLIB1044.severity = none
+
+# Razor views. A @foreach that emits markup cannot become a Select, and the analyzer is
+# reading the loop the generator wrote. The [*.cs] section above does not reach these,
+# because the diagnostic is mapped back to the .cshtml it came from.
+[*.cshtml]
+dotnet_diagnostic.S3267.severity = none

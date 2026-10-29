@@ -52,7 +52,7 @@ public sealed class AttachmentExtractor(ILogger<AttachmentExtractor> log) : IAtt
 
         // Buffer to a seekable MemoryStream: the OpenXML and PDF readers both seek, and a
         // network stream will not.
-        using var buffer = new MemoryStream();
+        await using var buffer = new MemoryStream();
         await content.CopyToAsync(buffer, ct);
         buffer.Position = 0;
 

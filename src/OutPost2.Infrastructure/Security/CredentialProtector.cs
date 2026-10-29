@@ -92,12 +92,12 @@ public sealed class CredentialProtector(IVaultTransitClient vault) : ICredential
         }
     }
 
-    public async Task<string> UnprotectAsync(ProtectedCredential c, CancellationToken ct = default)
+    public async Task<string> UnprotectAsync(ProtectedCredential sealedCredential, CancellationToken ct = default)
     {
-        var key = await vault.DecryptDataKeyAsync(c.WrappedKey, ct);
+        var key = await vault.DecryptDataKeyAsync(sealedCredential.WrappedKey, ct);
         try
         {
-            var ciphertext = Convert.FromBase64String(c.Ciphertext);
+            var ciphertext = Convert.FromBase64String(sealedCredential.Ciphertext);
             var plaintext = new byte[ciphertext.Length];
 
             using var aes = new AesGcm(key, TagBytes);
@@ -105,8 +105,8 @@ public sealed class CredentialProtector(IVaultTransitClient vault) : ICredential
             // Throws AuthenticationTagMismatchException if the stored bytes were altered.
             // We let that surface rather than returning anything — a credential that fails
             // authentication is not a credential.
-            aes.Decrypt(Convert.FromBase64String(c.Nonce), ciphertext,
-                        Convert.FromBase64String(c.Tag), plaintext);
+            aes.Decrypt(Convert.FromBase64String(sealedCredential.Nonce), ciphertext,
+                        Convert.FromBase64String(sealedCredential.Tag), plaintext);
 
             var result = Encoding.UTF8.GetString(plaintext);
             CryptographicOperations.ZeroMemory(plaintext);
@@ -118,11 +118,11 @@ public sealed class CredentialProtector(IVaultTransitClient vault) : ICredential
         }
     }
 
-    public async Task<ProtectedCredential> RewrapAsync(ProtectedCredential c, CancellationToken ct = default)
+    public async Task<ProtectedCredential> RewrapAsync(ProtectedCredential sealedCredential, CancellationToken ct = default)
     {
         // Vault re-wraps under the newest KEK version without ever revealing the data key,
         // so the credential is never decrypted and never leaves storage in the clear.
-        var rewrapped = await vault.RewrapAsync(c.WrappedKey, ct);
-        return c with { WrappedKey = rewrapped };
+        var rewrapped = await vault.RewrapAsync(sealedCredential.WrappedKey, ct);
+        return sealedCredential with { WrappedKey = rewrapped };
     }
 }
