@@ -265,7 +265,17 @@ app.UseAuthentication();
 // preview session is confined no matter which endpoint it reaches.
 app.UseMiddleware<PreviewReadOnlyMiddleware>();
 
+// ASP0001 claims this is not between UseRouting and UseEndpoints. It is — the endpoint
+// middleware WebApplication adds for the Map* calls below runs after it — and the branch
+// that genuinely has no UseAuthorization is the /mcp one further down. That branch is
+// checked rather than assumed (OP2-145): McpBearerMiddleware is an unconditional deny, it
+// answers 401 before calling next() for a missing or invalid token, and nothing it lets
+// through carries an [Authorize] for a policy to evaluate. Fail-closed by construction,
+// which is stricter than a policy, not looser. Two tests hold that line — see
+// Mcp_still_answers_401* in FormBindingTests.
+#pragma warning disable ASP0001
 app.UseAuthorization();
+#pragma warning restore ASP0001
 
 // Required by [FromForm] in minimal APIs, and wanted anyway: these forms change
 // connections and post credentials. SameSite=Lax already blocks cross-site POSTs, but
@@ -305,7 +315,7 @@ app.MapPost("/signout", async (HttpContext ctx) =>
 // Liveness only — deliberately unauthenticated and says nothing about internals.
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 
-app.Run();
+await app.RunAsync();
 
 // The endpoints an MCP client reaches with fetch(), and therefore the only ones that need
 // to answer a preflight. /oauth/authorize is missing on purpose: the browser navigates to
@@ -315,5 +325,3 @@ static bool IsCrossOriginEndpoint(HttpContext c) =>
     || c.Request.Path.StartsWithSegments("/.well-known")
     || c.Request.Path.StartsWithSegments("/oauth/register")
     || c.Request.Path.StartsWithSegments("/oauth/token");
-
-public partial class Program;

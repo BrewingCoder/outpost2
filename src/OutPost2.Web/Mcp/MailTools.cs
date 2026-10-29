@@ -74,15 +74,27 @@ public sealed class MailTools(
 
         if (!resolution.IsActionable) return resolution.SpokenSummary;
 
-        var results = new List<(string Label, IReadOnlyList<MailSummary> Items, string? Error)>();
-
         // Fan out in parallel. One slow or throttled tenant must not stall the whole turn —
         // a partial answer now beats a complete answer after the conversation has moved on.
-        await Task.WhenAll(resolution.Connections.Select(async c =>
+        //
+        // Returned, not added to a shared list: these tasks run at the same time, and
+        // concurrent List<T>.Add can drop an entry or corrupt the list. Task.WhenAll hands
+        // back the results in order and costs nothing.
+        var results = await Task.WhenAll(resolution.Connections.Select(async c =>
         {
-            try { results.Add((c.Label, await mail.ListAsync(c, "inbox", Math.Clamp(count, 1, 50), unreadOnly, ct), null)); }
-            catch (MailAuthRequiredException) { results.Add((c.Label, [], "needs re-authorising")); }
-            catch (Exception ex) { results.Add((c.Label, [], ex.Message)); }
+            try
+            {
+                var items = await mail.ListAsync(c, "inbox", Math.Clamp(count, 1, 50), unreadOnly, ct);
+                return (c.Label, Items: items, Error: (string?)null);
+            }
+            catch (MailAuthRequiredException)
+            {
+                return (c.Label, Items: (IReadOnlyList<MailSummary>)[], Error: "needs re-authorising");
+            }
+            catch (Exception ex)
+            {
+                return (c.Label, Items: (IReadOnlyList<MailSummary>)[], Error: ex.Message);
+            }
         }));
 
         var ordered = results
@@ -166,18 +178,46 @@ public sealed class MailTools(
 
         if (!resolution.IsActionable) return resolution.SpokenSummary;
 
-        var found = new List<(string Label, MailSummary Item)>();
-        await Task.WhenAll(resolution.Connections.Select(async c =>
+        // Each task RETURNS its outcome rather than adding to a shared list. These run
+        // concurrently, and List<T>.Add from several of them at once can lose an entry or
+        // corrupt the list outright — a bug that only shows up for the users who have
+        // more than one mailbox, which is everybody this product is for.
+        var perConnection = await Task.WhenAll(resolution.Connections.Select(async c =>
         {
             try
             {
-                foreach (var m in await mail.SearchAsync(c, query, Math.Clamp(count, 1, 50), ct))
-                    found.Add((c.Label, m));
+                var hits = await mail.SearchAsync(c, query, Math.Clamp(count, 1, 50), ct);
+                return (c.Label, Items: hits, Error: (string?)null);
             }
-            catch (Exception) { /* reported below via Degraded/empty */ }
+            // The comment that used to stand here said these were "reported below via
+            // Degraded/empty". They were not: a mailbox that threw was indistinguishable
+            // from one with no matches, so a failed search across three mailboxes read as
+            // a confident answer from all three (OP2-145). list_mail already collects and
+            // names them; this now does the same.
+            catch (MailAuthRequiredException)
+            {
+                return (c.Label, Items: (IReadOnlyList<MailSummary>)[], Error: "needs re-authorising");
+            }
+            catch (Exception ex)
+            {
+                return (c.Label, Items: (IReadOnlyList<MailSummary>)[], Error: ex.Message);
+            }
         }));
 
-        if (found.Count == 0) return $"Nothing found for \"{query}\".";
+        var found = perConnection
+            .SelectMany(r => r.Items.Select(i => (r.Label, Item: i)))
+            .ToList();
+
+        var failed = perConnection
+            .Where(r => r.Error is not null)
+            .Select(r => (r.Label, Error: r.Error!))
+            .ToList();
+
+        if (found.Count == 0)
+            return failed.Count == 0
+                ? $"Nothing found for \"{query}\"."
+                : $"Nothing found for \"{query}\". "
+                  + string.Join(" ", failed.Select(f => $"Note: {f.Label} {f.Error}."));
 
         var ordered = found.OrderByDescending(x => x.Item.ReceivedAt).ToList();
         var refs = index.Remember(UserId,
@@ -191,6 +231,14 @@ public sealed class MailTools(
             if (resolution.Connections.Count > 1) sb.Append($"[{label}] ");
             sb.AppendLine($"{Untrusted.Scrub(m.From)} — {Untrusted.Scrub(m.Subject)} — {Ago(m.ReceivedAt)}");
         }
+
+        // A partial answer has to say that it is partial. Silence here reads as "there is
+        // nothing else", which is the one thing it is not entitled to claim.
+        foreach (var bad in failed)
+            sb.AppendLine($"Note: {bad.Label} {bad.Error}.");
+        foreach (var d in resolution.Degraded)
+            sb.AppendLine($"Note: {d.Label} is unavailable ({d.State}).");
+
         return sb.ToString().TrimEnd();
     }
 

@@ -128,11 +128,11 @@ public interface IMicrosoftConnectionService : OutPost2.Infrastructure.Mail.IMic
     /// <summary>Exchanges the authorization code and persists the connection.</summary>
     Task<Connection> CompleteAsync(PendingConnection pending, string code, CancellationToken ct = default);
 
-    /// <summary>
-    /// A Graph access token for this connection, refreshed silently. Returns null when the
-    /// connection needs interactive re-authorisation.
-    /// </summary>
-    Task<string?> GetAccessTokenAsync(Connection connection, CancellationToken ct = default);
+    // GetAccessTokenAsync is NOT redeclared here. It used to be, which hid the base
+    // interface's identical member and produced CS0108 (OP2-147) — and on the token path
+    // a hidden member is worse than untidy, because which implementation runs would then
+    // depend on which of the two interfaces the caller happened to hold. It is inherited
+    // from IMicrosoftConnectionServiceAccessor, where it is documented.
 }
 
 public sealed class MicrosoftConnectionService(
@@ -193,7 +193,15 @@ public sealed class MicrosoftConnectionService(
     {
         var (app, _) = await BuildAppAsync(null, ct);
 
-        var extra = new Dictionary<string, string> { ["state"] = pending.State };
+        // The tuple-valued overload, because the Dictionary<string,string> one is obsolete
+        // (OP2-147). includeInCacheKey is false for both of these and that is the whole
+        // point of the new signature: `state` is a one-shot CSRF value and `domain_hint`
+        // steers the browser, so folding either into the token cache key would partition
+        // the cache by values that have nothing to do with what the token is for.
+        var extra = new Dictionary<string, (string value, bool includeInCacheKey)>
+        {
+            ["state"] = (pending.State, false),
+        };
 
         // domain_hint skips home-realm discovery and sends the user straight to the named
         // organisation's identity provider.
@@ -205,7 +213,7 @@ public sealed class MicrosoftConnectionService(
         // provider. prompt=select_account does not help, because federation engages
         // before any picker is shown.
         if (!string.IsNullOrWhiteSpace(pending.TenantHint) && pending.TenantHint.Contains('.'))
-            extra["domain_hint"] = pending.TenantHint.Trim();
+            extra["domain_hint"] = (pending.TenantHint.Trim(), false);
 
         var builder = app.GetAuthorizationRequestUrl(_o.ConsentScopes)
             .WithExtraQueryParameters(extra)
@@ -257,10 +265,12 @@ public sealed class MicrosoftConnectionService(
         var tenantId = result.TenantId ?? account.HomeAccountId?.TenantId ?? "common";
 
         // Pull the freshly-populated cache out through a no-op access, since the serializer
-        // is only reachable from the callback.
+        // is only reachable from the callback. GetAccountAsync by identifier rather than
+        // the obsolete GetAccountsAsync() (OP2-147): it fires the same cache callbacks,
+        // and we already know exactly which account we just redeemed for.
         byte[]? blob = null;
         app.UserTokenCache.SetAfterAccess(args => blob = args.TokenCache.SerializeMsalV3());
-        await app.GetAccountsAsync();
+        await app.GetAccountAsync(account.HomeAccountId?.Identifier);
 
         var cacheBlob = Convert.ToBase64String(
             blob ?? throw new InvalidOperationException("MSAL token cache was empty after code redemption."));
@@ -356,9 +366,24 @@ public sealed class MicrosoftConnectionService(
     {
         var (app, persist) = await BuildAppAsync(connection, ct);
 
-        var account = (await app.GetAccountsAsync()).FirstOrDefault(
-            a => a.HomeAccountId?.Identifier == connection.HomeAccountId)
-            ?? (await app.GetAccountsAsync()).FirstOrDefault();
+        // By identifier, which is both the supported call and the cheap one (OP2-147):
+        // GetAccountsAsync() deserialises and walks the whole cache, and this server has
+        // one cache per connection and many connections.
+        var account = string.IsNullOrWhiteSpace(connection.HomeAccountId)
+            ? null
+            : await app.GetAccountAsync(connection.HomeAccountId);
+
+        if (account is null)
+        {
+            // Fallback for a connection stored before HomeAccountId was recorded, and for
+            // one whose stored id no longer matches what Entra issues. Each connection has
+            // its own cache blob holding exactly one account, so "the only one in here" is
+            // well defined — and there is no supported call that asks for it, which is why
+            // the obsolete one is suppressed rather than replaced.
+#pragma warning disable CS0618
+            account = (await app.GetAccountsAsync()).FirstOrDefault();
+#pragma warning restore CS0618
+        }
 
         if (account is null)
         {
@@ -385,15 +410,25 @@ public sealed class MicrosoftConnectionService(
                 await connections.TouchAsync(connection.Id, ct);
                 return wide.AccessToken;
             }
-            catch (MsalUiRequiredException)
+            catch (MsalUiRequiredException ex)
             {
                 // Expected wherever the optional scopes are not consented. Remembered, so
                 // every mail read does not pay for the same refusal — and remembered with
                 // an expiry, so consent granted later is picked up on its own.
                 _wideRefusedUntil[connection.Id] = DateTimeOffset.UtcNow.Add(RetryWideAfter);
+
+                // S6667 wants the exception object itself. Deliberately not, here and at
+                // the catch below (OP2-145): this is expected control flow on every token
+                // refresh for an unconsented tenant, and attaching a stack trace that is
+                // always the same frames inside MSAL would bury the line it is trying to
+                // make readable. What actually distinguishes one refusal from another is
+                // MSAL's own classification, so that is logged instead — and logged, which
+                // the previous version of this clause did not do at all.
+#pragma warning disable S6667
                 log.LogInformation(
-                    "Connection {Label} has no consent for the optional scopes; using the required set.",
-                    connection.Label);
+                    "Connection {Label} has no consent for the optional scopes ({Code}/{Classification}); using the required set.",
+                    connection.Label, ex.ErrorCode, ex.Classification);
+#pragma warning restore S6667
             }
         }
 
@@ -412,7 +447,15 @@ public sealed class MicrosoftConnectionService(
             // The refresh token is gone, revoked, or Conditional Access wants a fresh
             // interaction. Not an error to retry — it needs a browser, which means it
             // cannot be resolved inside a voice turn.
-            log.LogInformation("Connection {Label} needs interactive re-auth: {Reason}.", connection.Label, ex.Message);
+            //
+            // See the clause above for why the exception object is not attached. The code
+            // and classification are what separate "revoked" from "Conditional Access" from
+            // "consent withdrawn", and they are the only part of it worth reading.
+#pragma warning disable S6667
+            log.LogInformation(
+                "Connection {Label} needs interactive re-auth ({Code}/{Classification}): {Reason}.",
+                connection.Label, ex.ErrorCode, ex.Classification, ex.Message);
+#pragma warning restore S6667
             return null;
         }
     }

@@ -36,6 +36,26 @@ public sealed class StagingService(
 {
     private readonly StorageOptions _o = options.Value;
 
+    /// <summary>
+    /// A directory this process created, under an unpredictable name and — on Unix — mode
+    /// 0700. Lazy so that merely constructing the service on a host with no writable temp
+    /// directory fails at the upload rather than at startup.
+    /// </summary>
+    private static readonly Lazy<string> TempRoot = new(() =>
+    {
+        var dir = Directory.CreateTempSubdirectory("outpost2-staging-");
+
+        // Best effort, and only ever removes a directory this process made. The buffers
+        // inside it are already DeleteOnClose, so this is just not leaving an empty
+        // directory behind on every restart.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            try { dir.Delete(recursive: true); } catch { /* exiting anyway */ }
+        };
+
+        return dir.FullName;
+    });
+
     public async Task<StagedFile> UploadAsync(
         Guid userId, string name, string fileName, string contentType, Stream content,
         CancellationToken ct = default)
@@ -46,59 +66,71 @@ public sealed class StagingService(
 
         // Buffer to a temp file rather than memory: this path exists precisely to carry
         // files too large to hold, so holding them here would defeat it.
-        var temp = Path.GetTempFileName();
-        try
+        //
+        // One handle, opened CreateNew under TempRoot, used for both the write and the
+        // read back (OP2-145). This replaced Path.GetTempFileName, which has two problems
+        // that matter on a path carrying other people's attachments: it draws names from
+        // a 16-bit space and is documented to throw once ~65,000 of them exist, which in
+        // a long-lived container is a denial of service somebody else can cause; and it
+        // creates the file and then hands back a path for the caller to open, so on a
+        // host with a shared temp directory there is a window in between. Never reopening
+        // by name closes the second one outright — the upload reads the same handle it
+        // wrote, so there is nothing to swap underneath it.
+        //
+        // DeleteOnClose, rather than a finally: the old code deleted on every exit path
+        // and that was correct, but the kernel enforcing it beats us remembering to.
+        var temp = Path.Combine(TempRoot.Value, Path.GetRandomFileName());
+
+        await using var fs = new FileStream(temp, new FileStreamOptions
         {
-            long size;
-            string hash;
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.ReadWrite,
+            Share = FileShare.None,
+            Options = FileOptions.Asynchronous | FileOptions.DeleteOnClose,
+        });
 
-            await using (var fs = File.Create(temp))
-            {
-                using var sha = SHA256.Create();
-                await using var tee = new CryptoStream(fs, sha, CryptoStreamMode.Write, leaveOpen: true);
-                await content.CopyToAsync(tee, ct);
-                await tee.FlushFinalBlockAsync(ct);
+        long size;
+        string hash;
 
-                size = fs.Length;
-                hash = Convert.ToHexString(sha.Hash!);
-            }
-
-            if (used + size > _o.PerUserQuotaBytes)
-                throw new InvalidOperationException(
-                    $"That would exceed your {_o.PerUserQuotaBytes / (1024 * 1024 * 1024)} GB staging quota. " +
-                    "Remove something first.");
-
-            // Random key, not derived from the id or filename: a leaked key must not let
-            // anyone enumerate or guess at other objects.
-            var key = $"{userId:N}/{Convert.ToHexString(RandomNumberGenerator.GetBytes(16))}";
-
-            await using (var upload = File.OpenRead(temp))
-                await store.PutAsync(key, upload, contentType, ct);
-
-            var staged = new StagedFile
-            {
-                UserId = userId,
-                Name = string.IsNullOrWhiteSpace(name) ? Path.GetFileNameWithoutExtension(fileName) : name.Trim(),
-                FileName = fileName,
-                ContentType = contentType,
-                SizeBytes = size,
-                StorageKey = key,
-                Sha256 = hash,
-                ExpiresAt = DateTimeOffset.UtcNow.Add(_o.StagingLifetime),
-            };
-
-            db.StagedFiles.Add(staged);
-            await db.SaveChangesAsync(ct);
-
-            log.LogInformation("Staged {Name} ({Size} bytes) for user {User}.", staged.Name, size, userId);
-            return staged;
-        }
-        finally
+        using (var sha = SHA256.Create())
         {
-            // Always, including on quota rejection — a failed upload must not leave the
-            // file on disk.
-            try { File.Delete(temp); } catch { /* best effort */ }
+            await using var tee = new CryptoStream(fs, sha, CryptoStreamMode.Write, leaveOpen: true);
+            await content.CopyToAsync(tee, ct);
+            await tee.FlushFinalBlockAsync(ct);
+
+            size = fs.Length;
+            hash = Convert.ToHexString(sha.Hash!);
         }
+
+        if (used + size > _o.PerUserQuotaBytes)
+            throw new InvalidOperationException(
+                $"That would exceed your {_o.PerUserQuotaBytes / (1024 * 1024 * 1024)} GB staging quota. " +
+                "Remove something first.");
+
+        // Random key, not derived from the id or filename: a leaked key must not let
+        // anyone enumerate or guess at other objects.
+        var key = $"{userId:N}/{Convert.ToHexString(RandomNumberGenerator.GetBytes(16))}";
+
+        fs.Position = 0;
+        await store.PutAsync(key, fs, contentType, ct);
+
+        var staged = new StagedFile
+        {
+            UserId = userId,
+            Name = string.IsNullOrWhiteSpace(name) ? Path.GetFileNameWithoutExtension(fileName) : name.Trim(),
+            FileName = fileName,
+            ContentType = contentType,
+            SizeBytes = size,
+            StorageKey = key,
+            Sha256 = hash,
+            ExpiresAt = DateTimeOffset.UtcNow.Add(_o.StagingLifetime),
+        };
+
+        db.StagedFiles.Add(staged);
+        await db.SaveChangesAsync(ct);
+
+        log.LogInformation("Staged {Name} ({Size} bytes) for user {User}.", staged.Name, size, userId);
+        return staged;
     }
 
     public async Task<IReadOnlyList<StagedFile>> ListAsync(Guid userId, CancellationToken ct = default) =>

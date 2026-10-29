@@ -26,7 +26,11 @@ public enum CapabilityRisk
 /// </summary>
 public static class CapabilityCatalog
 {
-    private sealed record Entry(string Verb, CapabilityRisk Risk);
+    // Phrase and Level, not Verb and Risk: both would otherwise shadow the static
+    // Verb(string) and Risk(string) lookups on the enclosing class, and which of each
+    // pair a reader is looking at would depend on where they happened to be standing
+    // (OP2-146).
+    private sealed record Entry(string Phrase, CapabilityRisk Level);
 
     private static readonly Dictionary<string, Entry> Map = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -59,10 +63,10 @@ public static class CapabilityCatalog
 
     /// <summary>A plain verb phrase. Falls back to the scope code rather than inventing one.</summary>
     public static string Verb(string capability) =>
-        Map.TryGetValue(capability, out var e) ? e.Verb : capability;
+        Map.TryGetValue(capability, out var e) ? e.Phrase : capability;
 
     public static CapabilityRisk Risk(string capability) =>
-        Map.TryGetValue(capability, out var e) ? e.Risk : CapabilityRisk.None;
+        Map.TryGetValue(capability, out var e) ? e.Level : CapabilityRisk.None;
 
     /// <summary>The badge text, or null where there is nothing to warn about.</summary>
     public static string? RiskLabel(string capability) => Risk(capability) switch

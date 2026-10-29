@@ -42,7 +42,10 @@ public static partial class HtmlToText
     [GeneratedRegex(@"<[^>]+>")]
     private static partial Regex AnyTag();
 
-    [GeneratedRegex(@"[ \t ​‌‍﻿]+")]
+    // Escapes rather than the characters themselves (OP2-146): NBSP and the zero-width
+    // run are invisible in a diff, so a literal class here cannot be reviewed. The regex
+    // engine resolves \uXXXX itself, which is why this still works inside a verbatim string.
+    [GeneratedRegex(@"[ \t\u00A0\u200B\u200C\u200D\uFEFF]+")]
     private static partial Regex HorizontalWhitespace();
 
     [GeneratedRegex(@"\n{3,}")]

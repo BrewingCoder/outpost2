@@ -494,4 +494,30 @@ public sealed class FormBindingTests : IClassFixture<FormBindingTests.Factory>, 
         Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
         Assert.Contains("resource_metadata", resp.Headers.WwwAuthenticate.ToString());
     }
+
+    /// <summary>
+    /// The companion to the test above, and the reason ASP0001 is suppressed in Program.cs
+    /// rather than acted on (OP2-145). The /mcp branch builds its own routing and endpoint
+    /// middleware and never calls UseAuthorization, which is what the analyzer notices. It
+    /// is safe because McpBearerMiddleware is an unconditional deny rather than a policy:
+    /// a token that is present but not ours is refused on the same path as no token at all.
+    /// A regression that let a bad token through would not be caught by the missing-header
+    /// case, because that one never reaches the validator.
+    /// </summary>
+    [SkippableFact]
+    public async Task Mcp_still_answers_401_for_a_bearer_token_that_is_not_ours()
+    {
+        Skip.IfNot(_factory.Available, _factory.Why);
+
+        var req = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        {
+            Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json"),
+        };
+        req.Headers.TryAddWithoutValidation("Authorization", "Bearer not-a-token-we-ever-issued");
+
+        var resp = await _client.SendAsync(req);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
+        Assert.Contains("invalid_token", resp.Headers.WwwAuthenticate.ToString());
+    }
 }

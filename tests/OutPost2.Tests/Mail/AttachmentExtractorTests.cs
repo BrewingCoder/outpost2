@@ -123,6 +123,46 @@ public class AttachmentExtractorTests
     }
 
     [Fact]
+    public async Task One_unreadable_sheet_does_not_cost_the_whole_workbook()
+    {
+        // OP2-145. A worksheet part whose XML never got written reads back with a null
+        // Worksheet. The old code dereferenced it, the catch-all in ExtractAsync caught
+        // the NullReferenceException, and the user was told the file was "damaged or
+        // password-protected" — losing the sheets that were perfectly readable and
+        // blaming the sender for a null reference in our own code.
+        using var ms = new MemoryStream();
+        using (var doc = SpreadsheetDocument.Create(ms, SpreadsheetDocumentType.Workbook))
+        {
+            var wbPart = doc.AddWorkbookPart();
+            wbPart.Workbook = new Workbook();
+            var sheets = wbPart.Workbook.AppendChild(new Sheets());
+
+            var good = wbPart.AddNewPart<WorksheetPart>();
+            good.Worksheet = new Worksheet(new SheetData(new Row(
+                new Cell { CellValue = new CellValue("1870"), DataType = CellValues.Number })));
+            sheets.AppendChild(new Sheet
+            {
+                Id = wbPart.GetIdOfPart(good), SheetId = 1, Name = "Readable",
+            });
+
+            // Added and referenced, but never given a Worksheet — so the part exists in
+            // the package with no root element.
+            var empty = wbPart.AddNewPart<WorksheetPart>();
+            sheets.AppendChild(new Sheet
+            {
+                Id = wbPart.GetIdOfPart(empty), SheetId = 2, Name = "Blank",
+            });
+        }
+
+        ms.Position = 0;
+        var text = await _x.ExtractAsync("mixed.xlsx", ms);
+
+        Assert.DoesNotContain("Could not read", text);
+        Assert.Contains("Readable", text);
+        Assert.Contains("1870", text);
+    }
+
+    [Fact]
     public async Task An_empty_pdf_says_so_rather_than_returning_nothing()
     {
         // A scanned PDF is all images. Returning empty would let a model conclude the

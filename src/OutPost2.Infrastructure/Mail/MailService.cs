@@ -138,9 +138,9 @@ public sealed class MailService(
             Id = m.Id,
             ConnectionLabel = connection.Label,
             Subject = m.Subject ?? "(no subject)",
-            From = m.From?.EmailAddress?.Describe() ?? "(unknown)",
-            To = (m.ToRecipients ?? []).Select(r => r.EmailAddress?.Describe() ?? "").Where(x => x != "").ToList(),
-            Cc = (m.CcRecipients ?? []).Select(r => r.EmailAddress?.Describe() ?? "").Where(x => x != "").ToList(),
+            From = m.From?.EmailAddress?.Format() ?? "(unknown)",
+            To = (m.ToRecipients ?? []).Select(r => r.EmailAddress?.Format() ?? "").Where(x => x != "").ToList(),
+            Cc = (m.CcRecipients ?? []).Select(r => r.EmailAddress?.Format() ?? "").Where(x => x != "").ToList(),
             ReceivedAt = m.ReceivedDateTime,
             IsRead = m.IsRead,
             HasAttachments = m.HasAttachments,
@@ -574,7 +574,7 @@ public sealed class MailService(
             Id = Id,
             ConnectionLabel = label,
             Subject = Subject ?? "(no subject)",
-            From = From?.EmailAddress?.Describe() ?? "(unknown)",
+            From = From?.EmailAddress?.Format() ?? "(unknown)",
             ReceivedAt = ReceivedDateTime,
             IsRead = IsRead,
             HasAttachments = HasAttachments,
@@ -613,8 +613,12 @@ public sealed class MailService(
         [property: JsonPropertyName("name")] string? Name,
         [property: JsonPropertyName("address")] string? Address)
     {
-        /// <summary>A name alone is ambiguous and an address alone is unfriendly; prefer "Name &lt;addr&gt;".</summary>
-        public string Describe() =>
+        /// <summary>
+        /// A name alone is ambiguous and an address alone is unfriendly; prefer "Name &lt;addr&gt;".
+        /// Format rather than Describe, which would shadow the enclosing class's two
+        /// Describe overloads — both of which render HTTP failures, not people (OP2-146).
+        /// </summary>
+        public string Format() =>
             string.IsNullOrWhiteSpace(Name) ? Address ?? ""
             : string.IsNullOrWhiteSpace(Address) ? Name
             : $"{Name} <{Address}>";
@@ -628,6 +632,14 @@ public sealed class MailService(
 /// <summary>Indirection so MailService does not depend on the whole connection service.</summary>
 public interface IMicrosoftConnectionServiceAccessor
 {
+    /// <summary>
+    /// A Graph access token for this connection, refreshed silently. Returns null when the
+    /// connection needs interactive re-authorisation.
+    /// <para>
+    /// Declared here and nowhere else. IMicrosoftConnectionService extends this interface
+    /// and used to redeclare the same member, which hid this one (OP2-147).
+    /// </para>
+    /// </summary>
     Task<string?> GetAccessTokenAsync(Connection connection, CancellationToken ct = default);
 }
 

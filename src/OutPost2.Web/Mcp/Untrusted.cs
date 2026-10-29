@@ -53,11 +53,32 @@ public static class Untrusted
     private static readonly string Nonce =
         Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
 
-    /// <summary>Zero-width and bidi-override characters: invisible to a reader, not to a model.</summary>
+    /// <summary>
+    /// Zero-width and bidi-override characters: invisible to a reader, not to a model.
+    /// <para>
+    /// Written as escapes rather than as the characters themselves (OP2-146). Two reasons,
+    /// and the second is the one that matters: a literal zero-width space is invisible in
+    /// every diff this line will ever appear in, so nobody can review a change to it; and
+    /// a scrub table spelled with the characters it strips is indistinguishable, to a
+    /// scanner, from the attack it defends against. The first Nightly duly reported this
+    /// file nine times and the rest of the repo not at all.
+    /// </para>
+    /// </summary>
     private static readonly SearchValues<char> Hidden = SearchValues.Create(
-        "​‌‍⁠﻿" +   // zero-width space / non-joiner / joiner / word-joiner / BOM
-        "‪‫‬‭‮" +   // bidi embedding and override
-        "⁦⁧⁨⁩");         // bidi isolates
+        "\u200B" +   // zero-width space
+        "\u200C" +   // zero-width non-joiner
+        "\u200D" +   // zero-width joiner
+        "\u2060" +   // word joiner
+        "\uFEFF" +   // zero-width no-break space (BOM)
+        "\u202A" +   // left-to-right embedding
+        "\u202B" +   // right-to-left embedding
+        "\u202C" +   // pop directional formatting
+        "\u202D" +   // left-to-right override
+        "\u202E" +   // right-to-left override
+        "\u2066" +   // left-to-right isolate
+        "\u2067" +   // right-to-left isolate
+        "\u2068" +   // first strong isolate
+        "\u2069");   // pop directional isolate
 
     /// <summary>
     /// Strips characters that would let content hide from a human, and neutralises anything

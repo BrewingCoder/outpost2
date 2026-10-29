@@ -53,9 +53,20 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
     public Task<Connection?> GetAsync(Guid userId, Guid connectionId, CancellationToken ct = default) =>
         db.Connections.FirstOrDefaultAsync(c => c.UserId == userId && c.Id == connectionId, ct);
 
+    // RCS1155 wants StringComparison here and it cannot have it: this lambda is an
+    // expression tree that Npgsql has to turn into SQL, and string.Equals with a
+    // StringComparison has no translation — EF throws at runtime rather than warning at
+    // build time, so taking the analyzer's advice would swap a build-clean warning for a
+    // failure the first time anybody says a connection's name out loud (OP2-146).
+    //
+    // ToLower() on both sides is what does translate. It is also why the comparison is
+    // case-insensitive at all, which matters more here than it looks: these labels are
+    // spoken, and "Work" and "work" have to be the same mailbox.
+#pragma warning disable RCS1155
     public Task<Connection?> FindByLabelAsync(Guid userId, string label, CancellationToken ct = default) =>
         db.Connections.FirstOrDefaultAsync(
             c => c.UserId == userId && c.Label.ToLower() == label.ToLower(), ct);
+#pragma warning restore RCS1155
 
     public async Task<Connection> UpsertAsync(
         Guid userId, ProviderKind provider, string instance, string? homeAccountId,
@@ -185,8 +196,11 @@ public sealed class ConnectionStore(OutPostDbContext db, ICredentialProtector pr
     {
         var c = await GetAsync(userId, connectionId, ct) ?? throw new InvalidOperationException("Connection not found.");
 
+        // ToLower for the same reason as FindByLabelAsync above — this has to become SQL.
+#pragma warning disable RCS1155
         var clash = await db.Connections.AnyAsync(
             x => x.UserId == userId && x.Id != connectionId && x.Label.ToLower() == label.ToLower(), ct);
+#pragma warning restore RCS1155
         if (clash) throw new InvalidOperationException($"You already have a connection called '{label}'.");
 
         c.Label = label;

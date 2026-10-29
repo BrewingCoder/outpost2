@@ -179,20 +179,25 @@ public sealed class CalendarService(
     /// </summary>
     private static TimeZoneInfo Resolve(string name)
     {
+        // The empty blocks are the method: each failure means "this host does not know
+        // that spelling", and the answer is to try the next one, not to log four times
+        // per mailbox for a zone that resolves on the second attempt. Commented rather
+        // than left bare so a scanner, and the next reader, can tell deliberate fallthrough
+        // from a swallowed error (OP2-145).
         try { return TimeZoneInfo.FindSystemTimeZoneById(name); }
-        catch (TimeZoneNotFoundException) { }
-        catch (InvalidTimeZoneException) { }
+        catch (TimeZoneNotFoundException) { /* not known by this name here; try a conversion */ }
+        catch (InvalidTimeZoneException) { /* corrupt zone data for this id; try a conversion */ }
 
         if (TimeZoneInfo.TryConvertWindowsIdToIanaId(name, out var iana))
         {
             try { return TimeZoneInfo.FindSystemTimeZoneById(iana); }
-            catch (TimeZoneNotFoundException) { }
+            catch (TimeZoneNotFoundException) { /* no IANA database here; try the Windows id */ }
         }
 
         if (TimeZoneInfo.TryConvertIanaIdToWindowsId(name, out var windows))
         {
             try { return TimeZoneInfo.FindSystemTimeZoneById(windows); }
-            catch (TimeZoneNotFoundException) { }
+            catch (TimeZoneNotFoundException) { /* neither spelling resolves; fall back to UTC */ }
         }
 
         return TimeZoneInfo.Utc;
@@ -824,7 +829,7 @@ public sealed class CalendarService(
                 Unavailable = availability
                     .Where(a => ParseShowAs(a.Availability) is Core.Calendar.Availability.Busy
                                                             or Core.Calendar.Availability.OutOfOffice)
-                    .Select(a => a.Attendee?.EmailAddress?.Describe() ?? "(unknown)")
+                    .Select(a => a.Who?.EmailAddress?.Describe() ?? "(unknown)")
                     .ToList(),
 
                 // Unknown is NOT busy, and conflating them is how a slot everybody can
@@ -833,7 +838,7 @@ public sealed class CalendarService(
                 // calendar" rather than "probably booked".
                 Unknown = availability
                     .Where(a => ParseShowAs(a.Availability) is Core.Calendar.Availability.Unknown)
-                    .Select(a => a.Attendee?.EmailAddress?.Describe() ?? "(unknown)")
+                    .Select(a => a.Who?.EmailAddress?.Describe() ?? "(unknown)")
                     .ToList(),
             };
         }
@@ -841,7 +846,9 @@ public sealed class CalendarService(
 
     private sealed record GraphAttendeeAvailability(
         [property: JsonPropertyName("availability")] string? Availability,
-        [property: JsonPropertyName("attendee")] GraphRecipient? Attendee);
+        // Named Who rather than Attendee so it does not shadow the static Attendee(address,
+        // type) builder above (OP2-146). The wire name is unaffected.
+        [property: JsonPropertyName("attendee")] GraphRecipient? Who);
 
     private sealed record GraphTimeSlot(
         [property: JsonPropertyName("start")] GraphTime? Start,

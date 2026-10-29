@@ -91,7 +91,6 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
             ?? throw new InvalidOperationException("Unreadable SendMail payload.");
 
         var db = sp.GetRequiredService<OutPostDbContext>();
-        var staging = sp.GetRequiredService<IStagingService>();
         var sender = sp.GetRequiredService<ILargeAttachmentSender>();
 
         var connection = await db.Connections.FirstOrDefaultAsync(

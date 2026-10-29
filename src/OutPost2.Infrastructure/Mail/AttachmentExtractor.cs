@@ -20,6 +20,20 @@ public interface IAttachmentExtractor
     Task<string> ExtractAsync(string fileName, Stream content, CancellationToken ct = default);
 }
 
+/// <remarks>
+/// The null checks in the per-format readers are load-bearing (OP2-145). These files
+/// arrive by email from outside the organisation, so a malformed one is not an edge case
+/// — it is the normal shape of spam, and it is the one input to this server an attacker
+/// fully controls. The Open XML SDK hands back a part whose body is null for several
+/// kinds of truncation.
+/// <para>
+/// ExtractAsync's catch-all means an unguarded dereference was never a 500. It was worse
+/// in a quieter way: the user was told the file was "password-protected or damaged" when
+/// what actually happened was a null reference in our own code, and a whole workbook was
+/// abandoned because one sheet part failed to parse. Guarding each dereference reads the
+/// sheets that are intact and reserves the catch-all for files that really are broken.
+/// </para>
+/// </remarks>
 public sealed class AttachmentExtractor(ILogger<AttachmentExtractor> log) : IAttachmentExtractor
 {
     private static readonly HashSet<string> Extractable = new(StringComparer.OrdinalIgnoreCase)
@@ -87,7 +101,7 @@ public sealed class AttachmentExtractor(ILogger<AttachmentExtractor> log) : IAtt
     private static string ExtractWord(Stream s)
     {
         using var doc = WordprocessingDocument.Open(s, false);
-        var body = doc.MainDocumentPart?.Document.Body;
+        var body = doc.MainDocumentPart?.Document?.Body;
         if (body is null) return "[Empty document.]";
 
         var sb = new StringBuilder();
@@ -108,19 +122,19 @@ public sealed class AttachmentExtractor(ILogger<AttachmentExtractor> log) : IAtt
 
         // Shared strings are stored once and referenced by index; without resolving them
         // every text cell reads as a meaningless number.
-        var shared = wb.SharedStringTablePart?.SharedStringTable
+        var shared = wb.SharedStringTablePart?.SharedStringTable?
             .Elements<SharedStringItem>().Select(i => i.InnerText).ToArray() ?? [];
 
         var sb = new StringBuilder();
 
-        foreach (var sheet in wb.Workbook.Sheets?.Elements<Sheet>() ?? [])
+        foreach (var sheet in wb.Workbook?.Sheets?.Elements<Sheet>() ?? [])
         {
             if (sheet.Id?.Value is not { } relId) continue;
             if (wb.GetPartById(relId) is not WorksheetPart part) continue;
 
             sb.AppendLine($"--- sheet: {sheet.Name} ---");
 
-            foreach (var row in part.Worksheet.Descendants<Row>())
+            foreach (var row in part.Worksheet?.Descendants<Row>() ?? [])
             {
                 var cells = row.Elements<Cell>().Select(c =>
                 {
@@ -150,7 +164,7 @@ public sealed class AttachmentExtractor(ILogger<AttachmentExtractor> log) : IAtt
         {
             sb.AppendLine($"--- slide {n++} ---");
 
-            foreach (var t in slide.Slide.Descendants<DocumentFormat.OpenXml.Drawing.Text>())
+            foreach (var t in slide.Slide?.Descendants<DocumentFormat.OpenXml.Drawing.Text>() ?? [])
                 if (!string.IsNullOrWhiteSpace(t.Text)) sb.AppendLine(t.Text);
         }
 

@@ -1,0 +1,44 @@
+root = true
+
+# This is not a style configuration. The only thing this file does is keep the nightly
+# security report readable (OP2-146): everything here marks code that nobody in this
+# repository writes, so that a finding against it cannot crowd out one against code
+# somebody can act on.
+
+# Razor's source generator writes one C# file per page into obj/ and leaves a field in
+# each that nothing reads. Nothing here can fix them, and the pipeline's
+# SecurityScanSkipDirs does not reach them: that property governs the scanners that WALK
+# the tree, while the Roslyn leg takes its findings from the compiler, which reports on a
+# generated syntax tree wherever that tree happens to live.
+#
+# generated_code covers the analyzers; CS0169 is a compiler warning and needs saying
+# separately, because generated_code does not reach those. Scoped to *.g.cs so neither
+# line can ever hide something somebody wrote by hand.
+[*.g.cs]
+generated_code = true
+dotnet_diagnostic.CS0169.severity = none
+
+# EF scaffolds these and we do not edit them — the Up/Down bodies are whatever
+# `dotnet ef migrations add` emitted, and rewriting one to satisfy a style rule would
+# make it disagree with the snapshot it was generated beside. 17 of the first Nightly's
+# 218 results were style notes against this directory alone.
+[src/OutPost2.Infrastructure/Data/Migrations/*.cs]
+generated_code = true
+
+# Three rules that are not findings in this codebase, turned off once and in the open
+# rather than suppressed 65 times at the call sites (OP2-146).
+[*.cs]
+
+# "Add braces when the expression spans multiple lines", x55 and x3. This repository
+# deliberately writes guard clauses without braces — `if (body is null) return ...`,
+# `if (clash) throw ...` — and that is consistent from end to end. Taking the rule's
+# advice would mean restyling 58 sites to match a preference nobody here holds; leaving
+# it on means 58 permanent notes nobody will ever action. Neither is worth it.
+dotnet_diagnostic.RCS1001.severity = none
+dotnet_diagnostic.RCS1003.severity = none
+
+# "Implement exception constructors", x7. The exceptions here are deliberately single
+# purpose and carry one assembled message — MailException, TeamsException,
+# MailAuthRequiredException. The parameterless and (message, inner) constructors the rule
+# wants would be seven sets of three dead members that no caller can use correctly.
+dotnet_diagnostic.RCS1194.severity = none

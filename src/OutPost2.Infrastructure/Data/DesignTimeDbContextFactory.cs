@@ -22,8 +22,16 @@ namespace OutPost2.Infrastructure.Data;
 /// </summary>
 public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<OutPostDbContext>
 {
+    // S2068 fires on the word "Password" and is right to look. It is the compose dev
+    // database's published password, it is in compose.yaml and the README already, and
+    // design time never opens the connection — see the second paragraph above. Suppressed
+    // here rather than renamed because the string has to stay a well-formed Npgsql
+    // connection string, and a scanner finding left unexplained is one somebody has to
+    // re-derive every time they read the report (OP2-146).
+#pragma warning disable S2068 // Hard-coded credentials are security-sensitive
     private const string LocalDev =
         "Host=localhost;Port=5435;Database=outpost2;Username=outpost2;Password=outpost2-dev";
+#pragma warning restore S2068
 
     public OutPostDbContext CreateDbContext(string[] args)
     {
