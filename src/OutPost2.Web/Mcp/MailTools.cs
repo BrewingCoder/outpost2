@@ -20,7 +20,7 @@ namespace OutPost2.Web.Mcp;
 /// base64 and unspeakable, so listings carry a short handle and tools accept that, or an
 /// ordinal ("the second one") resolved against the last listing.</item>
 /// <item>Anything that changes the mailbox takes the handle, not the ordinal, and reads
-/// back the subject it acted on. See <see cref="MessageIndex"/>.</item>
+/// back the subject it acted on. See <see cref="ItemIndex"/>.</item>
 /// <item>Responses are prose, not tables. There is no screen to fall back on.</item>
 /// <item>Writes never ride on a default connection. Sending from the wrong tenant cannot
 /// be undone.</item>
@@ -32,7 +32,7 @@ public sealed class MailTools(
     IHttpContextAccessor http,
     IConnectionStore connections,
     IMailService mail,
-    IMessageIndex index,
+    IItemIndex index,
     OutPost2.Infrastructure.Mail.IAttachmentExtractor extractor,
     PublicUrls urls)
 {
@@ -137,7 +137,7 @@ public sealed class MailTools(
 
         try
         {
-            var m = await mail.ReadAsync(c, item.MessageId, ct);
+            var m = await mail.ReadAsync(c, item.ItemId, ct);
             if (m is null) return "That message no longer exists.";
 
             var sb = new StringBuilder();
@@ -210,6 +210,15 @@ public sealed class MailTools(
             await connections.ListAsync(UserId, ct), Capabilities.MailSend, connection, isWrite: true);
 
         if (!resolution.IsActionable) return resolution.SpokenSummary;
+
+        // "send it from all my accounts" resolves to FanOut, which carries no single
+        // Connection — so without this the dereference below is a null reference on a
+        // perfectly sayable instruction. Sending the same message from three identities
+        // is not what anyone means by it either.
+        if (resolution.Kind is ResolutionKind.FanOut)
+            return "I can only send from one mailbox — which one: "
+                 + string.Join(", ", resolution.Connections.Select(x => x.Label)) + "?";
+
         var c = resolution.Connection!;
 
         var recipients = Split(to);
@@ -249,7 +258,7 @@ public sealed class MailTools(
         try
         {
             var subject = await mail.SendReplyAsync(
-                c, item.MessageId, replyAll ? ReplyKind.All : ReplyKind.Sender, body, null, ct);
+                c, item.ItemId, replyAll ? ReplyKind.All : ReplyKind.Sender, body, null, ct);
 
             return replyAll
                 ? $"Replied to everyone on \"{subject}\" from {c.Label}."
@@ -279,7 +288,7 @@ public sealed class MailTools(
         try
         {
             var subject = await mail.SendReplyAsync(
-                c, item.MessageId, ReplyKind.Forward, body ?? "", recipients, ct);
+                c, item.ItemId, ReplyKind.Forward, body ?? "", recipients, ct);
 
             return $"Forwarded \"{subject}\" to {string.Join(", ", recipients)} from {c.Label}.";
         }
@@ -300,7 +309,7 @@ public sealed class MailTools(
 
         try
         {
-            await mail.MarkReadAsync(c, item.MessageId, read, ct);
+            await mail.MarkReadAsync(c, item.ItemId, read, ct);
             return $"Marked \"{item.Subject}\" {(read ? "read" : "unread")} in {c.Label}.";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
@@ -341,7 +350,7 @@ public sealed class MailTools(
                 spoken = match.Path;
             }
 
-            var movedId = await mail.MoveAsync(c, item.MessageId, target, ct);
+            var movedId = await mail.MoveAsync(c, item.ItemId, target, ct);
 
             // Graph reissues the id, so the handle has to follow the message or the next
             // "put it back" acts on an address that no longer resolves.
@@ -366,7 +375,7 @@ public sealed class MailTools(
 
         try
         {
-            var movedId = await mail.MarkAsJunkAsync(c, item.MessageId, ct);
+            var movedId = await mail.MarkAsJunkAsync(c, item.ItemId, ct);
             if (movedId is not null) index.Retarget(UserId, item.Ref, movedId);
 
             var said = $"Reported \"{item.Subject}\" as junk in {c.Label}. {item.From} is now blocked " +
@@ -403,7 +412,7 @@ public sealed class MailTools(
 
         try
         {
-            await mail.FlagAsync(c, item.MessageId, flagged, due, ct);
+            await mail.FlagAsync(c, item.ItemId, flagged, due, ct);
 
             if (!flagged) return $"Cleared the flag on \"{item.Subject}\" in {c.Label}.";
 
@@ -520,7 +529,7 @@ public sealed class MailTools(
         if (found.Problem is not null) return found.Problem;
         var (item, c) = (found.Item!, found.Connection!);
 
-        var items = await mail.ListAttachmentsAsync(c, item.MessageId, ct);
+        var items = await mail.ListAttachmentsAsync(c, item.ItemId, ct);
         if (items.Count == 0) return "That message has no attachments.";
 
         var sb = new StringBuilder($"{items.Count} attachment{(items.Count == 1 ? "" : "s")}:\n");
@@ -547,7 +556,7 @@ public sealed class MailTools(
         if (found.Problem is not null) return found.Problem;
         var (item, c) = (found.Item!, found.Connection!);
 
-        var items = await mail.ListAttachmentsAsync(c, item.MessageId, ct);
+        var items = await mail.ListAttachmentsAsync(c, item.ItemId, ct);
         if (items.Count == 0) return "That message has no attachments.";
 
         var i = attachmentNumber - 1;
@@ -565,7 +574,7 @@ public sealed class MailTools(
         if (!extractor.CanExtract(a.Name, a.ContentType))
             return $"I can't read {a.Name} ({a.ContentType}). I handle PDF, Word, Excel, PowerPoint and text.";
 
-        await using var bytes = await mail.OpenAttachmentAsync(c, item.MessageId, a.Id, ct);
+        await using var bytes = await mail.OpenAttachmentAsync(c, item.ItemId, a.Id, ct);
         if (bytes is null) return $"Couldn't download {a.Name}.";
 
         var text = await extractor.ExtractAsync(a.Name, bytes, ct);
@@ -580,15 +589,15 @@ public sealed class MailTools(
     /// names would silently strip every category already on the message.
     /// </summary>
     private async Task<string> ApplyAsync(
-        Connection c, MailRef item, List<string> wanted, bool remove, CancellationToken ct)
+        Connection c, ItemRef item, List<string> wanted, bool remove, CancellationToken ct)
     {
-        var current = await mail.GetCategoriesAsync(c, item.MessageId, ct);
+        var current = await mail.GetCategoriesAsync(c, item.ItemId, ct);
 
         var next = remove
             ? current.Where(x => !wanted.Any(w => Same(w, x))).ToList()
             : current.Concat(wanted.Where(w => !current.Any(x => Same(x, w)))).ToList();
 
-        await mail.SetCategoriesAsync(c, item.MessageId, next, ct);
+        await mail.SetCategoriesAsync(c, item.ItemId, next, ct);
 
         return next.Count == 0
             ? $"\"{item.Subject}\" now has no categories in {c.Label}."
@@ -605,7 +614,7 @@ public sealed class MailTools(
         + "category list, so I can't see or add to it. Reconnecting it at "
         + $"{urls.Connections} fixes that.";
 
-    private sealed record Resolved(MailRef? Item, Connection? Connection, string? Problem);
+    private sealed record Resolved(ItemRef? Item, Connection? Connection, string? Problem);
 
     /// <summary>
     /// Turns what the conversation said into the message AND the connection that holds it,
@@ -622,6 +631,13 @@ public sealed class MailTools(
         var item = index.Resolve(UserId, message);
         if (item is null)
             return new(null, null, "I don't have that one — list your messages first, then tell me which.");
+
+        // Handles are shared with the calendar, so an ordinal said after a list of events
+        // lands here pointing at a meeting. Say what it is instead of asking Graph for a
+        // message by an event id and reporting "that message no longer exists".
+        if (item.Kind is not ItemKind.Mail)
+            return new(null, null,
+                $"\"{item.Ref}\" is a calendar event — {item.Subject}. Use the calendar tools for it.");
 
         var c = await connections.FindByLabelAsync(UserId, item.ConnectionLabel, ct);
         if (c is null) return new(null, null, $"The {item.ConnectionLabel} connection has gone.");

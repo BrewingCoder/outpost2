@@ -33,6 +33,13 @@ public static class CapabilityCatalog
         [Capabilities.MailRead]    = new("Read your email", CapabilityRisk.None),
         [Capabilities.MailWrite]   = new("File, flag and delete your email", CapabilityRisk.Writes),
         [Capabilities.MailSend]    = new("Send email as you", CapabilityRisk.ActsAsYou),
+        [Capabilities.CalendarRead]  = new("Read your calendar", CapabilityRisk.None),
+
+        // ActsAsYou, not Writes. Creating, moving or cancelling a meeting sends mail to
+        // every attendee under the user's own name, and a cancellation cannot be recalled
+        // any more than a sent message can.
+        [Capabilities.CalendarWrite] = new("Create, change and cancel meetings as you", CapabilityRisk.ActsAsYou),
+
         [Capabilities.IssuesRead]  = new("Read issues", CapabilityRisk.None),
         [Capabilities.IssuesWrite] = new("Create and update issues", CapabilityRisk.Writes),
         [Capabilities.IssuesAdmin] = new("Administer projects", CapabilityRisk.High),

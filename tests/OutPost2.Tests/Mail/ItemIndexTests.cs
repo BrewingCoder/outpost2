@@ -10,7 +10,7 @@ namespace OutPost2.Tests.Mail;
 /// deleting the wrong mail from a car.
 /// </para>
 /// </summary>
-public sealed class MessageIndexTests
+public sealed class ItemIndexTests
 {
     private static readonly Guid Scott = Guid.NewGuid();
     private static readonly Guid Someone = Guid.NewGuid();
@@ -21,22 +21,22 @@ public sealed class MessageIndexTests
     [Fact]
     public void Ordinals_resolve_against_the_last_listing()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
         index.Remember(Scott, [Msg("aaa"), Msg("bbb"), Msg("ccc")]);
 
-        Assert.Equal("aaa", index.Resolve(Scott, "1")!.MessageId);
-        Assert.Equal("bbb", index.Resolve(Scott, "2")!.MessageId);
-        Assert.Equal("ccc", index.Resolve(Scott, "3")!.MessageId);
+        Assert.Equal("aaa", index.Resolve(Scott, "1")!.ItemId);
+        Assert.Equal("bbb", index.Resolve(Scott, "2")!.ItemId);
+        Assert.Equal("ccc", index.Resolve(Scott, "3")!.ItemId);
     }
 
     [Fact]
     public void Handles_resolve_to_their_own_message()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
         var refs = index.Remember(Scott, [Msg("aaa"), Msg("bbb")]);
 
-        Assert.Equal("aaa", index.Resolve(Scott, refs[0].Ref)!.MessageId);
-        Assert.Equal("bbb", index.Resolve(Scott, refs[1].Ref)!.MessageId);
+        Assert.Equal("aaa", index.Resolve(Scott, refs[0].Ref)!.ItemId);
+        Assert.Equal("bbb", index.Resolve(Scott, refs[1].Ref)!.ItemId);
     }
 
     /// <summary>
@@ -46,23 +46,23 @@ public sealed class MessageIndexTests
     [Fact]
     public void New_mail_shifts_the_ordinal_but_never_the_handle()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
 
         var first = index.Remember(Scott, [Msg("old-1"), Msg("old-2")]);
         var target = first[1];
-        Assert.Equal("old-2", index.Resolve(Scott, "2")!.MessageId);
+        Assert.Equal("old-2", index.Resolve(Scott, "2")!.ItemId);
 
         // Inbox refreshed; two newer messages at the top.
         index.Remember(Scott, [Msg("new-1"), Msg("new-2"), Msg("old-1"), Msg("old-2")]);
 
-        Assert.Equal("new-2", index.Resolve(Scott, "2")!.MessageId);
-        Assert.Equal("old-2", index.Resolve(Scott, target.Ref)!.MessageId);
+        Assert.Equal("new-2", index.Resolve(Scott, "2")!.ItemId);
+        Assert.Equal("old-2", index.Resolve(Scott, target.Ref)!.ItemId);
     }
 
     [Fact]
     public void The_same_message_keeps_its_handle_across_listings()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
 
         var before = index.Remember(Scott, [Msg("aaa"), Msg("bbb")]);
         var after = index.Remember(Scott, [Msg("zzz"), Msg("bbb"), Msg("aaa")]);
@@ -74,7 +74,7 @@ public sealed class MessageIndexTests
     [Fact]
     public void Handles_are_distinct_within_a_listing()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
         var refs = index.Remember(Scott, Enumerable.Range(0, 60).Select(i => Msg($"id-{i}")).ToList());
 
         Assert.Equal(60, refs.Select(r => r.Ref).Distinct(StringComparer.OrdinalIgnoreCase).Count());
@@ -83,16 +83,16 @@ public sealed class MessageIndexTests
     [Fact]
     public void Mint_is_deterministic_and_avoids_collisions()
     {
-        var empty = new Dictionary<string, MailRef>();
-        Assert.Equal(MessageIndex.Mint("abc", empty), MessageIndex.Mint("abc", empty));
+        var empty = new Dictionary<string, ItemRef>();
+        Assert.Equal(ItemIndex.Mint("abc", empty), ItemIndex.Mint("abc", empty));
 
-        var first = MessageIndex.Mint("abc", empty);
-        var taken = new Dictionary<string, MailRef>(StringComparer.OrdinalIgnoreCase)
+        var first = ItemIndex.Mint("abc", empty);
+        var taken = new Dictionary<string, ItemRef>(StringComparer.OrdinalIgnoreCase)
         {
-            [first] = new() { Ref = first, MessageId = "other", ConnectionLabel = "work", Subject = "s", From = "f" },
+            [first] = new() { Ref = first, ItemId = "other", ConnectionLabel = "work", Subject = "s", From = "f" },
         };
 
-        Assert.NotEqual(first, MessageIndex.Mint("abc", taken));
+        Assert.NotEqual(first, ItemIndex.Mint("abc", taken));
     }
 
     [Theory]
@@ -103,7 +103,7 @@ public sealed class MessageIndexTests
     [InlineData("1")]
     public void Handles_avoid_the_characters_that_get_misheard(string banned)
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
         var refs = index.Remember(Scott, Enumerable.Range(0, 200).Select(i => Msg($"id-{i}")).ToList());
 
         Assert.DoesNotContain(refs, r => r.Ref.Contains(banned, StringComparison.OrdinalIgnoreCase));
@@ -117,19 +117,19 @@ public sealed class MessageIndexTests
     [Fact]
     public void A_numeric_handle_wins_over_the_same_number_as_a_position()
     {
-        var empty = new Dictionary<string, MailRef>();
+        var empty = new Dictionary<string, ItemRef>();
 
         // Eight of the alphabet's thirty-one characters are digits, so an all-digit handle
         // turns up roughly once in two hundred. Found rather than assumed, so this test
         // fails loudly if the alphabet ever changes out from under it.
         var id = Enumerable.Range(0, 50_000)
             .Select(i => $"graph-id-{i}")
-            .FirstOrDefault(x => MessageIndex.Mint(x, empty).All(char.IsDigit));
+            .FirstOrDefault(x => ItemIndex.Mint(x, empty).All(char.IsDigit));
 
         Assert.NotNull(id);
 
-        var handle = MessageIndex.Mint(id!, empty);
-        var index = new MessageIndex();
+        var handle = ItemIndex.Mint(id!, empty);
+        var index = new ItemIndex();
 
         // Padded out so the handle read as a position would land on a real, different
         // message — otherwise the wrong reading would fail for the wrong reason.
@@ -141,30 +141,30 @@ public sealed class MessageIndexTests
         index.Remember(Scott, listing);
 
         // The handle wins its own string...
-        Assert.Equal(id, index.Resolve(Scott, handle)!.MessageId);
+        Assert.Equal(id, index.Resolve(Scott, handle)!.ItemId);
 
         // ...while the number either side of it is still read as a position, so this is
         // precedence rather than numbers having stopped working.
         var next = int.Parse(handle) + 1;
-        Assert.Equal($"filler-{next - 1}", index.Resolve(Scott, next.ToString())!.MessageId);
+        Assert.Equal($"filler-{next - 1}", index.Resolve(Scott, next.ToString())!.ItemId);
     }
 
     [Fact]
     public void Decoration_around_a_handle_is_ignored()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
         var refs = index.Remember(Scott, [Msg("aaa")]);
         var r = refs[0].Ref;
 
-        Assert.Equal("aaa", index.Resolve(Scott, $"[{r}]")!.MessageId);
-        Assert.Equal("aaa", index.Resolve(Scott, $" #{r} ")!.MessageId);
-        Assert.Equal("aaa", index.Resolve(Scott, r.ToUpperInvariant())!.MessageId);
+        Assert.Equal("aaa", index.Resolve(Scott, $"[{r}]")!.ItemId);
+        Assert.Equal("aaa", index.Resolve(Scott, $" #{r} ")!.ItemId);
+        Assert.Equal("aaa", index.Resolve(Scott, r.ToUpperInvariant())!.ItemId);
     }
 
     [Fact]
     public void Nonsense_and_out_of_range_resolve_to_nothing()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
         index.Remember(Scott, [Msg("aaa"), Msg("bbb")]);
 
         Assert.Null(index.Resolve(Scott, "9"));
@@ -178,7 +178,7 @@ public sealed class MessageIndexTests
     [Fact]
     public void Another_users_handles_are_invisible()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
         var mine = index.Remember(Scott, [Msg("private")]);
 
         Assert.Null(index.Resolve(Someone, mine[0].Ref));
@@ -188,7 +188,7 @@ public sealed class MessageIndexTests
     [Fact]
     public void Nothing_resolves_before_a_listing()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
         Assert.Null(index.Resolve(Scott, "1"));
         Assert.Null(index.Resolve(Scott, "abcd"));
     }
@@ -197,13 +197,13 @@ public sealed class MessageIndexTests
     [Fact]
     public void Retarget_moves_the_handle_onto_the_new_id()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
         var refs = index.Remember(Scott, [Msg("before")]);
 
         index.Retarget(Scott, refs[0].Ref, "after");
 
-        Assert.Equal("after", index.Resolve(Scott, refs[0].Ref)!.MessageId);
-        Assert.Equal("after", index.Resolve(Scott, "1")!.MessageId);
+        Assert.Equal("after", index.Resolve(Scott, refs[0].Ref)!.ItemId);
+        Assert.Equal("after", index.Resolve(Scott, "1")!.ItemId);
     }
 
     /// <summary>
@@ -214,7 +214,7 @@ public sealed class MessageIndexTests
     [Fact]
     public void A_retargeted_message_relists_under_its_existing_handle()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
         var before = index.Remember(Scott, [Msg("before")]);
         index.Retarget(Scott, before[0].Ref, "after");
 
@@ -226,19 +226,19 @@ public sealed class MessageIndexTests
     [Fact]
     public void Retargeting_an_unknown_handle_does_nothing()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
         index.Remember(Scott, [Msg("aaa")]);
 
         index.Retarget(Scott, "nope", "whatever");
         index.Retarget(Someone, "nope", "whatever");
 
-        Assert.Equal("aaa", index.Resolve(Scott, "1")!.MessageId);
+        Assert.Equal("aaa", index.Resolve(Scott, "1")!.ItemId);
     }
 
     [Fact]
     public void The_subject_and_sender_ride_along_so_an_action_can_read_back_what_it_did()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
         index.Remember(Scott, [("id", "home", "Invoice 4471", "Accounts <ap@example.com>")]);
 
         var found = index.Resolve(Scott, "1")!;
@@ -250,7 +250,7 @@ public sealed class MessageIndexTests
     [Fact]
     public void Handles_are_capped_so_a_long_session_cannot_grow_without_bound()
     {
-        var index = new MessageIndex();
+        var index = new ItemIndex();
 
         var first = index.Remember(Scott, [Msg("very-first")]);
         for (var batch = 0; batch < 8; batch++)

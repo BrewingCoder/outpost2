@@ -32,7 +32,7 @@ organisation, and you may not run it as a service for other people. See
 
 ## What it does
 
-**33 tools across three providers**, all resolved through the same named-connection model.
+**39 tools across three providers**, all resolved through the same named-connection model.
 
 | Area | Tools |
 |---|---|
@@ -40,6 +40,8 @@ organisation, and you may not run it as a service for other people. See
 | Mail — read | `list_mail` `read_mail` `search_mail` `list_attachments` `read_attachment` |
 | Mail — write | `send_mail` `send_mail_with_attachments` `reply_mail` `forward_mail` |
 | Mail — manage | `mark_mail` `move_mail` `flag_mail` `categorise_mail` `list_categories` `report_junk` |
+| Calendar — read | `list_events` `read_event` |
+| Calendar — write | `create_event` `update_event` `cancel_event` `respond_to_invite` |
 | Issues (YouTrack) | `create_issue` `get_issue` `update_issue` `search_issues` `comment_on_issue` `list_projects` `create_project` |
 | Code (GitHub) | `github_repositories` `github_repo_names` `github_issues` `github_pull_requests` `github_commits` `github_item` `github_triage` |
 | Files and jobs | `list_files` `check_queue` + a web approval queue |
@@ -47,6 +49,10 @@ organisation, and you may not run it as a service for other people. See
 
 Large attachments stream to Graph in 320 KiB-multiple chunks from object storage and never
 buffer in memory, so sending is a resumable job rather than a tool call that times out.
+
+Calendar times are the mailbox's own, not the server's: the mailbox timezone is read from
+Graph and every reading and writing of a time goes through it, so "move it to two" means
+two o'clock where you are and still does either side of a clock change.
 
 ## Getting started
 

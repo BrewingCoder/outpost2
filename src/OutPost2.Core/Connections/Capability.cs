@@ -44,6 +44,17 @@ public static class Capabilities
     // behind mail.read would mean switching off deletion also switches off reading.
     public const string MailWrite = "mail.write";
 
+    // Calendar is separate from mail even though one Graph scope (Calendars.ReadWrite)
+    // grants both halves of it. The capability is what the USER switches off, and
+    // "read my mail but stay out of my diary" is a sentence people mean.
+    public const string CalendarRead = "calendar.read";
+
+    // Write covers creating, amending, cancelling and replying to invitations. All four
+    // send mail to other people from the user's address, which is why none of them sits
+    // under calendar.read and why there is no finer split: a cancellation that notifies
+    // eight attendees is not meaningfully safer than an invitation that does.
+    public const string CalendarWrite = "calendar.write";
+
     public const string IssuesRead = "issues.read";
     public const string IssuesWrite = "issues.write";
     public const string IssuesAdmin = "issues.admin";

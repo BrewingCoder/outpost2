@@ -25,7 +25,7 @@ builder.Services.AddHttpContextAccessor();
 
 // MCP: the tool surface IS the product (D1). Streamable HTTP, protected by the same
 // cookie/auth pipeline as the rest of the app for now.
-builder.Services.AddSingleton<OutPost2.Web.Mcp.IMessageIndex, OutPost2.Web.Mcp.MessageIndex>();
+builder.Services.AddSingleton<OutPost2.Web.Mcp.IItemIndex, OutPost2.Web.Mcp.ItemIndex>();
 builder.Services.AddMcpServer().WithHttpTransport().WithToolsFromAssembly();
 
 var gh = builder.Configuration.GetSection(GitHubOptions.SectionName).Get<GitHubOptions>()
@@ -73,6 +73,12 @@ builder.Services.AddHttpClient("graph").ConfigureHttpClient(c => c.Timeout = Tim
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMicrosoftConnectionServiceAccessor>(
     sp => sp.GetRequiredService<IMicrosoftConnectionService>());
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailService, OutPost2.Infrastructure.Mail.MailService>();
+
+// Scoped like the other Graph services -- it resolves an access token per request, and a
+// singleton holding a scoped accessor is a captive dependency the container refuses. The
+// per-mailbox timezone it caches therefore lives in IMemoryCache, not in a field.
+builder.Services.AddScoped<OutPost2.Infrastructure.Calendar.ICalendarService,
+                           OutPost2.Infrastructure.Calendar.CalendarService>();
 builder.Services.AddSingleton<OutPost2.Infrastructure.Mail.IAttachmentExtractor,
                               OutPost2.Infrastructure.Mail.AttachmentExtractor>();
 builder.Services.AddSingleton<OutPost2.Infrastructure.Files.IObjectStore, OutPost2.Infrastructure.Files.S3ObjectStore>();

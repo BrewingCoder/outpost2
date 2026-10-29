@@ -63,12 +63,23 @@ public sealed class EntraOptions
     /// </para>
     /// </summary>
     /// <remarks>
+    /// <para>
     /// MailboxSettings.ReadWrite is for Outlook's colour categories (OP2-76). Mail.ReadWrite
     /// can put a category ON a message but cannot read or add to the mailbox's palette,
-    /// which lives in mailbox settings.
+    /// which lives in mailbox settings. The calendar leans on it too, for the mailbox's
+    /// timezone — without it every time has to be read out in UTC.
+    /// </para>
+    /// <para>
+    /// Calendars.ReadWrite is the calendar (OP2-75). Optional rather than required for the
+    /// reason above: a connection made before it existed keeps working and simply has no
+    /// calendar, instead of every mailbox needing a browser the moment this shipped.
+    /// </para>
     /// </remarks>
     public string[] OptionalScopes { get; set; } =
-        ["https://graph.microsoft.com/MailboxSettings.ReadWrite"];
+    [
+        "https://graph.microsoft.com/MailboxSettings.ReadWrite",
+        "https://graph.microsoft.com/Calendars.ReadWrite",
+    ];
 
     /// <summary>What to ask the user to consent to: everything we need plus everything we would like.</summary>
     public string[] ConsentScopes => [.. Scopes, .. OptionalScopes];
@@ -238,6 +249,17 @@ public sealed class MicrosoftConnectionService(
                     Enabled = true },
             new() { Name = Capabilities.MailSend,
                     Granted = granted.Contains("Mail.Send"),
+                    Enabled = true },
+
+            new() { Name = Capabilities.CalendarRead,
+                    Granted = granted.Contains("Calendars.ReadWrite") || granted.Contains("Calendars.Read"),
+                    Enabled = true },
+
+            // ReadWrite only, for the same reason as mail: Calendars.Read can show the
+            // diary but cannot move anything in it, and claiming otherwise turns a
+            // consent decision into a 403 met halfway through rescheduling.
+            new() { Name = Capabilities.CalendarWrite,
+                    Granted = granted.Contains("Calendars.ReadWrite"),
                     Enabled = true },
         };
 

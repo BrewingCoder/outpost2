@@ -5,10 +5,17 @@ using System.Text;
 
 namespace OutPost2.Web.Mcp;
 
+/// <summary>What a handle points at. Mail and calendar share one handle space.</summary>
+public enum ItemKind
+{
+    Mail,
+    Event,
+}
+
 /// <summary>
-/// One message the conversation can refer to, by a short handle that does not move.
+/// One item the conversation can refer to, by a short handle that does not move.
 /// </summary>
-public sealed class MailRef
+public sealed class ItemRef
 {
     public required string Ref { get; init; }
 
@@ -16,13 +23,23 @@ public sealed class MailRef
     /// Graph's id. Mutable because a move reissues it — the handle is the stable thing
     /// here, not the provider's identifier.
     /// </summary>
-    public required string MessageId { get; set; }
+    public required string ItemId { get; set; }
 
     public required string ConnectionLabel { get; init; }
 
     /// <summary>Kept so an action can read back WHAT it acted on. "Deleted it" is not a confirmation.</summary>
     public required string Subject { get; init; }
+
+    /// <summary>Sender for mail, organiser for an event.</summary>
     public required string From { get; init; }
+
+    /// <summary>
+    /// Mail and calendar deliberately share one index, so "the second one" always means
+    /// the second of whatever was listed LAST rather than depending on which tool the
+    /// model happens to reach for next. The cost is that a handle can arrive at the wrong
+    /// family of tool, so each one carries what it is and the tools check.
+    /// </summary>
+    public ItemKind Kind { get; init; } = ItemKind.Mail;
 }
 
 /// <summary>
@@ -46,24 +63,25 @@ public sealed class MailRef
 /// persisting. Losing it costs one "list them again", which is the right failure.
 /// </para>
 /// </summary>
-public interface IMessageIndex
+public interface IItemIndex
 {
     /// <summary>Records a listing in order and returns it with handles attached.</summary>
-    IReadOnlyList<MailRef> Remember(
-        Guid userId, IReadOnlyList<(string MessageId, string ConnectionLabel, string Subject, string From)> ordered);
+    IReadOnlyList<ItemRef> Remember(
+        Guid userId, IReadOnlyList<(string ItemId, string ConnectionLabel, string Subject, string From)> ordered,
+        ItemKind kind = ItemKind.Mail);
 
     /// <summary>
     /// Resolves a handle, or an ordinal against the last listing. Null when neither matches
     /// — including when the window has expired, which must read as "list them again"
     /// rather than resolving against something an hour stale.
     /// </summary>
-    MailRef? Resolve(Guid userId, string token);
+    ItemRef? Resolve(Guid userId, string token);
 
     /// <summary>Called after a move, which reissues the provider's id under the same handle.</summary>
-    void Retarget(Guid userId, string handle, string newMessageId);
+    void Retarget(Guid userId, string handle, string newItemId);
 }
 
-public sealed class MessageIndex : IMessageIndex
+public sealed class ItemIndex : IItemIndex
 {
     private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(30);
 
@@ -81,44 +99,46 @@ public sealed class MessageIndex : IMessageIndex
 
     private sealed class Entry
     {
-        public readonly Dictionary<string, MailRef> ByHandle = new(StringComparer.OrdinalIgnoreCase);
-        public readonly Dictionary<string, MailRef> ByMessageId = new(StringComparer.Ordinal);
-        public readonly List<MailRef> Order = [];
-        public List<MailRef> LastListing = [];
+        public readonly Dictionary<string, ItemRef> ByHandle = new(StringComparer.OrdinalIgnoreCase);
+        public readonly Dictionary<string, ItemRef> ByItemId = new(StringComparer.Ordinal);
+        public readonly List<ItemRef> Order = [];
+        public List<ItemRef> LastListing = [];
         public DateTimeOffset At = DateTimeOffset.UtcNow;
     }
 
-    public IReadOnlyList<MailRef> Remember(
+    public IReadOnlyList<ItemRef> Remember(
         Guid userId,
-        IReadOnlyList<(string MessageId, string ConnectionLabel, string Subject, string From)> ordered)
+        IReadOnlyList<(string ItemId, string ConnectionLabel, string Subject, string From)> ordered,
+        ItemKind kind = ItemKind.Mail)
     {
         var e = Fresh(userId);
 
         lock (e)
         {
-            var listing = new List<MailRef>(ordered.Count);
+            var listing = new List<ItemRef>(ordered.Count);
 
             foreach (var (id, label, subject, from) in ordered)
             {
                 // The same message listed twice keeps the handle it already had, which is
                 // the entire point: "delete a7kq" means one message for the whole session.
-                if (e.ByMessageId.TryGetValue(id, out var known))
+                if (e.ByItemId.TryGetValue(id, out var known))
                 {
                     listing.Add(known);
                     continue;
                 }
 
-                var created = new MailRef
+                var created = new ItemRef
                 {
                     Ref = Mint(id, e.ByHandle),
-                    MessageId = id,
+                    ItemId = id,
                     ConnectionLabel = label,
                     Subject = subject,
                     From = from,
+                    Kind = kind,
                 };
 
                 e.ByHandle[created.Ref] = created;
-                e.ByMessageId[id] = created;
+                e.ByItemId[id] = created;
                 e.Order.Add(created);
                 listing.Add(created);
             }
@@ -128,7 +148,7 @@ public sealed class MessageIndex : IMessageIndex
                 var oldest = e.Order[0];
                 e.Order.RemoveAt(0);
                 e.ByHandle.Remove(oldest.Ref);
-                e.ByMessageId.Remove(oldest.MessageId);
+                e.ByItemId.Remove(oldest.ItemId);
             }
 
             e.LastListing = listing;
@@ -137,7 +157,7 @@ public sealed class MessageIndex : IMessageIndex
         }
     }
 
-    public MailRef? Resolve(Guid userId, string token)
+    public ItemRef? Resolve(Guid userId, string token)
     {
         var said = (token ?? "").Trim();
         if (said.Length == 0) return null;
@@ -173,7 +193,7 @@ public sealed class MessageIndex : IMessageIndex
         }
     }
 
-    public void Retarget(Guid userId, string handle, string newMessageId)
+    public void Retarget(Guid userId, string handle, string newItemId)
     {
         if (!_byUser.TryGetValue(userId, out var e)) return;
 
@@ -181,9 +201,9 @@ public sealed class MessageIndex : IMessageIndex
         {
             if (!e.ByHandle.TryGetValue(handle, out var item)) return;
 
-            e.ByMessageId.Remove(item.MessageId);
-            item.MessageId = newMessageId;
-            e.ByMessageId[newMessageId] = item;
+            e.ByItemId.Remove(item.ItemId);
+            item.ItemId = newItemId;
+            e.ByItemId[newItemId] = item;
         }
     }
 
@@ -207,7 +227,7 @@ public sealed class MessageIndex : IMessageIndex
     /// same one. Four characters is ~920k possibilities against a few dozen live messages;
     /// the loop handles the collision anyway rather than trusting the arithmetic.
     /// </summary>
-    public static string Mint(string messageId, IReadOnlyDictionary<string, MailRef> taken)
+    public static string Mint(string messageId, IReadOnlyDictionary<string, ItemRef> taken)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(messageId));
 
