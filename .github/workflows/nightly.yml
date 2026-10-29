@@ -24,6 +24,11 @@ env:
   OSV_SCANNER_VERSION: '2.7.0'
   TRIVY_VERSION: '0.76.1'
   OPENGREP_VERSION: '1.33.0'
+  # opengrep publishes sigstore .sig/.cert rather than a SHA256SUMS file, so there is
+  # no checksum file to grep. The digest is pinned here instead, cross-checked against
+  # the one GitHub's release API reports for the asset. Bump it with the version — a
+  # stale digest fails loudly, which is the right way for this to break.
+  OPENGREP_SHA256: '2545812755572e1355ea60f96288f82a26eebed7fc8b512430d49d5667214c24'
   CYCLONEDX_VERSION: '6.3.1'
 
 jobs:
@@ -75,9 +80,16 @@ jobs:
       # `sha256sum -c` fail to find the file, and it fails in the worst way — the verify
       # step reports "FAILED open or read", the scan silently skips, and the job stays
       # green having checked nothing. (Lesson taken from tamp-build/tamp #101.)
+      #
+      # …and every download happens in $RUNNER_TEMP, never the workspace. .NET resolves a
+      # bare command name against the working directory BEFORE PATH, so a 0644 file left
+      # in the repo root shadows the verified install in /usr/local/bin and the scan dies
+      # with "Permission denied" having proved nothing. opengrep hit exactly this; the
+      # other three only escaped because their filenames happen not to collide.
       - name: Install trufflehog
         run: |
           set -euo pipefail
+          cd "$RUNNER_TEMP"
           base="https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}"
           tarball="trufflehog_${TRUFFLEHOG_VERSION}_linux_amd64.tar.gz"
           curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o "$tarball" "${base}/${tarball}"
@@ -91,6 +103,7 @@ jobs:
       - name: Install osv-scanner
         run: |
           set -euo pipefail
+          cd "$RUNNER_TEMP"
           bin="osv-scanner_linux_amd64"
           base="https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}"
           curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o "$bin" "${base}/${bin}"
@@ -102,6 +115,7 @@ jobs:
       - name: Install trivy
         run: |
           set -euo pipefail
+          cd "$RUNNER_TEMP"
           deb="trivy_${TRIVY_VERSION}_Linux-64bit.deb"
           base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
           curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o "$deb" "${base}/${deb}"
@@ -114,8 +128,10 @@ jobs:
       - name: Install opengrep
         run: |
           set -euo pipefail
+          cd "$RUNNER_TEMP"
           curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o opengrep \
             "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          echo "${OPENGREP_SHA256}  opengrep" | sha256sum -c -
           sudo install -m 0755 opengrep /usr/local/bin/opengrep
           opengrep --version
 
