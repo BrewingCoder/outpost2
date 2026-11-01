@@ -72,7 +72,12 @@ builder.Services.AddDataProtection()
     .PersistKeysToDbContext<OutPostDbContext>()
     .ProtectKeysWithVault();
 
-builder.Services.AddScoped<IConnectionStore, ConnectionStore>();
+// Serialised, because the DbContext behind it is scoped per request and several tools fan
+// out across mailboxes — which made six concurrent users of one context and turned a
+// database error into a confident "Nothing found" (OP2-239).
+builder.Services.AddScoped<ConnectionStore>();
+builder.Services.AddScoped<IConnectionStore>(sp =>
+    new SerialisedConnectionStore(sp.GetRequiredService<ConnectionStore>()));
 builder.Services.AddScoped<IPendingConnectionStore, PendingConnectionStore>();
 builder.Services.AddScoped<IMicrosoftConnectionService, MicrosoftConnectionService>();
 builder.Services.AddHttpClient("graph").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(60));

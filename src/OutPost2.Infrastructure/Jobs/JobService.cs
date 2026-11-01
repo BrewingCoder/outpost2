@@ -15,6 +15,22 @@ public sealed record SendMailPayload(
     string Body,
     IReadOnlyList<Guid> AttachmentIds);
 
+/// <summary>
+/// Payload for a <see cref="JobKind.ClearMail"/> job (OP2-231).
+/// <para>
+/// The scope is carried as folder ids rather than the spoken name, because a folder can be
+/// renamed between the user agreeing to this and the worker running it — and a clear-out
+/// that resolves "Receipts" afresh could resolve it to a different folder than the one whose
+/// count the user heard.
+/// </para>
+/// </summary>
+public sealed record ClearMailPayload(
+    Guid ConnectionId,
+    string From,
+    List<string>? FolderIds,
+    DateTimeOffset? Before,
+    int Expected);
+
 public interface IJobService
 {
     /// <summary>

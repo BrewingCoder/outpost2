@@ -6,6 +6,7 @@ using OutPost2.Infrastructure.Connections;
 using OutPost2.Infrastructure.Data;
 using OutPost2.Infrastructure.Files;
 using OutPost2.Infrastructure.Jobs;
+using OutPost2.Core.Mail;
 using OutPost2.Infrastructure.Mail;
 
 namespace OutPost2.Web.Jobs;
@@ -97,6 +98,10 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
                     await RunSendMailAsync(sp, jobs, job, ct);
                     break;
 
+                case JobKind.ClearMail:
+                    await RunClearMailAsync(sp, jobs, job, ct);
+                    break;
+
                 default:
                     await jobs.CompleteAsync(job.Id, false, $"Unknown job kind {job.Kind}.", false, ct);
                     break;
@@ -182,6 +187,123 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
                 NotificationKind.JobFinished),
             ct);
     }
+
+    /// <summary>
+    /// Clears a sender out of a mailbox, in the background (OP2-231).
+    /// <para>
+    /// It ran inside the tool call before, and 430 messages did not fit: the client gave up
+    /// with a generic failure while the server carried on deleting, so nobody could say
+    /// whether it was running, finished or failed — and every retry hit the concurrency
+    /// limit the first attempt was still using.
+    /// </para>
+    /// <para>
+    /// Out here the constraints invert. Nobody is waiting on the call, so a throttle can
+    /// simply be waited out for as long as Graph asks, and progress can be written down
+    /// after every pass for <c>check_queue</c> to read back.
+    /// </para>
+    /// </summary>
+    private async Task RunClearMailAsync(
+        IServiceProvider sp, IJobService jobs, Job job, CancellationToken ct)
+    {
+        var payload = JsonSerializer.Deserialize<ClearMailPayload>(job.Payload)
+            ?? throw new InvalidOperationException("Unreadable ClearMail payload.");
+
+        var db = sp.GetRequiredService<OutPostDbContext>();
+        var mail = sp.GetRequiredService<IMailService>();
+
+        var connection = await db.Connections.FirstOrDefaultAsync(
+            c => c.Id == payload.ConnectionId && c.UserId == job.UserId, ct);
+
+        if (connection is null)
+        {
+            await jobs.CompleteAsync(job.Id, false, "That mailbox no longer exists.", false, ct);
+            return;
+        }
+
+        var target = new ClearTarget
+        {
+            From = payload.From,
+            FolderIds = payload.FolderIds,
+            Before = payload.Before,
+        };
+
+        var cleared = 0;
+        var failed = 0;
+
+        // A pass at a time, so progress is recorded as it goes and a worker that dies is
+        // resumed by the next one having lost at most one pass.
+        for (var pass = 0; pass < MaxClearPasses && !ct.IsCancellationRequested; pass++)
+        {
+            ClearOutcome outcome;
+            try
+            {
+                outcome = await mail.ClearAsync(connection, target, ceiling: ClearPerPass, ct);
+            }
+            catch (MailThrottledException throttle)
+            {
+                // Nobody is waiting, so wait properly. This is the whole reason the job
+                // belongs out here rather than inside the tool call.
+                var wait = throttle.RetryAfter ?? TimeSpan.FromSeconds(30);
+                if (wait > TimeSpan.FromMinutes(5)) wait = TimeSpan.FromMinutes(5);
+
+                log.LogWarning(throttle, "Clear job {JobId} throttled; waiting {Seconds}s.",
+                    job.Id, wait.TotalSeconds);
+
+                await jobs.UpdateProgressAsync(job.Id, JobState.Sending, Percent(cleared, payload.Expected),
+                    $"{cleared} moved so far, paused for {(int)wait.TotalSeconds}s because Microsoft is "
+                    + "rate-limiting the mailbox", ct);
+
+                await Task.Delay(wait, ct);
+                continue;
+            }
+            catch (MailAuthRequiredException)
+            {
+                await jobs.CompleteAsync(job.Id, false,
+                    $"{connection.Label} needs re-authorising, so I stopped after {cleared}.", false, ct);
+                return;
+            }
+
+            cleared += outcome.Deleted;
+            failed += outcome.Failed;
+
+            await jobs.UpdateProgressAsync(job.Id, JobState.Sending, Percent(cleared, payload.Expected),
+                $"{cleared} moved to Deleted Items", ct);
+
+            // Nothing moved and nothing refused: there is nothing left matching, so this is
+            // done rather than stalled.
+            if (outcome.Deleted == 0) break;
+
+            if (outcome.Throttled)
+            {
+                var wait = outcome.RetryAfter ?? TimeSpan.FromSeconds(30);
+                if (wait > TimeSpan.FromMinutes(5)) wait = TimeSpan.FromMinutes(5);
+                await Task.Delay(wait, ct);
+            }
+        }
+
+        var summary = $"{cleared} message{(cleared == 1 ? "" : "s")} from \"{payload.From}\" "
+                    + $"moved to Deleted Items in {connection.Label}"
+                    + (failed > 0 ? $", {failed} refused" : "")
+                    + ". They stay there until you empty it.";
+
+        await jobs.UpdateProgressAsync(job.Id, JobState.Sending, 100, summary, ct);
+        await jobs.CompleteAsync(job.Id, true, null, false, ct);
+
+        log.LogInformation("Clear job {JobId} finished: {Cleared} moved, {Failed} refused.",
+            job.Id, cleared, failed);
+    }
+
+    private static int Percent(int done, int expected) =>
+        expected <= 0 ? 0 : Math.Clamp((int)(100.0 * done / expected), 0, 99);
+
+    /// <summary>How much one pass clears. Small enough that progress moves visibly.</summary>
+    private const int ClearPerPass = 200;
+
+    /// <summary>
+    /// A ceiling on passes, so a mailbox that keeps handing back the same undeletable page
+    /// cannot occupy the worker for ever. 200 passes is 40,000 messages.
+    /// </summary>
+    private const int MaxClearPasses = 200;
 }
 
 /// <summary>Housekeeping: expired staging files, spent auth codes and pending connections.</summary>

@@ -1,12 +1,15 @@
 using System.ComponentModel;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Server;
 using OutPost2.Core.Connections;
+using OutPost2.Core.Jobs;
 using OutPost2.Core.Mail;
 using OutPost2.Infrastructure.Connections;
+using OutPost2.Infrastructure.Jobs;
 using OutPost2.Infrastructure.Mail;
 using OutPost2.Web.Connections;
 
@@ -37,6 +40,7 @@ public sealed partial class MailTools(
     IItemIndex index,
     ISearchContinuations pages,
     OutPost2.Infrastructure.Mail.IAttachmentExtractor extractor,
+    IJobService jobs,
     PublicUrls urls)
 {
     private Guid UserId => http.HttpContext?.User.UserId()
@@ -111,7 +115,14 @@ public sealed partial class MailTools(
 
         var sb = new StringBuilder();
         if (ordered.Count == 0)
-            sb.AppendLine(unreadOnly ? "Nothing unread." : "No messages.");
+        {
+            // The same distinction search_mail needs (OP2-239): "no messages" is a claim
+            // about the mailbox, and a mailbox that threw was not looked at.
+            sb.AppendLine(Empty(
+                unreadOnly ? "Nothing unread." : "No messages.",
+                results.Length,
+                [.. results.Where(r => r.Error is not null).Select(r => (r.Label, r.Error!))]));
+        }
         else
         {
             sb.AppendLine($"{ordered.Count} message{(ordered.Count == 1 ? "" : "s")}:");
@@ -131,9 +142,11 @@ public sealed partial class MailTools(
         }
 
         // Report degraded mailboxes explicitly: silence reads as "you have no mail there",
-        // which is a lie.
-        foreach (var bad in results.Where(r => r.Error is not null))
-            sb.AppendLine($"Note: {bad.Label} {bad.Error}.");
+        // which is a lie. Skipped when there were no results, because Empty above has
+        // already said it as the headline rather than as a footnote.
+        if (ordered.Count > 0)
+            foreach (var bad in results.Where(r => r.Error is not null))
+                sb.AppendLine($"Note: {bad.Label} {bad.Error}.");
         foreach (var d in resolution.Degraded)
             sb.AppendLine($"Note: {d.Label} is unavailable ({d.State}).");
 
@@ -331,10 +344,7 @@ public sealed partial class MailTools(
         var scope = folder is null ? "" : $" in {Spoken(folder)}";
 
         if (found.Count == 0)
-            return failed.Count == 0
-                ? $"Nothing found for \"{query}\"{scope}."
-                : $"Nothing found for \"{query}\"{scope}. "
-                  + string.Join(" ", failed.Select(f => $"Note: {f.Label} {f.Error}."));
+            return Empty($"Nothing found for \"{query}\"{scope}.", searching.Count, failed);
 
         var ordered = found.OrderByDescending(x => x.Item.ReceivedAt).ToList();
         var refs = index.Remember(UserId,
@@ -855,6 +865,17 @@ public sealed partial class MailTools(
 
     // ── clearing out a sender (OP2-224) ──────────────────────────────────────
 
+    /// <summary>
+    /// How many messages <c>clear_mail</c> will move while the caller waits.
+    /// <para>
+    /// Twenty per batch and a listing between each, so this is about a dozen requests —
+    /// comfortably inside a tool call. Above it the work goes to the queue, because the
+    /// alternative was measured: 430 messages timed out the client while the server kept
+    /// deleting, and nobody could say whether it had finished (OP2-231).
+    /// </para>
+    /// </summary>
+    public const int InlineClearLimit = 150;
+
     [McpServerTool(Name = "clear_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
     [Description("Move every message from a sender to Deleted Items in one go — the whole lot, not one at a time. Call it once WITHOUT confirm to hear the count and who they are from, then again with confirm true. By default it only clears the Inbox and Clutter; pass folder 'all' to include folders you have filed mail into.")]
     public async Task<string> ClearMail(
@@ -905,31 +926,63 @@ public sealed partial class MailTools(
                 return Proposal(from, c.Label, where, when, preview, folders);
             }
 
-            var done = await mail.ClearAsync(c, target, ct: ct);
+            // How many there are decides whether this can be answered in the call at all.
+            var expected = await mail.PreviewClearAsync(c, target, ct);
 
-            if (done.Deleted == 0 && done.Failed == 0)
+            if (expected.Matched == 0)
                 return $"Nothing from \"{Untrusted.Scrub(from)}\"{where}{when} in {c.Label} any more — "
                      + "it looks like it has already gone.";
 
-            var said = $"Moved {done.Deleted} message{(done.Deleted == 1 ? "" : "s")} from "
-                     + $"\"{Untrusted.Scrub(from)}\"{where} to Deleted Items in {c.Label}. "
-                     + "They stay there until you empty it, so this is undoable.";
+            // A small clear-out is done here and now, because a job the user has to ask
+            // about is worse than a two-second wait.
+            if (expected.Matched <= InlineClearLimit)
+            {
+                var done = await mail.ClearAsync(c, target, ct: ct);
 
-            // Said before the other notes, because it changes what the listener should do
-            // next: everything else invites another go, and this asks them to wait.
-            if (done.Throttled) said += " " + Slow(done.RetryAfter);
+                var said = $"Moved {done.Deleted} message{(done.Deleted == 1 ? "" : "s")} from "
+                         + $"\"{Untrusted.Scrub(from)}\"{where} to Deleted Items in {c.Label}. "
+                         + "They stay there until you empty it, so this is undoable.";
 
-            // Both of these are said plainly rather than rounded off. "Deleted 400" when 12
-            // are still sitting there is the failure this tool exists to replace.
-            if (done.Failed > 0)
-                said += $" {done.Failed} wouldn't move — that usually means they had already "
-                      + "shifted. Run it again and I'll pick up anything still there.";
+                // Said before the other notes, because it changes what the listener should
+                // do next: everything else invites another go, this asks them to wait.
+                if (done.Throttled) said += " " + Slow(done.RetryAfter);
 
-            if (done.Remaining > 0)
-                said += $" There {(done.Remaining == 1 ? "is" : "are")} still {done.Remaining} to go "
-                      + "— that was as many as I do in one pass. Say go ahead again for the next lot.";
+                // Said plainly rather than rounded off. "Moved 400" when 12 are still
+                // sitting there is the failure this tool exists to replace.
+                if (done.Failed > 0)
+                    said += $" {done.Failed} wouldn't move — that usually means they had already "
+                          + "shifted. Run it again and I'll pick up anything still there.";
 
-            return said;
+                if (done.Remaining > 0)
+                    said += $" There {(done.Remaining == 1 ? "is" : "are")} still {done.Remaining} "
+                          + "to go. Say go ahead again for the next lot.";
+
+                return said;
+            }
+
+            // Anything bigger goes to the queue (OP2-231). Four hundred and thirty messages
+            // did not fit in a tool call: the client gave up with a generic failure while
+            // the server carried on deleting, and every retry then hit the concurrency
+            // limit the first attempt was still using. The key is derived from the request
+            // so that exact retry joins the running job instead of starting a second one.
+            var key = Fingerprint(c.Id, from.Trim(), scope, cutoff);
+
+            var (job, existed) = await jobs.EnqueueAsync(
+                UserId, JobKind.ClearMail,
+                $"clear {expected.Matched} from \"{Untrusted.Scrub(from)}\"{where}",
+                new ClearMailPayload(c.Id, from.Trim(), scope?.ToList(), cutoff, expected.Matched),
+                key, c.Label, requiresApproval: false, ct);
+
+            if (existed && !job.IsTerminal)
+                return "That one is already running — I didn't start a second. " + job.Spoken()
+                     + " Ask me to check the queue for how it's getting on.";
+
+            if (existed) return job.Spoken();
+
+            return $"Started on {expected.Matched} message{(expected.Matched == 1 ? "" : "s")} from "
+                 + $"\"{Untrusted.Scrub(from)}\"{where} in {c.Label}. That's too many to do while "
+                 + "you wait, so it runs in the background — ask me to check the queue and I'll "
+                 + "tell you how far it has got. Everything goes to Deleted Items.";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
@@ -1106,6 +1159,51 @@ public sealed partial class MailTools(
                     + "where they stay until you empty it.");
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// What to say when a fan-out came back with nothing (OP2-239).
+    /// <para>
+    /// "Nothing found" is a claim about the mailbox, and it is only ours to make if we
+    /// actually looked. OP2-239 was filed because a database error demoted to a footnote
+    /// left the headline reading as a confident empty answer — and an empty answer is acted
+    /// on, while an error is retried. Those are opposite outcomes, so the distinction
+    /// belongs in the first sentence rather than a note after it.
+    /// </para>
+    /// </summary>
+    /// <param name="nothing">What to say when the search genuinely found nothing.</param>
+    /// <param name="asked">How many mailboxes were tried.</param>
+    public static string Empty(
+        string nothing, int asked, IReadOnlyList<(string Label, string Error)> failed)
+    {
+        if (failed.Count == 0) return nothing;
+
+        var trouble = string.Join("; ", failed.Select(f => $"{f.Label} {f.Error}"));
+
+        // Every mailbox failed, so there is no result at all — not an empty one. Said
+        // plainly, because this is the case that was being reported as "nothing".
+        if (failed.Count >= asked)
+            return $"I couldn't look: {Untrusted.Scrub(trouble)}. "
+                 + "That was every mailbox, so I don't know whether there's anything there "
+                 + "— this isn't an empty result, it's a failed one.";
+
+        // Some worked. The empty answer stands for those, and has to be qualified.
+        return $"{nothing} That's only the {asked - failed.Count} of {asked} mailboxes I could "
+             + $"reach — {Untrusted.Scrub(trouble)}, so there may be more there.";
+    }
+
+    /// <summary>
+    /// A stable name for one clear-out request, so a retried tool call joins the job that is
+    /// already running rather than starting a second one against the same mailbox (OP2-231).
+    /// </summary>
+    public static string Fingerprint(
+        Guid connectionId, string from, IReadOnlyList<string>? scope, DateTimeOffset? before)
+    {
+        var material = $"clear|{connectionId}|{from.ToLowerInvariant()}|"
+                     + $"{(scope is null ? "all" : string.Join(",", scope.Order(StringComparer.Ordinal)))}|"
+                     + $"{before?.UtcDateTime:O}";
+
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..32];
     }
 
     /// <summary>

@@ -73,8 +73,19 @@ public sealed class Job
         JobState.Queued => $"Queued: {Description}",
         JobState.Staging => $"Preparing: {Description}",
         JobState.Uploading => $"Uploading {Description} — {PercentComplete}% done",
-        JobState.Sending => $"Sending: {Description}",
-        JobState.Sent => $"Sent: {Description}",
+
+        // The states are shared between kinds, so the verb comes from the kind. "Sending:
+        // clear 430 messages from LinkedIn" would be a sentence about the wrong thing, and
+        // this is read out loud.
+        JobState.Sending => Kind == JobKind.ClearMail
+            ? $"Still clearing: {Description}"
+              + (Detail is null ? $" — {PercentComplete}% done" : $" — {Detail}")
+            : $"Sending: {Description}",
+
+        JobState.Sent => Kind == JobKind.ClearMail
+            ? $"Finished: {Description}" + (Detail is null ? "" : $" — {Detail}")
+            : $"Sent: {Description}",
+
         JobState.Cancelled => $"Cancelled: {Description}",
         JobState.Failed => $"Failed: {Description}. {Error}"
                            + (IsRetryable ? " Worth trying again." : ""),
@@ -85,6 +96,14 @@ public sealed class Job
 public enum JobKind
 {
     SendMail,
+
+    /// <summary>
+    /// Clearing a sender out of a mailbox (OP2-231). Hundreds of messages, twenty at a
+    /// time, which does not fit inside a tool call: the client gave up with a generic
+    /// failure while the server carried on deleting, so nobody could say whether it was
+    /// still running, finished or failed.
+    /// </summary>
+    ClearMail,
 }
 
 public enum JobState

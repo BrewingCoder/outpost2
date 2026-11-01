@@ -119,9 +119,23 @@ public sealed class LiveBulkDeleteProbe(ITestOutputHelper output) : IDisposable
         if (rules.Status == 200)
         {
             using var doc = JsonDocument.Parse(rules.Body);
+
             foreach (var r in doc.RootElement.GetProperty("value").EnumerateArray())
-                output.WriteLine($"   existing rule: \"{r.GetProperty("displayName").GetString()}\" "
+            {
+                var name = r.GetProperty("displayName").GetString() ?? "";
+                output.WriteLine($"   existing rule: \"{name}\" "
                                + $"enabled={r.TryGetProperty("isEnabled", out var e) && e.GetBoolean()}");
+
+                // Swept at the start as well as at the end. A run whose cleanup is
+                // throttled leaves one behind, and the next run would then add another —
+                // debris in somebody's mailbox that accumulates is worse than no probe.
+                if (!name.StartsWith("op2-probe-", StringComparison.Ordinal)) continue;
+
+                var swept = await Ask(http, HttpMethod.Delete,
+                    $"me/mailFolders/inbox/messageRules/{r.GetProperty("id").GetString()}");
+
+                output.WriteLine($"   swept a rule left by an earlier run -> {swept.Status}");
+            }
         }
 
         // Can a rule be written, and does it take "from this address" plus "delete"? Made
