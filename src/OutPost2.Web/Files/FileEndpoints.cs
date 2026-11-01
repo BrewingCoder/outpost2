@@ -76,6 +76,21 @@ public static class FileEndpoints
                     // The staging quota, which is the user's own limit and worth quoting.
                     return Results.Problem(ex.Message, statusCode: StatusCodes.Status409Conflict);
                 }
+                catch (Exception ex)
+                {
+                    // Anything else — the object store refusing, most likely. Logged in full
+                    // and answered in one line: this endpoint takes no sign-in, so whoever
+                    // reaches it is the last party who should be handed a stack trace. The
+                    // ticket is already spent, which is the right outcome; a new one costs a
+                    // tool call.
+                    log.LogError(ex, "An upload ticket redeemed by {User} could not be stored.",
+                        ticket.UserId);
+
+                    return Results.Problem(
+                        "The file could not be stored. The link is spent — ask for a new one "
+                        + "and try again; if it keeps happening the storage behind this is at fault.",
+                        statusCode: StatusCodes.Status502BadGateway);
+                }
             })
             // No form, so nothing for antiforgery to validate, and no cookie for it to
             // protect: the request carries its own single-use credential. Said explicitly
