@@ -88,7 +88,36 @@ public class CalendarTimeTests
         var nowThere = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Denver);
         Assert.Equal(nowThere.Date, localStart.Date);
 
-        Assert.Equal(TimeSpan.FromDays(1), to - from);
+        // Ends at the NEXT local midnight — not 24 hours later. On the day the clocks go
+        // back the user's day really is 25 hours long, and asserting 24 made this test fail
+        // once a year against correct code. It failed on 1 November 2026, which is that day.
+        var localEnd = TimeZoneInfo.ConvertTime(to, Denver);
+        Assert.Equal(localStart.Date.AddDays(1), localEnd.Date);
+        Assert.Equal(TimeSpan.Zero, localEnd.TimeOfDay);
+    }
+
+    [Fact]
+    public void The_day_the_clocks_go_back_is_twenty_five_hours_of_calendar()
+    {
+        // The property the "today" test used to get wrong, pinned to a fixed date so it is
+        // checked every run rather than once a year. 1 November 2026 is when the US moves.
+        // An event at 01:30 happens twice that morning, and a 24-hour window would ask
+        // Graph for only one of them.
+        var (from, to) = CalendarTools.Window(Denver, "2026-11-01", days: 1);
+
+        Assert.Equal(TimeSpan.FromHours(25), to - from);
+        Assert.Equal(new DateTime(2026, 11, 2), TimeZoneInfo.ConvertTime(to, Denver).Date);
+    }
+
+    [Fact]
+    public void The_day_the_clocks_go_forward_is_twenty_three()
+    {
+        // The other direction, which fails differently: a 24-hour window would reach into
+        // the next day and read tomorrow's first appointment out as today's.
+        var (from, to) = CalendarTools.Window(Denver, "2026-03-08", days: 1);
+
+        Assert.Equal(TimeSpan.FromHours(23), to - from);
+        Assert.Equal(new DateTime(2026, 3, 9), TimeZoneInfo.ConvertTime(to, Denver).Date);
     }
 
     [Fact]
