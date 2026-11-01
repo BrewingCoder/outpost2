@@ -26,6 +26,8 @@ builder.Services.AddHttpContextAccessor();
 // MCP: the tool surface IS the product (D1). Streamable HTTP, protected by the same
 // cookie/auth pipeline as the rest of the app for now.
 builder.Services.AddSingleton<OutPost2.Web.Mcp.IItemIndex, OutPost2.Web.Mcp.ItemIndex>();
+builder.Services.AddSingleton<OutPost2.Web.Mcp.ISearchContinuations,
+                              OutPost2.Web.Mcp.SearchContinuations>();
 builder.Services.AddMcpServer().WithHttpTransport().WithToolsFromAssembly();
 
 var gh = builder.Configuration.GetSection(GitHubOptions.SectionName).Get<GitHubOptions>()

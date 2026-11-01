@@ -203,6 +203,70 @@ public class MailSearchTests
         Assert.True(result.More);
     }
 
+    // ── carrying on (OP2-208) ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Stopping_short_hands_back_the_link_that_carries_on()
+    {
+        // Counting the rest is not reaching them. Without this, re-running the same search
+        // returns the same first page for ever.
+        var (mail, _) = Build(_ => Page(50, "https://graph.microsoft.com/v1.0/me/messages?$skiptoken=p2"));
+
+        var result = await mail.SearchAsync(Work, "invoice", top: 10);
+
+        Assert.True(result.More);
+        Assert.Equal("https://graph.microsoft.com/v1.0/me/messages?$skiptoken=p2", result.Continuation);
+    }
+
+    [Fact]
+    public async Task Finishing_the_results_hands_back_nothing_to_carry_on_with()
+    {
+        var (mail, _) = Build(_ => Page(3, null));
+
+        var result = await mail.SearchAsync(Work, "invoice", top: 50);
+
+        Assert.False(result.More);
+        Assert.Null(result.Continuation);
+    }
+
+    [Fact]
+    public async Task A_continuation_is_followed_instead_of_building_a_new_query()
+    {
+        var (mail, wire) = Build(_ => Page(5, null, from: 50));
+
+        var result = await mail.SearchAsync(
+            Work, "ignored", top: 50,
+            continueFrom: "https://graph.microsoft.com/v1.0/me/messages?$skiptoken=p2");
+
+        Assert.Equal(5, result.Items.Count);
+
+        // The link carries the query, so none is rebuilt — and "ignored" never appears.
+        Assert.Single(wire.Calls);
+        Assert.Contains("$skiptoken=p2", wire.Calls[0].Url);
+        Assert.DoesNotContain("ignored", wire.Calls[0].Url);
+
+        // And it is still a search, so it still needs the header.
+        Assert.True(wire.Calls[0].HadConsistencyLevel);
+    }
+
+    [Theory]
+    [InlineData("https://evil.example/steal")]
+    [InlineData("https://graph.microsoft.com.evil.example/v1.0/me/messages")]
+    [InlineData("http://graph.microsoft.com/v1.0/me/messages")]
+    [InlineData("/me/messages?$skiptoken=p2")]
+    public async Task A_continuation_that_is_not_ours_is_refused_rather_than_fetched(string url)
+    {
+        // These links reach this method from a store, but the model that carries the token
+        // around reads mail bodies written by strangers all day. Whatever the route, a
+        // request made with the user's access token goes to Graph or nowhere.
+        var (mail, wire) = Build(_ => Page(1, null));
+
+        await Assert.ThrowsAsync<MailException>(
+            () => mail.SearchAsync(Work, "invoice", top: 10, continueFrom: url));
+
+        Assert.Empty(wire.Calls);
+    }
+
     // ── scope (OP2-196) ──────────────────────────────────────────────────────
 
     [Fact]

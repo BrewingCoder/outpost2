@@ -33,6 +33,7 @@ public sealed class MailTools(
     IConnectionStore connections,
     IMailService mail,
     IItemIndex index,
+    ISearchContinuations pages,
     OutPost2.Infrastructure.Mail.IAttachmentExtractor extractor,
     PublicUrls urls)
 {
@@ -172,14 +173,39 @@ public sealed class MailTools(
     }
 
     [McpServerTool(Name = "search_mail", ReadOnly = true, OpenWorld = true)]
-    [Description("Search messages by text. Omit 'connection' for the default mailbox, or pass 'all' to search everywhere. Searches every folder unless 'folder' is given, and says which folder each hit is in. Results carry a handle in square brackets.")]
+    [Description("Search messages by text. Omit 'connection' for the default mailbox, or pass 'all' to search everywhere. Searches every folder unless 'folder' is given, and says which folder each hit is in. When there are more matches than were returned, the reply gives a page token — pass it back as 'page' to get the next lot. Results carry a handle in square brackets.")]
     public async Task<string> SearchMail(
-        [Description("What to search for.")] string query,
+        [Description("What to search for. Omit when passing 'page'.")] string? query = null,
         [Description("Connection name, or 'all'. Omit only if a default mailbox has been set.")] string? connection = null,
         [Description("How many results per mailbox, up to 200. The reply says if there are more.")] int count = 10,
         [Description("Restrict to one folder — 'inbox', 'archive', or a folder name. Omit to search the whole mailbox, including filed mail.")] string? folder = null,
+        [Description("A page token from a previous search, to carry on where it stopped. The query, folder and count come from that search, so they need not be repeated.")] string? page = null,
         CancellationToken ct = default)
     {
+        Continuation? resume = null;
+
+        if (!string.IsNullOrWhiteSpace(page))
+        {
+            resume = pages.Resolve(UserId, page);
+
+            if (resume is null)
+                return pages.Forgot(UserId, page)
+                    ? "That page token has already been used, or the search it came from has "
+                      + "aged out. Run the search again — if you have been filing as you go, "
+                      + "the ones you have dealt with will have dropped out of it."
+                    : $"I don't know the page token \"{page.Trim()}\". Search again and I'll "
+                      + "give you a fresh one.";
+
+            // Everything about the search comes from the token. Letting a caller re-state
+            // the query alongside it invites the two to disagree, and the link Graph gave
+            // us carries its own query regardless — so the stated one would be silently
+            // ignored rather than honoured.
+            (query, folder, count) = (resume.Query, resume.Folder, resume.Count);
+        }
+
+        if (string.IsNullOrWhiteSpace(query))
+            return "What should I search for?";
+
         var resolution = ConnectionResolver.Resolve(
             await connections.ListAsync(UserId, ct), Capabilities.MailRead, connection, isWrite: false);
 
@@ -187,11 +213,20 @@ public sealed class MailTools(
 
         var wanted = Math.Clamp(count, 1, MailService.MaxSearchResults);
 
+        // A continuation only knows about the mailboxes that had more to give, so carrying
+        // on deliberately narrows the fan-out rather than re-asking the exhausted ones.
+        var searching = resume is null
+            ? resolution.Connections
+            : resolution.Connections.Where(c => resume.Next.ContainsKey(c.Label)).ToList();
+
+        if (searching.Count == 0)
+            return "That page was the end of it — nothing more to fetch.";
+
         // Each task RETURNS its outcome rather than adding to a shared list. These run
         // concurrently, and List<T>.Add from several of them at once can lose an entry or
         // corrupt the list outright — a bug that only shows up for the users who have
         // more than one mailbox, which is everybody this product is for.
-        var perConnection = await Task.WhenAll(resolution.Connections.Select(async c =>
+        var perConnection = await Task.WhenAll(searching.Select(async c =>
         {
             try
             {
@@ -204,7 +239,7 @@ public sealed class MailTools(
                     : (IReadOnlyList<MailFolder>)[];
 
                 string? folderId = null;
-                if (folder is not null)
+                if (folder is not null && resume is null)
                 {
                     // Folder names are per-mailbox, so this belongs inside the fan-out:
                     // "Receipts" may exist in one connection and not another, and a scope
@@ -213,11 +248,15 @@ public sealed class MailTools(
                     folderId = WellKnown(folder) ?? Find(folders, folder)?.Id;
                     if (folderId is null)
                         return (c.Label, Items: (IReadOnlyList<MailSummary>)[], More: false,
-                                Folders: folders, Error: $"has no folder called \"{folder}\"");
+                                Next: (string?)null, Folders: folders,
+                                Error: $"has no folder called \"{folder}\"");
                 }
 
-                var hits = await mail.SearchAsync(c, query, wanted, folderId, ct);
-                return (c.Label, hits.Items, hits.More, Folders: folders, Error: (string?)null);
+                var hits = await mail.SearchAsync(
+                    c, query, wanted, folderId, resume?.Next.GetValueOrDefault(c.Label), ct);
+
+                return (c.Label, hits.Items, hits.More, Next: hits.Continuation,
+                        Folders: folders, Error: (string?)null);
             }
             // The comment that used to stand here said these were "reported below via
             // Degraded/empty". They were not: a mailbox that threw was indistinguishable
@@ -227,12 +266,14 @@ public sealed class MailTools(
             catch (MailAuthRequiredException)
             {
                 return (c.Label, Items: (IReadOnlyList<MailSummary>)[], More: false,
-                        Folders: (IReadOnlyList<MailFolder>)[], Error: "needs re-authorising");
+                        Next: (string?)null, Folders: (IReadOnlyList<MailFolder>)[],
+                        Error: "needs re-authorising");
             }
             catch (Exception ex)
             {
                 return (c.Label, Items: (IReadOnlyList<MailSummary>)[], More: false,
-                        Folders: (IReadOnlyList<MailFolder>)[], Error: ex.Message);
+                        Next: (string?)null, Folders: (IReadOnlyList<MailFolder>)[],
+                        Error: ex.Message);
             }
         }));
 
@@ -284,12 +325,34 @@ public sealed class MailTools(
             sb.AppendLine();
         }
 
-        // Says when it is showing part of the answer. Silence here reads as "that is all
-        // of them", and a bulk action built on that belief leaves most of the mail in
-        // place while reporting success (OP2-189).
-        foreach (var r in perConnection.Where(r => r.More))
-            sb.AppendLine($"There are more than {wanted} matches in {r.Label} — "
-                         + "narrow the search, or act on these and search again.");
+        // Says when it is showing part of the answer, and — since OP2-208 — hands back
+        // something that reaches the rest. Silence here reads as "that is all of them",
+        // and a bulk action built on that belief leaves most of the mail in place while
+        // reporting success (OP2-189). Saying it without a way forward is barely better:
+        // re-running the same search returns the same first page for ever.
+        var unfinished = perConnection
+            .Where(r => r.More && r.Next is not null)
+            .ToDictionary(r => r.Label, r => r.Next!, StringComparer.OrdinalIgnoreCase);
+
+        if (unfinished.Count > 0)
+        {
+            var token = pages.Remember(UserId, new Continuation
+            {
+                Query = query, Folder = folder, Count = wanted, Next = unfinished,
+            });
+
+            sb.AppendLine($"More to come in {string.Join(" and ", unfinished.Keys)} — "
+                        + $"say page {token} for the next {wanted}.");
+        }
+        else
+        {
+            // More, but no link to follow it with: the page cap, or a provider that said
+            // there was more and offered no way to reach it. Worth distinguishing, because
+            // "narrow the search" is the only advice that helps here.
+            foreach (var r in perConnection.Where(r => r.More))
+                sb.AppendLine($"There are more than {wanted} matches in {r.Label}, and I "
+                            + "can't page any further — narrow the search.");
+        }
 
         // A partial answer has to say that it is partial. Silence here reads as "there is
         // nothing else", which is the one thing it is not entitled to claim.

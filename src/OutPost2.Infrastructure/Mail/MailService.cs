@@ -24,9 +24,15 @@ public interface IMailService
     /// Restricts the search to one folder (a well-known name such as <c>inbox</c> works).
     /// Null searches everywhere, including everything already filed.
     /// </param>
+    /// <param name="continueFrom">
+    /// A <see cref="MailSearchResult.Continuation"/> from an earlier search, to carry on
+    /// from where it stopped. Graph refuses <c>$skip</c> and <c>$filter</c> alongside
+    /// <c>$search</c>, so this opaque link is the only way to reach a later page at all.
+    /// When set, the query and folder are already baked into it and are ignored.
+    /// </param>
     Task<MailSearchResult> SearchAsync(
         Connection connection, string query, int top = 25, string? folderId = null,
-        CancellationToken ct = default);
+        string? continueFrom = null, CancellationToken ct = default);
 
     Task SendAsync(Connection connection, OutgoingMail mail, CancellationToken ct = default);
 
@@ -193,11 +199,22 @@ public sealed class MailService(
 
     public async Task<MailSearchResult> SearchAsync(
         Connection connection, string query, int top = 25, string? folderId = null,
-        CancellationToken ct = default)
+        string? continueFrom = null, CancellationToken ct = default)
     {
         using var http = await ClientAsync(connection, ct);
 
         var wanted = Math.Clamp(top, 1, MaxSearchResults);
+
+        // A continuation is Graph's own link, handed back to us. It already carries the
+        // query, the folder and the page size, so none of those are rebuilt here — and it
+        // is only ever a link Graph gave us, never one a caller composed.
+        if (continueFrom is not null)
+        {
+            if (!continueFrom.StartsWith(Graph + "/", StringComparison.OrdinalIgnoreCase))
+                throw new MailException("That continuation is not one of ours.");
+
+            return await WalkAsync(http, connection, continueFrom, wanted, ct);
+        }
 
         // Scoped to one folder when asked. $search over /me/messages covers the whole
         // mailbox including everything already filed, so a clean-up pass could not tell
@@ -216,14 +233,26 @@ public sealed class MailService(
                   $"&$top={Math.Min(wanted, 100)}" +
                   "&$select=id,subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview,parentFolderId";
 
+        return await WalkAsync(http, connection, url, wanted, ct);
+    }
+
+    /// <summary>
+    /// Walks pages from <paramref name="url"/> until it has <paramref name="wanted"/>
+    /// results, and reports where it stopped.
+    /// <para>
+    /// Bounded on both ends: by what was asked for, and by a page count. A page that comes
+    /// back empty but still carries a nextLink would otherwise loop for ever on a remote
+    /// service's say-so, and the symptom is a tool call that never returns while someone is
+    /// driving. 200 results arrive in two or three pages, so reaching the cap means Graph
+    /// is behaving strangely rather than the caller asking for a lot.
+    /// </para>
+    /// </summary>
+    private async Task<MailSearchResult> WalkAsync(
+        HttpClient http, Connection connection, string url, int wanted, CancellationToken ct)
+    {
         var all = new List<MailSummary>();
         var more = false;
 
-        // Bounded on both ends: by what was asked for, and by a page count. A page that
-        // comes back empty but still carries a nextLink would otherwise loop for ever on a
-        // remote service's say-so, and the symptom is a tool call that never returns while
-        // someone is driving. 200 results arrive in two or three pages, so reaching the cap
-        // means Graph is behaving strangely rather than the caller asking for a lot.
         string? next = url;
 
         for (var page = 0; page < MaxSearchPages && next is not null && all.Count < wanted; page++)
@@ -258,8 +287,15 @@ public sealed class MailService(
         }
 
         // Anything left unfollowed — a nextLink we stopped short of, or the page cap — is
-        // "there is more". Saying nothing here is the failure OP2-189 reported.
-        return new MailSearchResult { Items = all, More = more || next is not null };
+        // "there is more". Saying nothing here is the failure OP2-189 reported, and keeping
+        // the link is what makes the next page reachable rather than only countable
+        // (OP2-208).
+        return new MailSearchResult
+        {
+            Items = all,
+            More = more || next is not null,
+            Continuation = next,
+        };
     }
 
     public async Task SendAsync(Connection connection, OutgoingMail mail, CancellationToken ct = default)

@@ -34,6 +34,13 @@ public sealed record MailSearchResult
 {
     public required IReadOnlyList<MailSummary> Items { get; init; }
     public bool More { get; init; }
+
+    /// <summary>
+    /// The provider's own opaque link to what comes next, when it gave one and we stopped
+    /// before using it. Never shown to a caller — it is a URL we would fetch with the
+    /// user's token — but handed back later to carry on from (OP2-208).
+    /// </summary>
+    public string? Continuation { get; init; }
 }
 
 public sealed record MailMessage
