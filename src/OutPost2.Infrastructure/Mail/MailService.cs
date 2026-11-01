@@ -1336,7 +1336,7 @@ public sealed class MailService(
         if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             throw new MailAuthRequiredException(connection.Label);
 
-        // 429 ahead of the general case, and as its own type (OP2-229). Described as "could
+        // 429 ahead of the general case, and as its own type (OP2-238). Described as "could
         // not do that" it reads like a fault, and the agent retries immediately — which is
         // the one response that makes a throttle worse. This mailbox refuses with
         // ApplicationThrottled / MailboxConcurrency, and the only useful answer is a number
@@ -1587,7 +1587,7 @@ public interface IMicrosoftConnectionServiceAccessor
 public class MailException(string message) : Exception(message);
 
 /// <summary>
-/// Microsoft is rate-limiting this mailbox (OP2-229).
+/// Microsoft is rate-limiting this mailbox (OP2-238).
 /// <para>
 /// Its own type because it is the one failure where the right response is to <b>wait and do
 /// less</b>, and nothing else in this surface can say that. A generic "could not do that"

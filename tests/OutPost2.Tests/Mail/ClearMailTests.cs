@@ -286,7 +286,7 @@ public class ClearMailTests
         Assert.Equal(940, done.Remaining);
     }
 
-    // ── throttling (OP2-229) ─────────────────────────────────────────────────
+    // ── throttling (OP2-238) ─────────────────────────────────────────────────
 
     private static HttpResponseMessage Throttle(int? retryAfterSeconds = 0)
     {

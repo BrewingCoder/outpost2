@@ -319,7 +319,7 @@ public sealed record ClearOutcome
     public int Remaining { get; init; }
 
     /// <summary>
-    /// True when Microsoft started refusing requests and the job stopped early (OP2-229).
+    /// True when Microsoft started refusing requests and the job stopped early (OP2-238).
     /// <para>
     /// Distinct from <see cref="Remaining"/>, which means "there is more to do". This means
     /// "there is more to do <em>and</em> going straight back will make it worse". The caller

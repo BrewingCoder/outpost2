@@ -1109,7 +1109,7 @@ public sealed partial class MailTools(
     }
 
     /// <summary>
-    /// What to say when Microsoft started refusing requests part-way through (OP2-229).
+    /// What to say when Microsoft started refusing requests part-way through (OP2-238).
     /// <para>
     /// Written for the agent reading it as much as the person hearing it. A throttle is the
     /// one outcome where the correct next move is to do nothing for a bit, and an agent told
