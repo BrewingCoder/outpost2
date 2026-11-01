@@ -257,7 +257,7 @@ public sealed class PeopleTools(
     {
         var item = index.Resolve(UserId, contact);
         if (item is null)
-            return "I don't have that one — list your contacts first, then tell me which.";
+            return Handles.Unknown(index, UserId, contact, "contacts");
 
         if (item.Kind is not ItemKind.Contact)
             return $"\"{item.Ref}\" is "

@@ -253,11 +253,99 @@ public sealed class ItemIndexTests
         var index = new ItemIndex();
 
         var first = index.Remember(Scott, [Msg("very-first")]);
-        for (var batch = 0; batch < 8; batch++)
+        for (var batch = 0; batch < 120; batch++)
             index.Remember(Scott, Enumerable.Range(0, 50).Select(i => Msg($"b{batch}-{i}")).ToList());
 
         // Evicted oldest-first: the earliest handle is gone, the most recent listing works.
         Assert.Null(index.Resolve(Scott, first[0].Ref));
         Assert.NotNull(index.Resolve(Scott, "1"));
+    }
+
+    // ── a session that runs long (OP2-201) ───────────────────────────────────
+
+    [Fact]
+    public void A_handle_survives_later_listings_within_a_session()
+    {
+        // The thing OP2-201 was reported as: two searches in a row, then acting on handles
+        // from the first. Those handles are not in the last listing, which is what ordinals
+        // read from — but they were never supposed to depend on it.
+        var index = new ItemIndex();
+
+        var firstSearch = index.Remember(Scott, [Msg("a"), Msg("b")]);
+        index.Remember(Scott, [Msg("c"), Msg("d")]);
+
+        Assert.Equal("a", index.Resolve(Scott, firstSearch[0].Ref)?.ItemId);
+        Assert.Equal("b", index.Resolve(Scott, firstSearch[1].Ref)?.ItemId);
+    }
+
+    [Fact]
+    public void A_bulk_clean_up_does_not_outgrow_the_window()
+    {
+        // The actual mechanism behind OP2-201, and the regression test for the capacity
+        // that caused it: four searches of fifty, across two mailboxes, passed the old
+        // 300-handle cap and silently dropped everything from the first search. A mailbox
+        // here holds 7,359 messages, so this is the ordinary size of the job.
+        var index = new ItemIndex();
+
+        var first = index.Remember(Scott, Enumerable.Range(0, 50).Select(i => Msg($"first-{i}")).ToList());
+
+        for (var search = 0; search < 8; search++)
+            index.Remember(Scott, Enumerable.Range(0, 100).Select(i => Msg($"s{search}-{i}")).ToList());
+
+        Assert.NotNull(index.Resolve(Scott, first[0].Ref));
+        Assert.NotNull(index.Resolve(Scott, first[49].Ref));
+    }
+
+    [Fact]
+    public void A_dropped_handle_is_reported_as_dropped_rather_than_unknown()
+    {
+        // The half of OP2-201 that matters even once the cap is generous: the refusal said
+        // "I don't have that one — list your messages first", which reads as "no such
+        // message" for a message sitting untouched in the mailbox.
+        var index = new ItemIndex();
+
+        var first = index.Remember(Scott, [Msg("very-first")]);
+        for (var batch = 0; batch < 120; batch++)
+            index.Remember(Scott, Enumerable.Range(0, 50).Select(i => Msg($"b{batch}-{i}")).ToList());
+
+        Assert.Null(index.Resolve(Scott, first[0].Ref));
+        Assert.True(index.Forgot(Scott, first[0].Ref));
+
+        var said = Handles.Unknown(index, Scott, first[0].Ref, "messages");
+        Assert.Contains("dropped", said);
+        Assert.Contains("Nothing has happened to the item itself", said);
+    }
+
+    [Fact]
+    public void A_handle_that_never_existed_is_not_reported_as_dropped()
+    {
+        var index = new ItemIndex();
+        index.Remember(Scott, [Msg("a")]);
+
+        Assert.False(index.Forgot(Scott, "zzzz"));
+
+        var said = Handles.Unknown(index, Scott, "zzzz", "messages");
+        Assert.Contains("I don't have that one", said);
+        Assert.DoesNotContain("dropped", said);
+    }
+
+    [Fact]
+    public void Decoration_is_stripped_before_asking_whether_a_handle_was_dropped()
+    {
+        // The model quotes handles back as "[a7kq]". If Forgot did not strip that the way
+        // Resolve does, the better message would be the one that never appeared.
+        var index = new ItemIndex();
+
+        var first = index.Remember(Scott, [Msg("very-first")]);
+        for (var batch = 0; batch < 120; batch++)
+            index.Remember(Scott, Enumerable.Range(0, 50).Select(i => Msg($"b{batch}-{i}")).ToList());
+
+        Assert.True(index.Forgot(Scott, $"[{first[0].Ref}]"));
+    }
+
+    [Fact]
+    public void Nothing_is_reported_as_dropped_for_a_user_who_never_listed_anything()
+    {
+        Assert.False(new ItemIndex().Forgot(Someone, "a7kq"));
     }
 }

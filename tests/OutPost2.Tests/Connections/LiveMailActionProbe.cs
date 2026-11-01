@@ -109,7 +109,13 @@ public sealed class LiveMailActionProbe(ITestOutputHelper output) : IDisposable
         var folders = await mail.ListFoldersAsync(c);
         output.WriteLine($"folders: {folders.Count}");
         foreach (var f in folders.Take(15))
-            output.WriteLine($"  {f.Path}{(f.WellKnownName is null ? "" : $"  [{f.WellKnownName}]")}");
+            output.WriteLine($"  {f.Path}{(f.WellKnownName is null ? "" : $"  [{f.WellKnownName}]")}"
+                           + $"  {f.MessageCount} msg, {f.ChildCount} child");
+
+        // The counts arrive as default properties of mailFolder, which matters because this
+        // query cannot use $select at all (see ListFoldersAsync). A live run showing 0
+        // everywhere would mean delete_folder's safety gate is reading nothing (OP2-188).
+        Assert.Contains(folders, f => f.MessageCount > 0);
 
         Assert.NotEmpty(folders);
         Assert.Contains(folders, f => f.WellKnownName == "inbox");

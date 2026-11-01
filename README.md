@@ -32,7 +32,7 @@ organisation, and you may not run it as a service for other people. See
 
 ## What it does
 
-**50 tools across three providers**, all resolved through the same named-connection model.
+**54 tools across three providers**, all resolved through the same named-connection model.
 
 | Area | Tools |
 |---|---|
@@ -40,6 +40,7 @@ organisation, and you may not run it as a service for other people. See
 | Mail — read | `list_mail` `read_mail` `search_mail` `list_attachments` `read_attachment` |
 | Mail — write | `send_mail` `send_mail_with_attachments` `reply_mail` `forward_mail` |
 | Mail — manage | `mark_mail` `move_mail` `flag_mail` `categorise_mail` `list_categories` `report_junk` |
+| Mail — folders | `list_folders` `create_folder` `rename_folder` `delete_folder` |
 | Calendar — read | `list_events` `read_event` |
 | Calendar — write | `create_event` `update_event` `cancel_event` `respond_to_invite` |
 | Calendar — scheduling | `check_availability` `suggest_meeting_times` |
@@ -175,7 +176,7 @@ official MCP C# SDK v2 · Tamp · Cloudflare tunnel
 
 ## Status
 
-In daily use. **532 tests** — the integration suites run against real Postgres, real
+In daily use. **622 tests** — the integration suites run against real Postgres, real
 Garage, real Vault and a real YouTrack server, because the things worth proving here are
 the ones a fake cannot. The three that skip are live Microsoft probes, which need a
 mailbox reconnected since the Teams scopes went in.

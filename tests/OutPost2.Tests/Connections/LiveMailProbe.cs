@@ -110,10 +110,25 @@ public sealed class LiveMailProbe(ITestOutputHelper output) : IDisposable
         // its own refusal to combine with $orderby. Worth proving against the live service.
         var hits = await mail.SearchAsync(connection, "invoice", top: 5);
         output.WriteLine("");
-        output.WriteLine($"=== search \"invoice\" -> {hits.Count} hit(s) ===");
-        foreach (var h in hits)
-            output.WriteLine($"  {h.ReceivedAt:yyyy-MM-dd}  {h.From,-34}  {Trim(h.Subject, 54)}");
-        Assert.All(hits, h => Assert.Equal(connection.Label, h.ConnectionLabel));
+        output.WriteLine($"=== search \"invoice\" -> {hits.Items.Count} hit(s), more: {hits.More} ===");
+        foreach (var h in hits.Items)
+            output.WriteLine($"  {h.ReceivedAt:yyyy-MM-dd}  {h.From,-34}  {Trim(h.Subject, 54)}"
+                           + $"  [{h.FolderId?[..8] ?? "no folder"}]");
+        Assert.All(hits.Items, h => Assert.Equal(connection.Label, h.ConnectionLabel));
+
+        // Both halves of OP2-196 against the live service: Graph really does return
+        // parentFolderId alongside $search, and a scoped search really is narrower.
+        Assert.All(hits.Items, h => Assert.False(string.IsNullOrEmpty(h.FolderId)));
+
+        var inboxOnly = await mail.SearchAsync(connection, "invoice", top: 5, folderId: "inbox");
+        output.WriteLine($"=== same search, inbox only -> {inboxOnly.Items.Count} hit(s) ===");
+        Assert.True(inboxOnly.Items.Count <= hits.Items.Count);
+
+        // And paging: asking for more than one page's worth must come back with more than
+        // one page's worth, which is the whole of OP2-189.
+        var deepSearch = await mail.SearchAsync(connection, "the", top: 120);
+        output.WriteLine($"=== search \"the\" top 120 -> {deepSearch.Items.Count}, more: {deepSearch.More} ===");
+        Assert.True(deepSearch.Items.Count > 50, "a search for a common word should page past 50");
 
         // --- attachments ----------------------------------------------------------------
         // Scan deeper than the display list: attachment handling is a headline feature and

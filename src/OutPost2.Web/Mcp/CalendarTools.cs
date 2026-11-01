@@ -700,7 +700,7 @@ public sealed class CalendarTools(
     {
         var item = index.Resolve(UserId, said);
         if (item is null)
-            return new(null, null, "I don't have that one — list your calendar first, then tell me which.");
+            return new(null, null, Handles.Unknown(index, UserId, said, "calendar"));
 
         if (item.Kind is not ItemKind.Event)
             return new(null, null,

@@ -16,18 +16,29 @@ public interface IMailService
 
     Task<MailMessage?> ReadAsync(Connection connection, string messageId, CancellationToken ct = default);
 
-    Task<IReadOnlyList<MailSummary>> SearchAsync(
-        Connection connection, string query, int top = 25, CancellationToken ct = default);
+    /// <summary>
+    /// Searches a mailbox, following Graph's paging until <paramref name="top"/> results
+    /// are in hand, and says whether there were more it did not fetch.
+    /// </summary>
+    /// <param name="folderId">
+    /// Restricts the search to one folder (a well-known name such as <c>inbox</c> works).
+    /// Null searches everywhere, including everything already filed.
+    /// </param>
+    Task<MailSearchResult> SearchAsync(
+        Connection connection, string query, int top = 25, string? folderId = null,
+        CancellationToken ct = default);
 
     Task SendAsync(Connection connection, OutgoingMail mail, CancellationToken ct = default);
 
     /// <summary>
     /// Replies, replies to all, or forwards, keeping the thread and the quoted original.
-    /// Returns the subject actually sent, so the caller can read back what it did.
+    /// Returns what actually went out — subject and recipients — so the caller can read
+    /// back what it did rather than what it asked for.
     /// </summary>
-    Task<string> SendReplyAsync(
+    Task<ReplySent> SendReplyAsync(
         Connection connection, string messageId, ReplyKind kind, string markdownBody,
-        IReadOnlyList<string>? forwardTo = null, CancellationToken ct = default);
+        IReadOnlyList<string>? forwardTo = null, RecipientEdit? edit = null,
+        CancellationToken ct = default);
 
     Task MarkReadAsync(Connection connection, string messageId, bool read, CancellationToken ct = default);
 
@@ -36,6 +47,23 @@ public interface IMailService
         Connection connection, string messageId, string destinationFolderId, CancellationToken ct = default);
 
     Task<IReadOnlyList<MailFolder>> ListFoldersAsync(Connection connection, CancellationToken ct = default);
+
+    /// <summary>
+    /// Creates a folder, at the top level or under <paramref name="parentFolderId"/>
+    /// (which may be a well-known name such as <c>inbox</c>).
+    /// </summary>
+    Task<MailFolder> CreateFolderAsync(
+        Connection connection, string name, string? parentFolderId = null,
+        CancellationToken ct = default);
+
+    Task<MailFolder> RenameFolderAsync(
+        Connection connection, string folderId, string name, CancellationToken ct = default);
+
+    /// <summary>
+    /// Deletes a folder and everything in it. Graph puts it in Deleted Items rather than
+    /// destroying it, which is the only reason this is offered at all.
+    /// </summary>
+    Task DeleteFolderAsync(Connection connection, string folderId, CancellationToken ct = default);
 
     /// <summary>Blocks the sender and files the message as junk. Returns its new id.</summary>
     Task<string?> MarkAsJunkAsync(Connection connection, string messageId, CancellationToken ct = default);
@@ -77,6 +105,20 @@ public sealed class MailService(
     ILogger<MailService> log) : IMailService
 {
     private const string Graph = "https://graph.microsoft.com/v1.0";
+
+    /// <summary>
+    /// The most a single search will fetch, however many are asked for. Bulk filing is a
+    /// real use (OP2-189), so it is well above a page; it is still bounded, because every
+    /// result becomes a handle that has to be held for the session and read back to
+    /// somebody who is driving.
+    /// </summary>
+    public const int MaxSearchResults = 200;
+
+    /// <summary>
+    /// How many pages a single search will walk. Only a guard: the result count is what
+    /// normally ends the walk.
+    /// </summary>
+    private const int MaxSearchPages = 25;
 
     private async Task<HttpClient> ClientAsync(Connection connection, CancellationToken ct)
     {
@@ -149,25 +191,75 @@ public sealed class MailService(
         };
     }
 
-    public async Task<IReadOnlyList<MailSummary>> SearchAsync(
-        Connection connection, string query, int top = 25, CancellationToken ct = default)
+    public async Task<MailSearchResult> SearchAsync(
+        Connection connection, string query, int top = 25, string? folderId = null,
+        CancellationToken ct = default)
     {
         using var http = await ClientAsync(connection, ct);
 
+        var wanted = Math.Clamp(top, 1, MaxSearchResults);
+
+        // Scoped to one folder when asked. $search over /me/messages covers the whole
+        // mailbox including everything already filed, so a clean-up pass could not tell
+        // what was still in the Inbox from what it had just moved out (OP2-196).
+        var where = folderId is null
+            ? "me/messages"
+            : $"me/mailFolders/{Uri.EscapeDataString(folderId)}/messages";
+
         // $search cannot be combined with $orderby in Graph; attempting it returns a
         // confusing 400 rather than ignoring the sort.
-        var q = $"me/messages?$search={Uri.EscapeDataString($"\"{query}\"")}" +
-                $"&$top={Math.Clamp(top, 1, 100)}" +
-                "&$select=id,subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview";
+        //
+        // $top is a PAGE size here, not a total: Graph caps a search page well below 100
+        // and hands back @odata.nextLink for the rest, which is why asking for 200 used to
+        // yield 50 and no way to see the others (OP2-189).
+        var url = $"{where}?$search={Uri.EscapeDataString($"\"{query}\"")}" +
+                  $"&$top={Math.Min(wanted, 100)}" +
+                  "&$select=id,subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview,parentFolderId";
 
-        using var req = new HttpRequestMessage(HttpMethod.Get, q);
-        req.Headers.Add("ConsistencyLevel", "eventual");
+        var all = new List<MailSummary>();
+        var more = false;
 
-        using var resp = await http.SendAsync(req, ct);
-        resp.EnsureSuccessStatusCode();
+        // Bounded on both ends: by what was asked for, and by a page count. A page that
+        // comes back empty but still carries a nextLink would otherwise loop for ever on a
+        // remote service's say-so, and the symptom is a tool call that never returns while
+        // someone is driving. 200 results arrive in two or three pages, so reaching the cap
+        // means Graph is behaving strangely rather than the caller asking for a lot.
+        string? next = url;
 
-        var page = await resp.Content.ReadFromJsonAsync<GraphList<GraphMessage>>(ct);
-        return (page?.Value ?? []).Select(m => m.ToSummary(connection.Label)).ToList();
+        for (var page = 0; page < MaxSearchPages && next is not null && all.Count < wanted; page++)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, next);
+
+            // Required by $search on messages, and on every page — a nextLink carries the
+            // query but not the headers.
+            req.Headers.Add("ConsistencyLevel", "eventual");
+
+            using var resp = await http.SendAsync(req, ct);
+
+            // Was EnsureSuccessStatusCode, which threw a bare HttpRequestException and so
+            // skipped the "needs re-authorising" path that every other call here takes.
+            await EnsureAsync(resp, connection, "could not search that mailbox", ct);
+
+            var body = await resp.Content.ReadFromJsonAsync<GraphList<GraphMessage>>(ct);
+
+            foreach (var m in body?.Value ?? [])
+            {
+                if (all.Count == wanted)
+                {
+                    // One more came back than was wanted, so there is definitely another —
+                    // whether or not a nextLink came with it.
+                    more = true;
+                    break;
+                }
+                all.Add(m.ToSummary(connection.Label));
+            }
+
+            next = body?.NextLink;
+        }
+
+        // Anything left unfollowed — a nextLink we stopped short of, or the page cap — is
+        // "there is more". Saying nothing here is the failure OP2-189 reported.
+        return new MailSearchResult { Items = all, More = more || next is not null };
     }
 
     public async Task SendAsync(Connection connection, OutgoingMail mail, CancellationToken ct = default)
@@ -208,9 +300,63 @@ public sealed class MailService(
         static object Recipient(string address) => new { emailAddress = new { address } };
     }
 
-    public async Task<string> SendReplyAsync(
+    /// <summary>
+    /// Works out who a reply goes to, given the recipients Graph composed and the caller's
+    /// changes (OP2-187). Pure, and tested as such: this is the function that decides
+    /// whether a person stays on a thread.
+    /// </summary>
+    public static RecipientPlan PlanRecipients(
+        IReadOnlyList<MailRecipient> to, IReadOnlyList<MailRecipient> cc, RecipientEdit? edit)
+    {
+        if (edit is null || !edit.Any)
+            return new RecipientPlan { To = to, Cc = cc };
+
+        var dropped = new List<MailRecipient>();
+        var unmatched = new List<string>();
+
+        foreach (var term in edit.Drop.Where(x => !string.IsNullOrWhiteSpace(x)))
+        {
+            var hits = to.Concat(cc).Where(r => Names(r, term)).ToList();
+            if (hits.Count == 0) unmatched.Add(term.Trim());
+            else dropped.AddRange(hits);
+        }
+
+        var nextTo = to.Where(r => !dropped.Contains(r)).ToList();
+        var nextCc = cc.Where(r => !dropped.Contains(r)).ToList();
+
+        // An add that is already on the message is a no-op rather than a duplicate. The
+        // ordinary way to correct an address is drop-then-add, and the corrected one is
+        // frequently a near-miss of the wrong one.
+        foreach (var address in edit.AddTo.Where(x => !string.IsNullOrWhiteSpace(x)))
+            if (!Present(nextTo, nextCc, address)) nextTo.Add(ParseRecipient(address));
+
+        foreach (var address in edit.AddCc.Where(x => !string.IsNullOrWhiteSpace(x)))
+            if (!Present(nextTo, nextCc, address)) nextCc.Add(ParseRecipient(address));
+
+        return new RecipientPlan
+        {
+            To = nextTo,
+            Cc = nextCc,
+            Dropped = dropped.Distinct().ToList(),
+            Unmatched = unmatched,
+        };
+
+        // Exact on the address, the display name, or the "Name <addr>" form a listing shows
+        // — and nothing else. A substring match would let "bob" take bobby@ off the thread.
+        static bool Names(MailRecipient r, string term) =>
+            Eq(r.Address, term) || Eq(r.Name, term) || Eq(r.Display, term);
+
+        static bool Present(List<MailRecipient> to, List<MailRecipient> cc, string address) =>
+            to.Concat(cc).Any(r => Eq(r.Address, address) || Eq(r.Display, address));
+
+        static bool Eq(string? a, string? b) =>
+            string.Equals((a ?? "").Trim(), (b ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    public async Task<ReplySent> SendReplyAsync(
         Connection connection, string messageId, ReplyKind kind, string markdownBody,
-        IReadOnlyList<string>? forwardTo = null, CancellationToken ct = default)
+        IReadOnlyList<string>? forwardTo = null, RecipientEdit? edit = null,
+        CancellationToken ct = default)
     {
         using var http = await ClientAsync(connection, ct);
 
@@ -234,36 +380,121 @@ public sealed class MailService(
         var draft = await draftResp.Content.ReadFromJsonAsync<GraphMessage>(ct)
             ?? throw new MailException($"{connection.Label} returned an empty draft.");
 
-        var patch = new Dictionary<string, object?>
+        // Everything from here is inside the try, so that a refusal of ours does not leave
+        // a half-written draft sitting in the user's Drafts folder. A voice user who gets
+        // the name wrong twice would otherwise be cleaning up by hand later.
+        try
         {
-            ["body"] = new
-            {
-                contentType = "HTML",
-                content = Prepend(MarkdownToHtml.Render(markdownBody), draft.Body?.Content),
-            },
-        };
+            // A forward draft arrives with no recipients at all, so there its list is the
+            // only thing that makes it sendable; a reply arrives with Graph's own, which is
+            // the set the caller is editing.
+            var plan = kind == ReplyKind.Forward
+                ? PlanRecipients(
+                    (forwardTo ?? []).Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Select(ParseRecipient).ToList(),
+                    [], edit)
+                : PlanRecipients(Recipients(draft.ToRecipients), Recipients(draft.CcRecipients), edit);
 
-        if (kind == ReplyKind.Forward)
+            if (plan.Unmatched.Count > 0)
+                throw new MailException(
+                    $"Nothing was sent: nobody on that {Describe(kind)} is "
+                    + $"\"{string.Join("\" or \"", plan.Unmatched)}\". It would go to "
+                    + $"{Join(plan.To)}{(plan.Cc.Count > 0 ? $", copying {Join(plan.Cc)}" : "")}. "
+                    + "Name one of those exactly, or leave it off to keep everyone.");
+
+            if (plan.To.Count == 0)
+                throw new MailException(
+                    $"Nothing was sent: that would leave the {Describe(kind)} with no "
+                    + "recipients at all."
+                    + (kind == ReplyKind.Forward ? "" : " Add someone, or take fewer people off."));
+
+            var patch = new Dictionary<string, object?>
+            {
+                ["body"] = new
+                {
+                    contentType = "HTML",
+                    content = Prepend(MarkdownToHtml.Render(markdownBody), draft.Body?.Content),
+                },
+            };
+
+            // Written back only when they changed, so an ordinary reply still sends exactly
+            // the draft Graph composed.
+            if (kind == ReplyKind.Forward || (edit is not null && edit.Any))
+            {
+                patch["toRecipients"] = plan.To.Select(Wire).ToArray();
+                patch["ccRecipients"] = plan.Cc.Select(Wire).ToArray();
+            }
+
+            using var patchResp = await http.PatchAsJsonAsync(
+                $"me/messages/{Uri.EscapeDataString(draft.Id)}", patch, ct);
+            await EnsureAsync(patchResp, connection, "could not write the reply body", ct);
+
+            using var sendResp = await http.PostAsync(
+                $"me/messages/{Uri.EscapeDataString(draft.Id)}/send", content: null, ct);
+            await EnsureAsync(sendResp, connection, $"could not send that {Describe(kind)}", ct);
+
+            log.LogInformation("Sent a {Kind} from {Label} to {Count} recipient(s).",
+                verb, connection.Label, plan.To.Count + plan.Cc.Count);
+
+            return new ReplySent
+            {
+                Subject = draft.Subject ?? "(no subject)",
+                To = plan.To,
+                Cc = plan.Cc,
+                Dropped = plan.Dropped,
+            };
+        }
+        catch
         {
-            // A forward draft has no recipients at all, so this is not an override but the
-            // only thing that makes it sendable.
-            var to = (forwardTo ?? []).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
-            if (to.Count == 0) throw new MailException("A forward needs at least one recipient.");
-            patch["toRecipients"] = to.Select(a => new { emailAddress = new { address = a } }).ToArray();
+            await TryDiscardAsync(http, draft.Id);
+            throw;
         }
 
-        using var patchResp = await http.PatchAsJsonAsync(
-            $"me/messages/{Uri.EscapeDataString(draft.Id)}", patch, ct);
-        await EnsureAsync(patchResp, connection, "could not write the reply body", ct);
-
-        using var sendResp = await http.PostAsync(
-            $"me/messages/{Uri.EscapeDataString(draft.Id)}/send", content: null, ct);
-        await EnsureAsync(sendResp, connection, $"could not send that {Describe(kind)}", ct);
-
-        log.LogInformation("Sent a {Kind} from {Label}.", verb, connection.Label);
-        return draft.Subject ?? "(no subject)";
-
         static string Describe(ReplyKind k) => k == ReplyKind.Forward ? "forward" : "reply";
+
+        static object Wire(MailRecipient r) =>
+            new { emailAddress = new { address = r.Address, name = r.Name } };
+
+        static string Join(IEnumerable<MailRecipient> rs) => string.Join(", ", rs.Select(r => r.Display));
+    }
+
+    private static List<MailRecipient> Recipients(List<GraphRecipient>? from) =>
+        (from ?? [])
+            .Where(r => !string.IsNullOrWhiteSpace(r.EmailAddress?.Address))
+            .Select(r => new MailRecipient(r.EmailAddress!.Name, r.EmailAddress.Address!))
+            .ToList();
+
+    /// <summary>
+    /// Accepts a bare address or the <c>Name &lt;addr&gt;</c> form a listing printed, because
+    /// a caller correcting a recipient naturally pastes back what it was shown.
+    /// </summary>
+    public static MailRecipient ParseRecipient(string said)
+    {
+        var s = said.Trim();
+        var open = s.LastIndexOf('<');
+        var close = s.LastIndexOf('>');
+
+        return open >= 0 && close > open
+            ? new MailRecipient(s[..open].Trim().Trim('"'), s[(open + 1)..close].Trim())
+            : new MailRecipient(null, s);
+    }
+
+    /// <summary>
+    /// Best-effort cleanup of a draft we created and then refused to send. Never throws:
+    /// it runs on the failure path, and a failed tidy-up must not replace the real reason.
+    /// </summary>
+    private async Task TryDiscardAsync(HttpClient http, string draftId)
+    {
+        try
+        {
+            using var resp = await http.DeleteAsync($"me/messages/{Uri.EscapeDataString(draftId)}");
+            if (!resp.IsSuccessStatusCode)
+                log.LogWarning("Could not discard draft {Id}: HTTP {Status}", draftId, (int)resp.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Could not discard draft {Id}.", draftId);
+        }
     }
 
     /// <summary>
@@ -338,6 +569,49 @@ public sealed class MailService(
                 folders.Add(child.ToFolder(f.DisplayName));
         }
         return folders;
+    }
+
+    public async Task<MailFolder> CreateFolderAsync(
+        Connection connection, string name, string? parentFolderId = null, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+
+        // Graph takes a well-known name wherever it takes a folder id, so "under the inbox"
+        // needs no lookup — and under the inbox is where people keep filing folders.
+        var path = parentFolderId is null
+            ? "me/mailFolders"
+            : $"me/mailFolders/{Uri.EscapeDataString(parentFolderId)}/childFolders";
+
+        using var resp = await http.PostAsJsonAsync(path, new { displayName = name }, ct);
+        await EnsureAsync(resp, connection, $"could not create a folder called \"{name}\"", ct);
+
+        var f = await resp.Content.ReadFromJsonAsync<GraphFolder>(ct);
+        return f?.ToFolder(null) ?? new MailFolder { Id = "", Name = name, Path = name };
+    }
+
+    public async Task<MailFolder> RenameFolderAsync(
+        Connection connection, string folderId, string name, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+
+        using var resp = await http.PatchAsJsonAsync(
+            $"me/mailFolders/{Uri.EscapeDataString(folderId)}", new { displayName = name }, ct);
+        await EnsureAsync(resp, connection, $"could not rename that folder to \"{name}\"", ct);
+
+        var f = await resp.Content.ReadFromJsonAsync<GraphFolder>(ct);
+        return f?.ToFolder(null) ?? new MailFolder { Id = folderId, Name = name, Path = name };
+    }
+
+    public async Task DeleteFolderAsync(
+        Connection connection, string folderId, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+
+        using var resp = await http.DeleteAsync(
+            $"me/mailFolders/{Uri.EscapeDataString(folderId)}", ct);
+        await EnsureAsync(resp, connection, "could not delete that folder", ct);
+
+        log.LogInformation("Deleted a mail folder in {Label}.", connection.Label);
     }
 
     public async Task<string?> MarkAsJunkAsync(
@@ -554,7 +828,9 @@ public sealed class MailService(
 
     // ── Graph wire types ─────────────────────────────────────────────────────
 
-    private sealed record GraphList<T>([property: JsonPropertyName("value")] List<T>? Value);
+    private sealed record GraphList<T>(
+        [property: JsonPropertyName("value")] List<T>? Value,
+        [property: JsonPropertyName("@odata.nextLink")] string? NextLink = null);
 
     private sealed record GraphMessage(
         [property: JsonPropertyName("id")] string Id,
@@ -567,7 +843,8 @@ public sealed class MailService(
         [property: JsonPropertyName("hasAttachments")] bool HasAttachments,
         [property: JsonPropertyName("bodyPreview")] string? BodyPreview,
         [property: JsonPropertyName("uniqueBody")] GraphBody? UniqueBody,
-        [property: JsonPropertyName("body")] GraphBody? Body)
+        [property: JsonPropertyName("body")] GraphBody? Body,
+        [property: JsonPropertyName("parentFolderId")] string? ParentFolderId = null)
     {
         public MailSummary ToSummary(string label) => new()
         {
@@ -579,6 +856,7 @@ public sealed class MailService(
             IsRead = IsRead,
             HasAttachments = HasAttachments,
             Preview = (BodyPreview ?? "").Trim(),
+            FolderId = ParentFolderId,
         };
     }
 
@@ -595,6 +873,8 @@ public sealed class MailService(
         [property: JsonPropertyName("id")] string Id,
         [property: JsonPropertyName("displayName")] string? DisplayName,
         [property: JsonPropertyName("wellKnownName")] string? WellKnownName,
+        [property: JsonPropertyName("totalItemCount")] int TotalItemCount,
+        [property: JsonPropertyName("childFolderCount")] int ChildFolderCount,
         [property: JsonPropertyName("childFolders")] List<GraphFolder>? ChildFolders)
     {
         public MailFolder ToFolder(string? parent) => new()
@@ -603,6 +883,8 @@ public sealed class MailService(
             Name = DisplayName ?? WellKnownName ?? "(unnamed)",
             WellKnownName = WellKnownName,
             Path = parent is null ? DisplayName ?? "(unnamed)" : $"{parent}/{DisplayName}",
+            MessageCount = TotalItemCount,
+            ChildCount = ChildFolderCount,
         };
     }
 

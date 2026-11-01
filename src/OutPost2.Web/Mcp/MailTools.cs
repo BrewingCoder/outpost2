@@ -154,6 +154,12 @@ public sealed class MailTools(
 
             var sb = new StringBuilder();
             sb.AppendLine($"From: {Untrusted.Scrub(m.From)}");
+
+            // Who else is on it. Without this a reply cannot be corrected — you cannot name
+            // a recipient to take off a thread you were never shown (OP2-187).
+            if (m.To.Count > 0) sb.AppendLine($"To: {Untrusted.Scrub(string.Join(", ", m.To))}");
+            if (m.Cc.Count > 0) sb.AppendLine($"Cc: {Untrusted.Scrub(string.Join(", ", m.Cc))}");
+
             sb.AppendLine($"Subject: {Untrusted.Scrub(m.Subject)}");
             sb.AppendLine($"Received: {Ago(m.ReceivedAt)} ({c.Label})");
             sb.AppendLine($"Handle: {item.Ref}");
@@ -166,17 +172,20 @@ public sealed class MailTools(
     }
 
     [McpServerTool(Name = "search_mail", ReadOnly = true, OpenWorld = true)]
-    [Description("Search messages by text. Omit 'connection' for the default mailbox, or pass 'all' to search everywhere. Results carry a handle in square brackets.")]
+    [Description("Search messages by text. Omit 'connection' for the default mailbox, or pass 'all' to search everywhere. Searches every folder unless 'folder' is given, and says which folder each hit is in. Results carry a handle in square brackets.")]
     public async Task<string> SearchMail(
         [Description("What to search for.")] string query,
         [Description("Connection name, or 'all'. Omit only if a default mailbox has been set.")] string? connection = null,
-        [Description("How many results per mailbox.")] int count = 10,
+        [Description("How many results per mailbox, up to 200. The reply says if there are more.")] int count = 10,
+        [Description("Restrict to one folder — 'inbox', 'archive', or a folder name. Omit to search the whole mailbox, including filed mail.")] string? folder = null,
         CancellationToken ct = default)
     {
         var resolution = ConnectionResolver.Resolve(
             await connections.ListAsync(UserId, ct), Capabilities.MailRead, connection, isWrite: false);
 
         if (!resolution.IsActionable) return resolution.SpokenSummary;
+
+        var wanted = Math.Clamp(count, 1, MailService.MaxSearchResults);
 
         // Each task RETURNS its outcome rather than adding to a shared list. These run
         // concurrently, and List<T>.Add from several of them at once can lose an entry or
@@ -186,8 +195,29 @@ public sealed class MailTools(
         {
             try
             {
-                var hits = await mail.SearchAsync(c, query, Math.Clamp(count, 1, 50), ct);
-                return (c.Label, Items: hits, Error: (string?)null);
+                // The folder list is fetched for one of two reasons, and skipped when
+                // neither applies: to turn a spoken folder name into an id, or to label
+                // each hit with where it lives. A search already scoped to one folder
+                // needs no labels — the header says it once.
+                var folders = folder is null || WellKnown(folder) is null
+                    ? await mail.ListFoldersAsync(c, ct)
+                    : (IReadOnlyList<MailFolder>)[];
+
+                string? folderId = null;
+                if (folder is not null)
+                {
+                    // Folder names are per-mailbox, so this belongs inside the fan-out:
+                    // "Receipts" may exist in one connection and not another, and a scope
+                    // that is missing must be reported for THAT mailbox rather than
+                    // failing the whole answer.
+                    folderId = WellKnown(folder) ?? Find(folders, folder)?.Id;
+                    if (folderId is null)
+                        return (c.Label, Items: (IReadOnlyList<MailSummary>)[], More: false,
+                                Folders: folders, Error: $"has no folder called \"{folder}\"");
+                }
+
+                var hits = await mail.SearchAsync(c, query, wanted, folderId, ct);
+                return (c.Label, hits.Items, hits.More, Folders: folders, Error: (string?)null);
             }
             // The comment that used to stand here said these were "reported below via
             // Degraded/empty". They were not: a mailbox that threw was indistinguishable
@@ -196,13 +226,23 @@ public sealed class MailTools(
             // names them; this now does the same.
             catch (MailAuthRequiredException)
             {
-                return (c.Label, Items: (IReadOnlyList<MailSummary>)[], Error: "needs re-authorising");
+                return (c.Label, Items: (IReadOnlyList<MailSummary>)[], More: false,
+                        Folders: (IReadOnlyList<MailFolder>)[], Error: "needs re-authorising");
             }
             catch (Exception ex)
             {
-                return (c.Label, Items: (IReadOnlyList<MailSummary>)[], Error: ex.Message);
+                return (c.Label, Items: (IReadOnlyList<MailSummary>)[], More: false,
+                        Folders: (IReadOnlyList<MailFolder>)[], Error: ex.Message);
             }
         }));
+
+        // One id-to-name map per mailbox, built once rather than per result.
+        var folderNames = perConnection.ToDictionary(
+            r => r.Label,
+            r => r.Folders.Where(f => f.Id.Length > 0)
+                  .GroupBy(f => f.Id, StringComparer.Ordinal)
+                  .ToDictionary(g => g.Key, g => g.First().Path, StringComparer.Ordinal),
+            StringComparer.OrdinalIgnoreCase);
 
         var found = perConnection
             .SelectMany(r => r.Items.Select(i => (r.Label, Item: i)))
@@ -213,24 +253,43 @@ public sealed class MailTools(
             .Select(r => (r.Label, Error: r.Error!))
             .ToList();
 
+        var scope = folder is null ? "" : $" in {Spoken(folder)}";
+
         if (found.Count == 0)
             return failed.Count == 0
-                ? $"Nothing found for \"{query}\"."
-                : $"Nothing found for \"{query}\". "
+                ? $"Nothing found for \"{query}\"{scope}."
+                : $"Nothing found for \"{query}\"{scope}. "
                   + string.Join(" ", failed.Select(f => $"Note: {f.Label} {f.Error}."));
 
         var ordered = found.OrderByDescending(x => x.Item.ReceivedAt).ToList();
         var refs = index.Remember(UserId,
             ordered.Select(x => (x.Item.Id, x.Label, x.Item.Subject, x.Item.From)).ToList());
 
-        var sb = new StringBuilder($"{ordered.Count} result{(ordered.Count == 1 ? "" : "s")} for \"{query}\":\n");
+        var sb = new StringBuilder(
+            $"{ordered.Count} result{(ordered.Count == 1 ? "" : "s")} for \"{query}\"{scope}:\n");
+
         for (var n = 0; n < ordered.Count; n++)
         {
             var (label, m) = ordered[n];
             sb.Append($"{n + 1}. [{refs[n].Ref}] ");
             if (resolution.Connections.Count > 1) sb.Append($"[{label}] ");
-            sb.AppendLine($"{Untrusted.Scrub(m.From)} — {Untrusted.Scrub(m.Subject)} — {Ago(m.ReceivedAt)}");
+            sb.Append($"{Untrusted.Scrub(m.From)} — {Untrusted.Scrub(m.Subject)} — {Ago(m.ReceivedAt)}");
+
+            // Where it is, when the search covered more than one folder. Without this,
+            // mail that has already been filed is indistinguishable from mail still in the
+            // Inbox, so a sorting pass keeps picking up its own finished work (OP2-196).
+            if (folder is null && Located(folderNames, label, m.FolderId) is { } where)
+                sb.Append($" — in {Untrusted.Scrub(where)}");
+
+            sb.AppendLine();
         }
+
+        // Says when it is showing part of the answer. Silence here reads as "that is all
+        // of them", and a bulk action built on that belief leaves most of the mail in
+        // place while reporting success (OP2-189).
+        foreach (var r in perConnection.Where(r => r.More))
+            sb.AppendLine($"There are more than {wanted} matches in {r.Label} — "
+                         + "narrow the search, or act on these and search again.");
 
         // A partial answer has to say that it is partial. Silence here reads as "there is
         // nothing else", which is the one thing it is not entitled to claim.
@@ -240,6 +299,22 @@ public sealed class MailTools(
             sb.AppendLine($"Note: {d.Label} is unavailable ({d.State}).");
 
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// The folder a hit is in, or null when there is nothing worth saying — the provider
+    /// did not give one, or it is below the two levels the folder listing reaches.
+    /// </summary>
+    private static string? Located(
+        Dictionary<string, Dictionary<string, string>> byConnection,
+        string label, string? folderId)
+    {
+        if (folderId is null) return null;
+        if (!byConnection.TryGetValue(label, out var names)) return null;
+
+        // "somewhere else" rather than silence: the question being asked is "is this still
+        // in the Inbox", and for a folder we cannot name the answer is still no.
+        return names.TryGetValue(folderId, out var path) ? path : "another folder";
     }
 
     [McpServerTool(Name = "send_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
@@ -286,11 +361,14 @@ public sealed class MailTools(
     }
 
     [McpServerTool(Name = "reply_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
-    [Description("Reply to a message, keeping the thread and quoting the original. Pass the handle from the listing. Set replyAll to include everyone who was copied.")]
+    [Description("Reply to a message, keeping the thread and quoting the original. Pass the handle from the listing. Set replyAll to include everyone who was copied. Use addTo or addCc to bring someone else in, and drop to take a wrong address off before it goes — read_mail shows who is on the thread.")]
     public async Task<string> ReplyMail(
         [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
         [Description("What to say. Markdown is supported. Goes above the quoted original.")] string body,
         [Description("Reply to everyone on the thread rather than just the sender.")] bool replyAll = false,
+        [Description("Extra addresses to put on the To line, comma separated.")] string? addTo = null,
+        [Description("Extra addresses to copy in, comma separated.")] string? addCc = null,
+        [Description("Addresses or names already on the thread to take off, comma separated. Must match exactly what read_mail showed; nothing is sent if one matches nobody.")] string? drop = null,
         CancellationToken ct = default)
     {
         // The thread decides which mailbox and which identity, so there is nothing for the
@@ -303,14 +381,28 @@ public sealed class MailTools(
 
         if (string.IsNullOrWhiteSpace(body)) return "I need something to say in the reply.";
 
+        var edit = new RecipientEdit
+        {
+            AddTo = Split(addTo), AddCc = Split(addCc), Drop = Split(drop),
+        };
+
         try
         {
-            var subject = await mail.SendReplyAsync(
-                c, item.ItemId, replyAll ? ReplyKind.All : ReplyKind.Sender, body, null, ct);
+            var sent = await mail.SendReplyAsync(
+                c, item.ItemId, replyAll ? ReplyKind.All : ReplyKind.Sender, body, null, edit, ct);
 
-            return replyAll
-                ? $"Replied to everyone on \"{subject}\" from {c.Label}."
-                : $"Replied to {item.From} on \"{subject}\" from {c.Label}.";
+            // Read back who it ACTUALLY went to rather than what was asked for. When
+            // recipients were edited that is the only confirmation the user gets that the
+            // wrong address is off and the right one is on.
+            if (!edit.Any)
+                return replyAll
+                    ? $"Replied to everyone on \"{sent.Subject}\" from {c.Label}."
+                    : $"Replied to {item.From} on \"{sent.Subject}\" from {c.Label}.";
+
+            return $"Replied on \"{sent.Subject}\" from {c.Label}. It went to {Who(sent.To)}"
+                 + (sent.Cc.Count > 0 ? $", copying {Who(sent.Cc)}" : "")
+                 + (sent.Dropped.Count > 0 ? $". Took {Who(sent.Dropped)} off" : "")
+                 + ".";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
@@ -335,10 +427,10 @@ public sealed class MailTools(
 
         try
         {
-            var subject = await mail.SendReplyAsync(
-                c, item.ItemId, ReplyKind.Forward, body ?? "", recipients, ct);
+            var sent = await mail.SendReplyAsync(
+                c, item.ItemId, ReplyKind.Forward, body ?? "", recipients, null, ct);
 
-            return $"Forwarded \"{subject}\" to {string.Join(", ", recipients)} from {c.Label}.";
+            return $"Forwarded \"{sent.Subject}\" to {Who(sent.To)} from {c.Label}.";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
@@ -387,12 +479,12 @@ public sealed class MailTools(
                 // Only list folders when the destination is not one of the standard ones.
                 // A round trip per archive would be a round trip nobody asked for.
                 var folders = await mail.ListFoldersAsync(c, ct);
-                var match = folders.FirstOrDefault(f => Same(f.Name, destination))
-                            ?? folders.FirstOrDefault(f => Same(f.Path, destination));
+                var match = Find(folders, destination);
 
-                if (match is null)
-                    return $"No folder called \"{destination}\" in {c.Label}. There is: " +
-                           string.Join(", ", folders.Select(f => f.Path)) + ".";
+                // Deliberately not created on the fly. A misheard destination would
+                // otherwise leave a folder named after the mistake and file the message
+                // into it, which is the same failure categorise_mail's colour gate avoids.
+                if (match is null) return NoFolder(c.Label, destination, folders);
 
                 target = match.Id;
                 spoken = match.Path;
@@ -405,6 +497,179 @@ public sealed class MailTools(
             index.Retarget(UserId, item.Ref, movedId);
 
             return $"Moved \"{item.Subject}\" to {spoken} in {c.Label}. Handle is still {item.Ref}.";
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    // ── folders (OP2-188) ────────────────────────────────────────────────────
+
+    [McpServerTool(Name = "list_folders", ReadOnly = true, OpenWorld = true)]
+    [Description("List the mail folders on a mailbox — the places a message can be filed. Shows how many messages are in each.")]
+    public async Task<string> ListFolders(
+        [Description("Connection name such as 'work'. Omit only if a default mailbox has been set.")] string? connection = null,
+        CancellationToken ct = default)
+    {
+        var resolution = ConnectionResolver.Resolve(
+            await connections.ListAsync(UserId, ct), Capabilities.MailRead, connection, isWrite: false);
+
+        if (resolution.Kind != ResolutionKind.Single) return resolution.SpokenSummary;
+        var c = resolution.Connection!;
+
+        try
+        {
+            var folders = await mail.ListFoldersAsync(c, ct);
+            if (folders.Count == 0) return $"{c.Label} has no folders I can see.";
+
+            // Outlook's own folders first and named as such: it is the difference between
+            // "you have 14 folders" and "you have 6 you made".
+            var mine = folders.Where(f => !f.IsWellKnown).ToList();
+            var standard = folders.Where(f => f.IsWellKnown).ToList();
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"{folders.Count} folders on {c.Label}:");
+
+            foreach (var f in mine.Concat(standard))
+                sb.AppendLine($"  {Untrusted.Scrub(f.Path)} — {f.MessageCount} message"
+                            + $"{(f.MessageCount == 1 ? "" : "s")}"
+                            + (f.ChildCount > 0 ? $", {f.ChildCount} subfolder{(f.ChildCount == 1 ? "" : "s")}" : "")
+                            + (f.IsWellKnown ? " (Outlook's own)" : ""));
+
+            if (Deeper(folders) is > 0 and var n)
+                sb.AppendLine($"({n} of those have subfolders I can't see — this goes two "
+                            + "levels down, so something filed deeper won't be listed here.)");
+
+            return sb.ToString().TrimEnd();
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "create_folder", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
+    [Description("Make a new mail folder to file messages into, optionally inside another one. Then move_mail can use its name as a destination.")]
+    public async Task<string> CreateFolder(
+        [Description("What to call it.")] string name,
+        [Description("Connection name such as 'work'. Omit only if a default mailbox has been set.")] string? connection = null,
+        [Description("Put it inside this folder — a name, or 'inbox'. Omit for the top level.")] string? parent = null,
+        CancellationToken ct = default)
+    {
+        var resolution = ConnectionResolver.Resolve(
+            await connections.ListAsync(UserId, ct), Capabilities.MailWrite, connection, isWrite: true);
+
+        if (resolution.Kind != ResolutionKind.Single) return resolution.SpokenSummary;
+        var c = resolution.Connection!;
+
+        if (Invalid(name) is { } why) return why;
+
+        try
+        {
+            var folders = await mail.ListFoldersAsync(c, ct);
+
+            string? parentId = null;
+            var under = "";
+
+            if (!string.IsNullOrWhiteSpace(parent))
+            {
+                parentId = WellKnown(parent);
+                if (parentId is null)
+                {
+                    var match = Find(folders, parent);
+                    if (match is null) return NoFolder(c.Label, parent, folders);
+                    (parentId, under) = (match.Id, $" inside {match.Path}");
+                }
+                else under = $" inside {Spoken(parent)}";
+            }
+
+            // Graph would answer with its own ErrorFolderExists, which reads as a failure
+            // rather than as "that already exists and here it is". For a cleanup the user is
+            // talking through, the second is the useful answer.
+            //
+            // Any folder of that name counts, not just one under the same parent: Find
+            // matches on the bare name first, so two folders called "Receipts" would be
+            // indistinguishable to every other tool here — including move_mail, which would
+            // silently file into whichever came back first.
+            var clash = Find(folders, name);
+
+            if (clash is not null)
+                return $"{c.Label} already has a folder called {clash.Path} "
+                     + $"({clash.MessageCount} message{(clash.MessageCount == 1 ? "" : "s")} in it). "
+                     + "You can file into it as it is.";
+
+            var made = await mail.CreateFolderAsync(c, name.Trim(), parentId, ct);
+
+            return $"Made a folder called {Untrusted.Scrub(made.Name)}{under} in {c.Label}. "
+                 + $"Say \"file it under {made.Name}\" to move things there.";
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "rename_folder", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
+    [Description("Rename one of your own mail folders. Outlook's own folders (Inbox, Archive, Sent Items and so on) cannot be renamed.")]
+    public async Task<string> RenameFolder(
+        [Description("The folder to rename, by name.")] string folder,
+        [Description("What to call it instead.")] string name,
+        [Description("Connection name such as 'work'. Omit only if a default mailbox has been set.")] string? connection = null,
+        CancellationToken ct = default)
+    {
+        var resolution = ConnectionResolver.Resolve(
+            await connections.ListAsync(UserId, ct), Capabilities.MailWrite, connection, isWrite: true);
+
+        if (resolution.Kind != ResolutionKind.Single) return resolution.SpokenSummary;
+        var c = resolution.Connection!;
+
+        if (Invalid(name) is { } why) return why;
+
+        try
+        {
+            var folders = await mail.ListFoldersAsync(c, ct);
+            var match = Find(folders, folder);
+            if (match is null) return NoFolder(c.Label, folder, folders);
+
+            // Graph lets some of these through, and a mailbox whose Inbox is called
+            // something else is one the user has to repair in Outlook by hand.
+            if (match.IsWellKnown)
+                return $"{match.Path} is one of Outlook's own folders, so I can't rename it. "
+                     + "Only folders you made yourself.";
+
+            var renamed = await mail.RenameFolderAsync(c, match.Id, name.Trim(), ct);
+
+            return $"Renamed {Untrusted.Scrub(match.Path)} to {Untrusted.Scrub(renamed.Name)} in {c.Label}. "
+                 + "Everything in it stayed where it was.";
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    [McpServerTool(Name = "delete_folder", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
+    [Description("Delete one of your own mail folders. Anything inside goes to Deleted Items with it. A folder that is not empty is refused unless confirm is true, so the count can be said out loud first.")]
+    public async Task<string> DeleteFolder(
+        [Description("The folder to delete, by name.")] string folder,
+        [Description("Connection name such as 'work'. Omit only if a default mailbox has been set.")] string? connection = null,
+        [Description("True to go ahead when the folder has messages or subfolders in it. Only set this after the user has heard what is in it.")] bool confirm = false,
+        CancellationToken ct = default)
+    {
+        var resolution = ConnectionResolver.Resolve(
+            await connections.ListAsync(UserId, ct), Capabilities.MailWrite, connection, isWrite: true);
+
+        if (resolution.Kind != ResolutionKind.Single) return resolution.SpokenSummary;
+        var c = resolution.Connection!;
+
+        try
+        {
+            var folders = await mail.ListFoldersAsync(c, ct);
+            var match = Find(folders, folder);
+            if (match is null) return NoFolder(c.Label, folder, folders);
+
+            if (Refuse(match, confirm) is { } stop) return stop;
+
+            await mail.DeleteFolderAsync(c, match.Id, ct);
+
+            return match.MessageCount > 0
+                ? $"Deleted {Untrusted.Scrub(match.Path)} from {c.Label}, with its "
+                  + $"{match.MessageCount} message{(match.MessageCount == 1 ? "" : "s")}. "
+                  + "It is in Deleted Items if that was wrong."
+                : $"Deleted the empty folder {Untrusted.Scrub(match.Path)} from {c.Label}.";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
@@ -678,7 +943,7 @@ public sealed class MailTools(
     {
         var item = index.Resolve(UserId, message);
         if (item is null)
-            return new(null, null, "I don't have that one — list your messages first, then tell me which.");
+            return new(null, null, Handles.Unknown(index, UserId, message, "messages"));
 
         // Handles are shared with the calendar, so an ordinal said after a list of events
         // lands here pointing at a meeting. Say what it is instead of asking Graph for a
@@ -731,8 +996,95 @@ public sealed class MailTools(
         _ => destination,
     };
 
+    /// <summary>
+    /// Why a folder must not be deleted — yet, or at all — or null when it can go (OP2-188).
+    /// <para>
+    /// Separated out and tested directly because it is the only thing standing between a
+    /// misheard folder name and a few hundred messages. This product is driven by voice,
+    /// where names are misheard rather than mistyped, so the count has to be said out loud
+    /// before anything happens; <paramref name="confirm"/> is what the model sets on the
+    /// second turn, once the user has heard it.
+    /// </para>
+    /// </summary>
+    public static string? Refuse(MailFolder folder, bool confirm)
+    {
+        if (folder.IsWellKnown)
+            return $"{folder.Path} is one of Outlook's own folders, so I can't delete it. "
+                 + "Only folders you made yourself.";
+
+        if (confirm || (folder.MessageCount == 0 && folder.ChildCount == 0)) return null;
+
+        return $"{folder.Path} isn't empty — "
+             + $"{folder.MessageCount} message{(folder.MessageCount == 1 ? "" : "s")}"
+             + (folder.ChildCount > 0
+                 ? $" and {folder.ChildCount} subfolder{(folder.ChildCount == 1 ? "" : "s")}"
+                 : "")
+             + ". Deleting it sends all of that to Deleted Items. "
+             + "Nothing has been deleted — ask the user, then say so to go ahead.";
+    }
+
+    /// <summary>
+    /// A folder by what someone called it: its own name, or its qualified path when two
+    /// folders share a name. Shared by every folder tool so that "Clients/Acme" means the
+    /// same thing to all of them.
+    /// </summary>
+    public static MailFolder? Find(IReadOnlyList<MailFolder> folders, string? said) =>
+        folders.FirstOrDefault(f => Same(f.Name, said))
+        ?? folders.FirstOrDefault(f => Same(f.Path, said));
+
+    /// <summary>
+    /// Says what is there instead, and — since OP2-188 — that a missing folder is now
+    /// something that can be made rather than a dead end.
+    /// </summary>
+    private static string NoFolder(string label, string? said, IReadOnlyList<MailFolder> folders) =>
+        $"No folder called \"{said}\" in {label}. There is: "
+        + Untrusted.Scrub(string.Join(", ", folders.Select(f => f.Path)))
+        + ". I can make one if you want it"
+        // Not "it doesn't exist" when we can see that we are not looking everywhere.
+        // Offering to create a folder that is really there, three levels down, is how a
+        // mailbox ends up with two folders of the same name and mail in both.
+        + (Deeper(folders) > 0
+            ? ", though I only see two levels of folders — if it's filed deeper than that, "
+              + "it's there and I just can't reach it."
+            : "")
+        + ".";
+
+    /// <summary>
+    /// How many listed folders have subfolders that the listing does not show.
+    /// <para>
+    /// <c>ListFoldersAsync</c> goes two levels down, which covers where people actually
+    /// file. The count exists so the surface can say so out loud rather than implying the
+    /// list is everything — one real mailbox here has 84 folders under a single one of them.
+    /// </para>
+    /// </summary>
+    public static int Deeper(IReadOnlyList<MailFolder> folders) =>
+        folders.Count(f => f.ChildCount > 0
+            && !folders.Any(x =>
+                x.Path.StartsWith(f.Path + "/", StringComparison.OrdinalIgnoreCase)));
+
+    /// <summary>
+    /// Why a folder name is unusable, or null. '/' is refused because this surface uses it
+    /// to qualify a folder by its parent — a folder called "A/B" could never be named back
+    /// unambiguously, by the user or by us.
+    /// </summary>
+    public static string? Invalid(string? name) => (name ?? "").Trim() switch
+    {
+        "" => "I need a name for the folder.",
+        var n when n.Contains('/') => $"\"{n}\" has a slash in it, which I use to mean "
+            + "\"inside\" — pick a name without one and say which folder to put it in.",
+        var n when n.Length > 255 => "That name is too long for a folder.",
+        _ => null,
+    };
+
     private static bool Same(string? a, string? b) =>
         string.Equals((a ?? "").Trim(), (b ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Names people for reading back. Scrubbed: a display name is whatever the sender chose
+    /// to call themselves, and it reaches the model as content like any other.
+    /// </summary>
+    private static string Who(IEnumerable<MailRecipient> recipients) =>
+        Untrusted.Scrub(string.Join(", ", recipients.Select(r => r.Display)));
 
     private static List<string> Split(string? csv) =>
         (csv ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
