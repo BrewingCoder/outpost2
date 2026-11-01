@@ -27,3 +27,6 @@ appsettings.*.Local.json
 TestResults/
 *.trx
 coverage*
+
+# Tamp build-tool marker, written on every run
+.config/.tamp-tools-restored
