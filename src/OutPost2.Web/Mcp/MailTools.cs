@@ -1,5 +1,7 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Server;
 using OutPost2.Core.Connections;
@@ -28,7 +30,7 @@ namespace OutPost2.Web.Mcp;
 /// </para>
 /// </summary>
 [McpServerToolType]
-public sealed class MailTools(
+public sealed partial class MailTools(
     IHttpContextAccessor http,
     IConnectionStore connections,
     IMailService mail,
@@ -850,6 +852,185 @@ public sealed class MailTools(
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
     }
+
+    // ── clearing out a sender (OP2-224) ──────────────────────────────────────
+
+    [McpServerTool(Name = "clear_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
+    [Description("Delete every message from a sender in one go — the whole lot, not one at a time. Call it once WITHOUT confirm to hear how many there are and who they are from, then again with confirm true. Everything goes to Deleted Items and can be recovered.")]
+    public async Task<string> ClearMail(
+        [Description("Who to clear out: an email address, or part of one such as 'linkedin'.")] string from,
+        [Description("Connection name such as 'work'. Omit only if a default mailbox has been set.")] string? connection = null,
+        [Description("Only clear this folder — a name, a path, or 'inbox'. Omit to clear the whole mailbox.")] string? folder = null,
+        [Description("Only messages older than this: a date like '2025-01-01', or '6 months ago'.")] string? before = null,
+        [Description("True to actually delete. Only set this after the user has heard the count and said to go ahead.")] bool confirm = false,
+        CancellationToken ct = default)
+    {
+        var resolution = ConnectionResolver.Resolve(
+            await connections.ListAsync(UserId, ct), Capabilities.MailWrite, connection, isWrite: true);
+
+        if (resolution.Kind != ResolutionKind.Single) return resolution.SpokenSummary;
+        var c = resolution.Connection!;
+
+        if (string.IsNullOrWhiteSpace(from) || from.Trim().Length < 3)
+            return "Tell me who to clear out — an address, or enough of one to be sure. "
+                 + "Anything shorter would match half the mailbox.";
+
+        DateTimeOffset? cutoff = null;
+        if (!string.IsNullOrWhiteSpace(before))
+        {
+            if (Older(before, DateTimeOffset.UtcNow) is not { } parsed)
+                return $"I couldn't read \"{before}\" as a date. Try \"2025-01-01\", "
+                     + "or something like \"6 months ago\".";
+            cutoff = parsed;
+        }
+
+        try
+        {
+            string? folderId = null;
+            var where = " in the whole mailbox";
+
+            if (!string.IsNullOrWhiteSpace(folder))
+            {
+                folderId = WellKnown(folder);
+                if (folderId is null)
+                {
+                    var (match, problem) = Pick(await mail.ListFoldersAsync(c, ct), folder, c.Label);
+                    if (problem is not null) return problem;
+                    (folderId, where) = (match!.Id, $" in {match.Path}");
+                }
+                else where = $" in {Spoken(folder)}";
+            }
+
+            var target = new ClearTarget { From = from.Trim(), FolderId = folderId, Before = cutoff };
+            var when = cutoff is null ? "" : $", received before {cutoff:d MMMM yyyy}";
+
+            if (!confirm)
+            {
+                var preview = await mail.PreviewClearAsync(c, target, ct);
+
+                if (preview.Matched == 0)
+                    return $"Nothing from \"{from}\"{where}{when} in {c.Label}. Nothing to delete.";
+
+                return Proposal(from, c.Label, where, when, preview);
+            }
+
+            var done = await mail.ClearAsync(c, target, ct: ct);
+
+            if (done.Deleted == 0 && done.Failed == 0)
+                return $"Nothing from \"{from}\"{where}{when} in {c.Label} any more — "
+                     + "it looks like it has already gone.";
+
+            var said = $"Deleted {done.Deleted} message{(done.Deleted == 1 ? "" : "s")} from "
+                     + $"\"{Untrusted.Scrub(from)}\"{where} in {c.Label}. "
+                     + "They are all in Deleted Items if that was wrong.";
+
+            // Both of these are said plainly rather than rounded off. "Deleted 400" when 12
+            // are still sitting there is the failure this tool exists to replace.
+            if (done.Failed > 0)
+                said += $" {done.Failed} wouldn't delete — that usually means they had already "
+                      + "moved. Run it again and I'll pick up anything still there.";
+
+            if (done.Remaining > 0)
+                said += $" There {(done.Remaining == 1 ? "is" : "are")} still {done.Remaining} to go "
+                      + "— that was as many as I do in one pass. Say go ahead again for the next lot.";
+
+            return said;
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    /// <summary>
+    /// What a clear-out would do, written to be read out loud before it happens.
+    /// <para>
+    /// The senders are the point. "Everything from Dave" matching three different Daves is
+    /// something the user has to hear <em>before</em> several hundred messages move, and a
+    /// bare count cannot tell them. This is the only gate between a misheard name and a
+    /// mailbox emptied of the wrong mail.
+    /// </para>
+    /// </summary>
+    public static string Proposal(
+        string said, string label, string where, string when, ClearPreview preview)
+    {
+        var sb = new StringBuilder(
+            $"{preview.Matched} message{(preview.Matched == 1 ? "" : "s")} match \"{Untrusted.Scrub(said)}\""
+            + $"{where}{when} in {label}");
+
+        if (preview.Senders.Count == 1)
+        {
+            sb.Append($", all from {Untrusted.Scrub(preview.Senders[0].Display)} "
+                    + $"<{Untrusted.Scrub(preview.Senders[0].Address)}>");
+        }
+        else if (preview.Senders.Count > 1)
+        {
+            sb.Append($", from {preview.Senders.Count} different senders: ");
+            sb.Append(Untrusted.Scrub(string.Join(", ", preview.Senders
+                .Take(5)
+                .Select(s => $"{s.Address} ({s.Count}"
+                           + (preview.Sampled ? " of the ones I looked at)" : ")")))));
+
+            if (preview.Senders.Count > 5) sb.Append(", and more");
+        }
+
+        sb.Append('.');
+
+        // Said whenever the tally came from a sample, because "3 senders" from a sample of
+        // fifty is not a promise that there is no fourth.
+        if (preview.Sampled && preview.Senders.Count > 1)
+            sb.Append(" That's from a sample, so there may be senders I haven't named.");
+
+        sb.Append(" Nothing has been deleted. Say go ahead and they all move to Deleted Items.");
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// A cut-off date from what somebody said: an ISO date, or "6 months ago" / "older than
+    /// two years". Null when it cannot be read — a date this tool guesses at is a date that
+    /// deletes the wrong mail.
+    /// </summary>
+    public static DateTimeOffset? Older(string? said, DateTimeOffset now)
+    {
+        var text = (said ?? "").Trim().ToLowerInvariant();
+        if (text.Length == 0) return null;
+
+        if (DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var exact)
+            && text.Any(char.IsAsciiDigit) && text.Contains('-'))
+            return exact;
+
+        // "older than 6 months", "6 months ago", "a year ago".
+        var m = AgoPattern().Match(text);
+        if (!m.Success) return null;
+
+        var n = m.Groups["n"].Value is { Length: > 0 } digits
+            ? int.Parse(digits, CultureInfo.InvariantCulture)
+            : Word(m.Groups["word"].Value);
+
+        if (n <= 0) return null;
+
+        return m.Groups["unit"].Value switch
+        {
+            "day" or "days" => now.AddDays(-n),
+            "week" or "weeks" => now.AddDays(-7 * n),
+            "month" or "months" => now.AddMonths(-n),
+            "year" or "years" => now.AddYears(-n),
+            _ => null,
+        };
+
+        static int Word(string w) => w switch
+        {
+            "a" or "an" or "one" => 1,
+            "two" => 2, "three" => 3, "four" => 4, "five" => 5, "six" => 6,
+            "nine" => 9, "ten" => 10, "twelve" => 12, "eighteen" => 18,
+            _ => 0,
+        };
+    }
+
+    [GeneratedRegex(
+        @"(?:older\s+than\s+|more\s+than\s+|before\s+)?(?:(?<n>\d+)|(?<word>[a-z]+))\s+(?<unit>day|days|week|weeks|month|months|year|years)(?:\s+ago)?",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex AgoPattern();
 
     [McpServerTool(Name = "report_junk", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
     [Description("Report a message as junk or phishing: blocks the sender and files it in Junk Email, which trains the filter. Prefer this over deleting spam. Pass the handle from the listing.")]

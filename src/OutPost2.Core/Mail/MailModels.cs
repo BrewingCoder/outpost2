@@ -237,3 +237,64 @@ public sealed record OutgoingMail
     /// <summary>Defaults to HTML: most corporate mail is, and plain text looks like a 1998 utility.</summary>
     public bool IsHtml { get; init; } = true;
 }
+
+/// <summary>
+/// Who to clear out, as a filter Graph will accept (OP2-224).
+/// <para>
+/// Separate from <see cref="MailSearchResult"/> on purpose: a search is read with
+/// <c>$search</c>, which refuses <c>$filter</c> and so cannot express "from this address",
+/// and this is read with <c>$filter</c>, which cannot do free text. They are two different
+/// conversations with the service and conflating them is what makes the second one
+/// impossible.
+/// </para>
+/// </summary>
+public sealed record ClearTarget
+{
+    /// <summary>An address, or a fragment to match against addresses and display names.</summary>
+    public required string From { get; init; }
+
+    /// <summary>Restricts the clear-out to one folder. Null means the whole mailbox.</summary>
+    public string? FolderId { get; init; }
+
+    /// <summary>Only messages received strictly before this. Null means all of them.</summary>
+    public DateTimeOffset? Before { get; init; }
+}
+
+/// <summary>What a clear-out WOULD do. Always read back before anything is deleted.</summary>
+public sealed record ClearPreview
+{
+    public required int Matched { get; init; }
+
+    /// <summary>
+    /// The distinct senders behind those matches, commonest first. This is the gate that
+    /// catches a misheard name: "everything from Dave" matching three different Daves is
+    /// something the user has to hear before it happens.
+    /// </summary>
+    public IReadOnlyList<SenderTally> Senders { get; init; } = [];
+
+    public DateTimeOffset? Oldest { get; init; }
+    public DateTimeOffset? Newest { get; init; }
+
+    /// <summary>
+    /// True when the senders were tallied from a sample rather than every match, so the
+    /// list may be missing one. The count itself is always exact.
+    /// </summary>
+    public bool Sampled { get; init; }
+}
+
+public sealed record SenderTally(string Display, string Address, int Count);
+
+/// <summary>What a clear-out actually did.</summary>
+public sealed record ClearOutcome
+{
+    public required int Deleted { get; init; }
+
+    /// <summary>
+    /// Refused individually by the service. Reported rather than swallowed: "deleted 400"
+    /// when 12 are still there is the failure mode this whole tool exists to replace.
+    /// </summary>
+    public int Failed { get; init; }
+
+    /// <summary>Matches left over because the per-call ceiling was reached.</summary>
+    public int Remaining { get; init; }
+}

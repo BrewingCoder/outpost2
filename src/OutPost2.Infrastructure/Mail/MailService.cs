@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -45,6 +46,23 @@ public interface IMailService
         Connection connection, string messageId, ReplyKind kind, string markdownBody,
         IReadOnlyList<string>? forwardTo = null, RecipientEdit? edit = null,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// What clearing out a sender would remove, without removing any of it (OP2-224).
+    /// The count is exact; the sender tally may come from a sample.
+    /// </summary>
+    Task<ClearPreview> PreviewClearAsync(
+        Connection connection, ClearTarget target, CancellationToken ct = default);
+
+    /// <summary>
+    /// Deletes everything matching, in batches, up to a ceiling per call.
+    /// <para>
+    /// Deleted means Deleted Items, not gone: Graph does offer a <c>permanentDelete</c> and
+    /// this deliberately does not use it. A misheard sender has to be recoverable.
+    /// </para>
+    /// </summary>
+    Task<ClearOutcome> ClearAsync(
+        Connection connection, ClearTarget target, int ceiling = 1000, CancellationToken ct = default);
 
     Task MarkReadAsync(Connection connection, string messageId, bool read, CancellationToken ct = default);
 
@@ -691,6 +709,226 @@ public sealed class MailService(
         }
     }
 
+    // ── clearing out a sender (OP2-224) ──────────────────────────────────────
+
+    /// <summary>
+    /// The most a single <c>$batch</c> may carry. Graph's own limit, measured rather than
+    /// recalled: 20 is accepted and 21 comes back
+    /// <c>400 "Number of requests inside batch exceed the limit."</c>
+    /// </summary>
+    public const int BatchLimit = 20;
+
+    /// <summary>
+    /// The <c>$filter</c> for a sender, as a spoken term rather than an exact address.
+    /// <para>
+    /// Which operators are available is the service's decision and was asked live:
+    /// <c>eq</c>, <c>startsWith</c> and <c>contains</c> on the address all work;
+    /// <c>endsWith</c> is refused as <c>ErrorInvalidUrlQueryFilter</c>; and any
+    /// <c>$orderby</c> next to a filter is refused as <c>InefficientFilter</c>, so these
+    /// results cannot be sorted at all.
+    /// </para>
+    /// <para>
+    /// An '@' means the user named an address, and an address is matched exactly — nobody
+    /// says a full address by accident, and <c>contains</c> on one would make
+    /// "a@b.example" also match "xa@b.example.net". Anything else is a fragment and is
+    /// matched against the address, because a display name is chosen by the sender and
+    /// "LinkedIn" in the name proves nothing about who sent it.
+    /// </para>
+    /// </summary>
+    public static string SenderFilter(ClearTarget target)
+    {
+        var term = target.From.Trim();
+
+        // Doubling is OData's own escape. Without it an address containing a quote closes
+        // the literal early and the rest of it is read as filter syntax.
+        var safe = term.Replace("'", "''");
+
+        var clause = term.Contains('@')
+            ? $"from/emailAddress/address eq '{safe}'"
+            : $"contains(from/emailAddress/address,'{safe}')";
+
+        if (target.Before is { } before)
+            clause += $" and receivedDateTime lt {before.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}";
+
+        return clause;
+    }
+
+    private static string ClearPath(ClearTarget target) =>
+        target.FolderId is null
+            ? "me/messages"
+            : $"me/mailFolders/{Uri.EscapeDataString(target.FolderId)}/messages";
+
+    public async Task<ClearPreview> PreviewClearAsync(
+        Connection connection, ClearTarget target, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+
+        var filter = Uri.EscapeDataString(SenderFilter(target));
+        var path = ClearPath(target);
+
+        // One request for the exact total, and a sample for everything that has to be said
+        // out loud. $count is exact and costs nothing; tallying senders across thousands of
+        // matches would cost a request per hundred, to answer a question the sample already
+        // answers well enough.
+        var url = $"{path}?$filter={filter}&$count=true&$top=50"
+                + "&$select=id,subject,from,receivedDateTime";
+
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Add("ConsistencyLevel", "eventual");
+
+        using var resp = await http.SendAsync(req, ct);
+        await EnsureAsync(resp, connection, $"could not count the mail from \"{target.From}\"", ct);
+
+        var body = await resp.Content.ReadFromJsonAsync<GraphCountedList<GraphMessage>>(ct);
+        var items = body?.Value ?? [];
+
+        var senders = items
+            .GroupBy(m => m.From?.EmailAddress?.Address ?? "(unknown)", StringComparer.OrdinalIgnoreCase)
+            .Select(g => new SenderTally(
+                g.First().From?.EmailAddress?.Name ?? g.Key, g.Key, g.Count()))
+            .OrderByDescending(s => s.Count)
+            .ToList();
+
+        var matched = body?.Count ?? items.Count;
+
+        return new ClearPreview
+        {
+            Matched = matched,
+            Senders = senders,
+            Oldest = items.Count == 0 ? null : items.Min(m => m.ReceivedDateTime),
+            Newest = items.Count == 0 ? null : items.Max(m => m.ReceivedDateTime),
+
+            // $orderby is refused next to a filter, so the sample is whatever order the
+            // service chose. It is a sample of the matches, not the newest of them, and
+            // the dates above describe only what was sampled.
+            Sampled = matched > items.Count,
+        };
+    }
+
+    public async Task<ClearOutcome> ClearAsync(
+        Connection connection, ClearTarget target, int ceiling = 1000, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+
+        var filter = Uri.EscapeDataString(SenderFilter(target));
+        var path = ClearPath(target);
+        var wanted = Math.Clamp(ceiling, 1, 5000);
+
+        var deleted = 0;
+        var failed = 0;
+
+        // Fetched and deleted in turn rather than all ids first: a delete changes the
+        // collection being paged, so a nextLink taken before deleting walks a list that is
+        // shifting underneath it. Asking for the first page again each time is the only
+        // stable way round that, and it is cheap because the page just deleted is gone.
+        while (deleted + failed < wanted)
+        {
+            var take = Math.Min(BatchLimit, wanted - deleted - failed);
+
+            using var req = new HttpRequestMessage(HttpMethod.Get,
+                $"{path}?$filter={filter}&$select=id&$top={take}");
+            req.Headers.Add("ConsistencyLevel", "eventual");
+
+            using var listed = await http.SendAsync(req, ct);
+            await EnsureAsync(listed, connection, $"could not find the mail from \"{target.From}\"", ct);
+
+            var page = await listed.Content.ReadFromJsonAsync<GraphList<GraphMessage>>(ct);
+            var ids = (page?.Value ?? []).Select(m => m.Id).ToList();
+
+            if (ids.Count == 0) break;
+
+            var (ok, bad) = await DeleteBatchAsync(http, connection, ids, ct);
+            deleted += ok;
+            failed += bad;
+
+            // Every id in the page was refused, so asking again returns the same page and
+            // this would spin for ever on a tool call nobody can interrupt.
+            if (ok == 0) break;
+        }
+
+        // What is left, asked for separately: the caller has to be able to say "and there
+        // are still 600 to go" rather than implying the job is finished.
+        var remaining = 0;
+        if (deleted + failed >= wanted)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get,
+                $"{path}?$filter={filter}&$count=true&$top=1&$select=id");
+            req.Headers.Add("ConsistencyLevel", "eventual");
+
+            using var resp = await http.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode)
+                remaining = (await resp.Content
+                    .ReadFromJsonAsync<GraphCountedList<GraphMessage>>(ct))?.Count ?? 0;
+        }
+
+        log.LogInformation(
+            "Cleared {Deleted} message(s) from \"{From}\" in {Label}; {Failed} refused, {Remaining} left.",
+            deleted, target.From, connection.Label, failed, remaining);
+
+        return new ClearOutcome { Deleted = deleted, Failed = failed, Remaining = remaining };
+    }
+
+    /// <summary>
+    /// One <c>$batch</c> of deletes. Returns how many went and how many were refused.
+    /// <para>
+    /// A <c>DELETE</c> on a message moves it to Deleted Items. Each sub-request carries its
+    /// own status, so a batch is partially successful as a matter of course and the two
+    /// numbers have to be counted separately — a batch that returns 200 is not a batch
+    /// whose contents all worked.
+    /// </para>
+    /// </summary>
+    private async Task<(int Ok, int Failed)> DeleteBatchAsync(
+        HttpClient http, Connection connection, IReadOnlyList<string> ids, CancellationToken ct)
+    {
+        var payload = new
+        {
+            requests = ids.Select((id, i) => new
+            {
+                id = (i + 1).ToString(),
+                method = "DELETE",
+                url = $"/me/messages/{Uri.EscapeDataString(id)}",
+            }).ToArray(),
+        };
+
+        const int attempts = 5;
+
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            using var resp = await http.PostAsJsonAsync("$batch", payload, ct);
+
+            // Bulk work is exactly what Graph throttles. Retrying the whole batch is safe:
+            // a delete that already happened answers 404 the second time and is counted as
+            // refused, which is the right answer for a message that is no longer there.
+            if (resp.StatusCode == HttpStatusCode.TooManyRequests && attempt < attempts - 1)
+            {
+                var wait = resp.Headers.RetryAfter?.Delta
+                           ?? TimeSpan.FromSeconds(Math.Pow(2, attempt + 1));
+
+                log.LogWarning("Throttled clearing mail in {Label}; waiting {Seconds}s.",
+                    connection.Label, wait.TotalSeconds);
+
+                await Task.Delay(wait > TimeSpan.FromSeconds(30) ? TimeSpan.FromSeconds(30) : wait, ct);
+                continue;
+            }
+
+            await EnsureAsync(resp, connection, "could not delete that mail", ct);
+
+            var answer = await resp.Content.ReadFromJsonAsync<GraphBatchReplies>(ct);
+            var ok = 0;
+            var failed = 0;
+
+            foreach (var r in answer?.Responses ?? [])
+                if (r.Status is >= 200 and < 300) ok++;
+                else failed++;
+
+            return (ok, failed);
+        }
+
+        // Only reachable if every attempt was throttled, and the last one is not retried —
+        // it goes through EnsureAsync above, which throws. Here for the compiler.
+        throw new MailException($"{connection.Label}: could not delete that mail — still throttled.");
+    }
+
     private async Task<GraphList<GraphFolder>?> FolderPageAsync(
         HttpClient http, Connection connection, string url, CancellationToken ct)
     {
@@ -960,6 +1198,17 @@ public sealed class MailService(
     private sealed record GraphList<T>(
         [property: JsonPropertyName("value")] List<T>? Value,
         [property: JsonPropertyName("@odata.nextLink")] string? NextLink = null);
+
+    private sealed record GraphCountedList<T>(
+        [property: JsonPropertyName("value")] List<T>? Value,
+        [property: JsonPropertyName("@odata.count")] int? Count = null);
+
+    private sealed record GraphBatchReplies(
+        [property: JsonPropertyName("responses")] List<GraphBatchReply>? Responses);
+
+    private sealed record GraphBatchReply(
+        [property: JsonPropertyName("id")] string? Id,
+        [property: JsonPropertyName("status")] int Status);
 
     private sealed record GraphMessage(
         [property: JsonPropertyName("id")] string Id,
