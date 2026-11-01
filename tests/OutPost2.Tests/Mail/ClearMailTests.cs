@@ -679,6 +679,46 @@ public class ClearMailTests
     }
 
     [Fact]
+    public void And_others_counts_only_the_folders_worth_naming()
+    {
+        // The first version of the bin exclusion left "and others" comparing against every
+        // skipped id, so a single real folder plus two bins read as "Receipts, and others"
+        // — a count describing exactly what had been excluded.
+        MailFolder[] mailbox =
+        [
+            Folder("Inbox", "inbox"),
+            Folder("Deleted Items", "deleteditems"),
+            Folder("Junk Email", "junkemail"),
+            Folder("Inbox/Receipts"),
+        ];
+
+        var said = MailTools.Proposal("linkedin", "home", " in the Inbox and Clutter", "",
+            Preview(188, everywhere: 194,
+                skipped: ["id-Inbox/Receipts", "id-Deleted Items", "id-Junk Email"],
+                senders: new SenderTally("LinkedIn", "news@linkedin.com", 50)), mailbox);
+
+        Assert.Contains("Inbox/Receipts", said);
+        Assert.DoesNotContain("and others", said);
+    }
+
+    [Fact]
+    public void More_than_four_real_folders_does_say_and_others()
+    {
+        MailFolder[] mailbox =
+        [
+            Folder("Inbox", "inbox"),
+            .. Enumerable.Range(1, 6).Select(i => Folder($"Inbox/F{i}")),
+        ];
+
+        var said = MailTools.Proposal("linkedin", "home", " in the Inbox and Clutter", "",
+            Preview(188, everywhere: 200,
+                skipped: [.. Enumerable.Range(1, 6).Select(i => $"id-Inbox/F{i}")],
+                senders: new SenderTally("LinkedIn", "news@linkedin.com", 50)), mailbox);
+
+        Assert.Contains("and others", said);
+    }
+
+    [Fact]
     public void A_skip_list_of_nothing_but_bins_still_reads_cleanly()
     {
         // All that is left elsewhere is in the bin, so there is no folder worth naming —

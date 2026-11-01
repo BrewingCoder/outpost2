@@ -1143,16 +1143,21 @@ public sealed partial class MailTools(
 
             // Deleted Items and Junk are left out: the service does not count them, so
             // naming them here would describe a number that does not include them.
-            var named = preview.SkippedFolderIds
+            var worth = preview.SkippedFolderIds
                 .Select(id => folders.FirstOrDefault(f => f.Id == id))
                 .Where(f => f is not null && !Disposal(f.WellKnownName))
                 .Select(f => f!.Path)
-                .Take(4)
                 .ToList();
+
+            var named = worth.Take(4).ToList();
 
             if (named.Count > 0)
                 sb.Append($" — {Untrusted.Scrub(string.Join(", ", named))}"
-                        + (preview.SkippedFolderIds.Count > named.Count ? ", and others" : ""));
+                        // Against the folders worth naming, not every id skipped. Counting
+                        // the bins here produced ", and others" whose others were precisely
+                        // the ones deliberately left out — a second count describing things
+                        // it had excluded.
+                        + (worth.Count > named.Count ? ", and others" : ""));
 
             sb.Append(". I'm leaving those alone. Say \"everywhere\" if you want them too.");
         }
