@@ -195,6 +195,19 @@ public sealed class LiveFolderTreeProbe(ITestOutputHelper output) : IDisposable
                          .Where(g => g.Count() > 1))
                 output.WriteLine($"   duplicate path: {dup.Key} x{dup.Count()}");
 
+            // And the reason a bare name is no longer allowed to resolve on its own. This
+            // is the number that justifies refusing an ambiguous name instead of picking,
+            // so it is measured rather than assumed — a deeper tree is only more likely to
+            // reuse a name, but "likely" is not evidence.
+            var shared = listed.GroupBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1)
+                .ToList();
+
+            output.WriteLine($"   names shared by more than one folder: {shared.Count}");
+            foreach (var g in shared.OrderByDescending(g => g.Count()).Take(6))
+                output.WriteLine($"     \"{g.Key}\" x{g.Count()}: "
+                               + string.Join(" | ", g.Select(f => $"{f.Path} ({f.MessageCount})")));
+
             // The folder OP2-213 was about, by name, wherever it turned out to live.
             foreach (var hit in listed.Where(x =>
                          x.Name.Contains("subscri", StringComparison.OrdinalIgnoreCase)))

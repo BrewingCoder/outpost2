@@ -29,14 +29,26 @@ public sealed class DeepFolderTests
             WellKnownName = wellKnown,
         };
 
-    /// <summary>The shape of the mailbox that reported OP2-213, cut down to what matters.</summary>
+    /// <summary>
+    /// The shapes that matter, taken from the two real mailboxes behind OP2-213 rather than
+    /// imagined: <c>Inbox/Subscriptions</c> is the eleventh child the expand dropped, and
+    /// <c>PLC</c> is the one name that genuinely appears twice — live under the Inbox with 16
+    /// messages, and again under a dormant archive branch with 199. Those two are what make
+    /// an unqualified name unsafe, and the probe reports them on every live run.
+    /// <para>
+    /// Note which way round the cause runs: before the walk was fixed,
+    /// <c>Inbox/xInactive/PLC</c> was invisible, so "PLC" resolved cleanly to the wrong
+    /// single answer. Seeing the whole tree is what created the ambiguity.
+    /// </para>
+    /// </summary>
     private static readonly MailFolder[] Mailbox =
     [
-        Folder("Inbox", messages: 7359, children: 11, wellKnown: "inbox"),
-        Folder("Inbox/Subscriptions", messages: 42),
+        Folder("Inbox", messages: 27114, children: 11, wellKnown: "inbox"),
+        Folder("Inbox/Subscriptions", messages: 65),
+        Folder("Inbox/PLC", messages: 16),
         Folder("Inbox/xInactive", children: 2),
+        Folder("Inbox/xInactive/PLC", messages: 199),
         Folder("Inbox/xInactive/Receipts", messages: 310),
-        Folder("Inbox/xInactive/Subscriptions", messages: 1180),
         Folder("Receipts", messages: 8),
         Folder("Archive", messages: 55, wellKnown: "archive"),
     ];
@@ -46,38 +58,38 @@ public sealed class DeepFolderTests
     [Fact]
     public void A_name_shared_by_two_folders_is_refused_rather_than_guessed()
     {
-        // The folder this ticket was about is called Subscriptions, and so is one buried in
-        // a dormant archive branch. Picking whichever came back first would file 42
-        // messages of live mail into an archive nobody opens, and report success.
-        var (folder, problem) = MailTools.Pick(Mailbox, "Subscriptions", "home");
+        // PLC is the real case, measured: 16 messages under the Inbox and 199 under a
+        // dormant archive branch. Picking whichever came back first would file live mail
+        // into an archive nobody opens, and report success.
+        var (folder, problem) = MailTools.Pick(Mailbox, "PLC", "work");
 
         Assert.Null(folder);
         Assert.NotNull(problem);
 
         // Both paths said, because "say which one" is useless without them.
-        Assert.Contains("Inbox/Subscriptions", problem);
-        Assert.Contains("Inbox/xInactive/Subscriptions", problem);
+        Assert.Contains("Inbox/PLC", problem);
+        Assert.Contains("Inbox/xInactive/PLC", problem);
         Assert.Contains("full path", problem);
     }
 
     [Fact]
     public void The_full_path_settles_it()
     {
-        Assert.Equal("Inbox/Subscriptions",
-            MailTools.Pick(Mailbox, "Inbox/Subscriptions", "home").Folder?.Path);
+        Assert.Equal("Inbox/PLC",
+            MailTools.Pick(Mailbox, "Inbox/PLC", "work").Folder?.Path);
 
-        Assert.Equal("Inbox/xInactive/Subscriptions",
-            MailTools.Pick(Mailbox, "Inbox/xInactive/Subscriptions", "home").Folder?.Path);
+        Assert.Equal("Inbox/xInactive/PLC",
+            MailTools.Pick(Mailbox, "Inbox/xInactive/PLC", "work").Folder?.Path);
     }
 
     [Fact]
     public void So_does_the_tail_of_a_path()
     {
-        // "xInactive/Subscriptions" is what somebody says. The whole path, four levels of
-        // it, is not — and a surface that only accepts the full thing has not solved the
-        // ambiguity, it has moved it onto the user.
-        Assert.Equal("Inbox/xInactive/Subscriptions",
-            MailTools.Pick(Mailbox, "xInactive/Subscriptions", "home").Folder?.Path);
+        // "xInactive/PLC" is what somebody says. The whole path is not — and a surface
+        // that only accepts the full thing has not solved the ambiguity, it has moved it
+        // onto the user.
+        Assert.Equal("Inbox/xInactive/PLC",
+            MailTools.Pick(Mailbox, "xInactive/PLC", "work").Folder?.Path);
     }
 
     [Fact]
@@ -127,7 +139,7 @@ public sealed class DeepFolderTests
         // Find is what the read-only paths use. It must not resolve something the write
         // paths refuse, or a search would scope to one folder and a move would go to
         // another under the same spoken name.
-        foreach (var said in new[] { "Subscriptions", "Receipts", "Inbox/Subscriptions", "nonsense" })
+        foreach (var said in new[] { "PLC", "Receipts", "Inbox/PLC", "Subscriptions", "nonsense" })
             Assert.Equal(MailTools.Pick(Mailbox, said, "home").Folder?.Path,
                          MailTools.Find(Mailbox, said)?.Path);
     }
@@ -161,7 +173,7 @@ public sealed class DeepFolderTests
     {
         var said = MailTools.NoFolder("home", "Quarterly VAT", Mailbox);
 
-        Assert.Contains("7 folders", said);
+        Assert.Contains("8 folders", said);
         Assert.Contains("Inbox", said);
     }
 
@@ -185,7 +197,7 @@ public sealed class DeepFolderTests
 
         // The count is of the whole mailbox; the lines are of the top of it. Saying "3
         // folders" when there are 7 would be the old bug upside down.
-        Assert.Contains("7 folders on home", said);
+        Assert.Contains("8 folders on home", said);
         Assert.Contains("3 of them at the top", said);
 
         Assert.Contains("Inbox", said);
@@ -205,7 +217,7 @@ public sealed class DeepFolderTests
         // 4 is the number that answers "is it worth looking in there"; 2 is not.
         var said = MailTools.Listing(Mailbox, root: null, "home");
 
-        Assert.Contains("4 folders inside", said);
+        Assert.Contains("5 folders inside", said);
     }
 
     [Fact]
