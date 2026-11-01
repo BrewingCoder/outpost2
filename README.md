@@ -32,7 +32,7 @@ organisation, and you may not run it as a service for other people. See
 
 ## What it does
 
-**56 tools across three providers**, all resolved through the same named-connection model.
+**57 tools across three providers**, all resolved through the same named-connection model.
 
 | Area | Tools |
 |---|---|
@@ -49,7 +49,7 @@ organisation, and you may not run it as a service for other people. See
 | Teams chats | `list_chats` `read_chat` `send_chat_message` |
 | Issues (YouTrack) | `create_issue` `get_issue` `update_issue` `search_issues` `comment_on_issue` `list_projects` `create_project` |
 | Code (GitHub) | `github_repositories` `github_repo_names` `github_issues` `github_pull_requests` `github_commits` `github_item` `github_triage` `github_files` `github_file` |
-| Files and jobs | `list_files` `check_queue` + a web approval queue |
+| Files and jobs | `stage_file` `list_files` `check_queue` + a web approval queue |
 | Feedback | `report_friction` — the agent files its own bug reports mid-task |
 
 Large attachments stream to Graph in 320 KiB-multiple chunks from object storage and never
@@ -177,7 +177,7 @@ official MCP C# SDK v2 · Tamp · Cloudflare tunnel
 
 ## Status
 
-In daily use. **751 tests** — the integration suites run against real Postgres, real
+In daily use. **768 tests** — the integration suites run against real Postgres, real
 Garage, real Vault and a real YouTrack server, because the things worth proving here are
 the ones a fake cannot. The three that skip are live Microsoft probes, which need a
 mailbox reconnected since the Teams scopes went in.

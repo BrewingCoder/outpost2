@@ -104,6 +104,8 @@ builder.Services.AddSingleton<OutPost2.Infrastructure.Mail.IAttachmentExtractor,
                               OutPost2.Infrastructure.Mail.AttachmentExtractor>();
 builder.Services.AddSingleton<OutPost2.Infrastructure.Files.IObjectStore, OutPost2.Infrastructure.Files.S3ObjectStore>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Files.IStagingService, OutPost2.Infrastructure.Files.StagingService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Files.IUploadTicketService,
+    OutPost2.Infrastructure.Files.UploadTicketService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.ILargeAttachmentSender,
                            OutPost2.Infrastructure.Mail.LargeAttachmentSender>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Jobs.IJobService, OutPost2.Infrastructure.Jobs.JobService>();

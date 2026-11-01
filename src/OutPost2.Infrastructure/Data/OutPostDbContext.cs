@@ -21,6 +21,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
     public DbSet<StagedFile> StagedFiles => Set<StagedFile>();
     public DbSet<Job> Jobs => Set<Job>();
     public DbSet<PreviewLink> PreviewLinks => Set<PreviewLink>();
+    public DbSet<UploadTicket> UploadTickets => Set<UploadTicket>();
     public DbSet<RepoAlias> RepoAliases => Set<RepoAlias>();
 
     /// <summary>
@@ -168,6 +169,20 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.Property(l => l.Label).HasMaxLength(120);
             e.Property(l => l.FirstUsedFrom).HasMaxLength(200);
             e.HasIndex(l => l.UserId);
+        });
+
+        modelBuilder.Entity<UploadTicket>(e =>
+        {
+            e.ToTable("upload_tickets");
+            e.HasKey(t => t.TokenHash);
+            e.Property(t => t.TokenHash).HasMaxLength(64);
+            e.Property(t => t.Name).HasMaxLength(200);
+            e.Property(t => t.UsedFrom).HasMaxLength(200);
+
+            // Counting a user's unspent tickets, and sweeping the expired ones, are the
+            // only two queries this table has.
+            e.HasIndex(t => new { t.UserId, t.UsedAt });
+            e.HasIndex(t => t.ExpiresAt);
         });
 
         modelBuilder.Entity<OAuthToken>(e =>

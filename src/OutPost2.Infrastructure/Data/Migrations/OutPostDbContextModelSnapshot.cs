@@ -416,6 +416,48 @@ namespace OutPost2.Infrastructure.Data.Migrations
                     b.ToTable("staged_files", (string)null);
                 });
 
+            modelBuilder.Entity("OutPost2.Core.Files.UploadTicket", b =>
+                {
+                    b.Property<string>("TokenHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("MaxBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("StagedFileId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("UsedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UsedFrom")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("TokenHash");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.HasIndex("UserId", "UsedAt");
+
+                    b.ToTable("upload_tickets", (string)null);
+                });
+
             modelBuilder.Entity("OutPost2.Core.Jobs.Job", b =>
                 {
                     b.Property<Guid>("Id")

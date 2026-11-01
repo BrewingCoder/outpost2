@@ -1,4 +1,5 @@
 using OutPost2.Infrastructure.Files;
+using OutPost2.Web.Files.Internal;
 using OutPost2.Infrastructure.Jobs;
 using OutPost2.Web.Connections;
 
@@ -8,6 +9,80 @@ public static class FileEndpoints
 {
     public static void MapFileEndpoints(this WebApplication app)
     {
+        // Redeeming an upload ticket, deliberately OUTSIDE the authorised group (OP2-252).
+        // The ticket is the credential: whatever is calling this has no cookie and no OAuth
+        // token, which is the whole point — it is an agent that was handed a one-use URL.
+        //
+        // Everything that makes that safe is checked in UploadTicketService.RedeemAsync,
+        // which claims the ticket with a conditional UPDATE so two requests racing the same
+        // token cannot both pass. What is left here is the body, and the body is the part
+        // the caller controls.
+        app.MapPut("/files/stage/{token}", async (
+                HttpContext ctx, IUploadTicketService tickets, IStagingService staging,
+                ILogger<Program> log, string token) =>
+            {
+                var from = ctx.Connection.RemoteIpAddress?.ToString();
+
+                var ticket = await tickets.RedeemAsync(token, from, ctx.RequestAborted);
+
+                // One answer for unknown, spent and expired. Telling them apart would say
+                // whether a guessed token had ever existed.
+                if (ticket is null)
+                    return Results.Problem(
+                        "That upload link is not valid any more. Ask for a new one.",
+                        statusCode: StatusCodes.Status403Forbidden);
+
+                try
+                {
+                    // Capped while reading, not from Content-Length, which the sender
+                    // writes. A truncating stream means a liar gets a 413 rather than a
+                    // quota's worth of someone else's disk.
+                    await using var capped = new CappedStream(ctx.Request.Body, ticket.MaxBytes);
+
+                    var staged = await staging.UploadAsync(
+                        ticket.UserId, ticket.Name,
+                        ctx.Request.Headers["X-File-Name"].ToString() is { Length: > 0 } given
+                            ? Path.GetFileName(given)
+                            : ticket.Name,
+                        string.IsNullOrWhiteSpace(ctx.Request.ContentType)
+                            ? "application/octet-stream"
+                            : ctx.Request.ContentType,
+                        capped, ctx.RequestAborted);
+
+                    await tickets.RecordAsync(ticket.TokenHash, staged.Id, ctx.RequestAborted);
+
+                    log.LogInformation(
+                        "Staged {Bytes} bytes as \"{Name}\" for {User} from an upload ticket.",
+                        staged.SizeBytes, staged.Name, ticket.UserId);
+
+                    // The name back, explicitly, because that is what the caller passes to
+                    // send_mail_with_attachments and it must never have to guess it.
+                    return Results.Ok(new
+                    {
+                        name = staged.Name,
+                        bytes = staged.SizeBytes,
+                        expiresAt = staged.ExpiresAt,
+                    });
+                }
+                catch (BodyTooLargeException)
+                {
+                    return Results.Problem(
+                        $"That is larger than the {ticket.MaxBytes} bytes this link was for. "
+                        + "Ask for a new one with the right size.",
+                        statusCode: StatusCodes.Status413PayloadTooLarge);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    // The staging quota, which is the user's own limit and worth quoting.
+                    return Results.Problem(ex.Message, statusCode: StatusCodes.Status409Conflict);
+                }
+            })
+            // No form, so nothing for antiforgery to validate, and no cookie for it to
+            // protect: the request carries its own single-use credential. Said explicitly
+            // rather than relying on that inference.
+            .DisableAntiforgery()
+            .AllowAnonymous();
+
         var files = app.MapGroup("/files").RequireAuthorization();
 
         // Upload is deliberately a plain multipart form, not an API. The human does this
