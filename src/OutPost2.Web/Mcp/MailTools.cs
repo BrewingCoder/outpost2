@@ -856,13 +856,13 @@ public sealed partial class MailTools(
     // ── clearing out a sender (OP2-224) ──────────────────────────────────────
 
     [McpServerTool(Name = "clear_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
-    [Description("Delete every message from a sender in one go — the whole lot, not one at a time. Call it once WITHOUT confirm to hear how many there are and who they are from, then again with confirm true. Everything goes to Deleted Items and can be recovered.")]
+    [Description("Move every message from a sender to Deleted Items in one go — the whole lot, not one at a time. Call it once WITHOUT confirm to hear the count and who they are from, then again with confirm true. By default it only clears the Inbox and Clutter; pass folder 'all' to include folders you have filed mail into.")]
     public async Task<string> ClearMail(
         [Description("Who to clear out: an email address, or part of one such as 'linkedin'.")] string from,
         [Description("Connection name such as 'work'. Omit only if a default mailbox has been set.")] string? connection = null,
-        [Description("Only clear this folder — a name, a path, or 'inbox'. Omit to clear the whole mailbox.")] string? folder = null,
+        [Description("Where to clear. Omit for the Inbox and Clutter only. 'all' for the whole mailbox including filed mail, or a folder name for just that one.")] string? folder = null,
         [Description("Only messages older than this: a date like '2025-01-01', or '6 months ago'.")] string? before = null,
-        [Description("True to actually delete. Only set this after the user has heard the count and said to go ahead.")] bool confirm = false,
+        [Description("True to actually move them. Only set this after the user has heard the count and said to go ahead.")] bool confirm = false,
         CancellationToken ct = default)
     {
         var resolution = ConnectionResolver.Resolve(
@@ -886,49 +886,44 @@ public sealed partial class MailTools(
 
         try
         {
-            string? folderId = null;
-            var where = " in the whole mailbox";
+            var folders = await mail.ListFoldersAsync(c, ct);
 
-            if (!string.IsNullOrWhiteSpace(folder))
-            {
-                folderId = WellKnown(folder);
-                if (folderId is null)
-                {
-                    var (match, problem) = Pick(await mail.ListFoldersAsync(c, ct), folder, c.Label);
-                    if (problem is not null) return problem;
-                    (folderId, where) = (match!.Id, $" in {match.Path}");
-                }
-                else where = $" in {Spoken(folder)}";
-            }
+            var (scope, where, problem) = Scope(folders, folder, c.Label);
+            if (problem is not null) return problem;
 
-            var target = new ClearTarget { From = from.Trim(), FolderId = folderId, Before = cutoff };
+            var target = new ClearTarget { From = from.Trim(), FolderIds = scope, Before = cutoff };
             var when = cutoff is null ? "" : $", received before {cutoff:d MMMM yyyy}";
 
             if (!confirm)
             {
                 var preview = await mail.PreviewClearAsync(c, target, ct);
 
-                if (preview.Matched == 0)
-                    return $"Nothing from \"{from}\"{where}{when} in {c.Label}. Nothing to delete.";
+                if (preview.Matched == 0 && preview.Everywhere == 0)
+                    return $"Nothing from \"{Untrusted.Scrub(from)}\"{where}{when} in {c.Label}. "
+                         + "Nothing to delete.";
 
-                return Proposal(from, c.Label, where, when, preview);
+                return Proposal(from, c.Label, where, when, preview, folders);
             }
 
             var done = await mail.ClearAsync(c, target, ct: ct);
 
             if (done.Deleted == 0 && done.Failed == 0)
-                return $"Nothing from \"{from}\"{where}{when} in {c.Label} any more — "
+                return $"Nothing from \"{Untrusted.Scrub(from)}\"{where}{when} in {c.Label} any more — "
                      + "it looks like it has already gone.";
 
-            var said = $"Deleted {done.Deleted} message{(done.Deleted == 1 ? "" : "s")} from "
-                     + $"\"{Untrusted.Scrub(from)}\"{where} in {c.Label}. "
-                     + "They are all in Deleted Items if that was wrong.";
+            var said = $"Moved {done.Deleted} message{(done.Deleted == 1 ? "" : "s")} from "
+                     + $"\"{Untrusted.Scrub(from)}\"{where} to Deleted Items in {c.Label}. "
+                     + "They stay there until you empty it, so this is undoable.";
+
+            // Said before the other notes, because it changes what the listener should do
+            // next: everything else invites another go, and this asks them to wait.
+            if (done.Throttled) said += " " + Slow(done.RetryAfter);
 
             // Both of these are said plainly rather than rounded off. "Deleted 400" when 12
             // are still sitting there is the failure this tool exists to replace.
             if (done.Failed > 0)
-                said += $" {done.Failed} wouldn't delete — that usually means they had already "
-                      + "moved. Run it again and I'll pick up anything still there.";
+                said += $" {done.Failed} wouldn't move — that usually means they had already "
+                      + "shifted. Run it again and I'll pick up anything still there.";
 
             if (done.Remaining > 0)
                 said += $" There {(done.Remaining == 1 ? "is" : "are")} still {done.Remaining} to go "
@@ -940,48 +935,196 @@ public sealed partial class MailTools(
         catch (MailException ex) { return ex.Message; }
     }
 
+    [McpServerTool(Name = "recover_mail", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
+    [Description("Bring a sender's mail back out of Recoverable Items into the Inbox. This is where Outlook keeps messages that were deleted without going through Deleted Items — use it if mail has gone missing after a bulk delete. Call without confirm first to hear how many are there.")]
+    public async Task<string> RecoverMail(
+        [Description("Whose mail to bring back: an email address, or part of one.")] string from,
+        [Description("Connection name such as 'work'. Omit only if a default mailbox has been set.")] string? connection = null,
+        [Description("True to actually move them back into the Inbox.")] bool confirm = false,
+        CancellationToken ct = default)
+    {
+        var resolution = ConnectionResolver.Resolve(
+            await connections.ListAsync(UserId, ct), Capabilities.MailWrite, connection, isWrite: true);
+
+        if (resolution.Kind != ResolutionKind.Single) return resolution.SpokenSummary;
+        var c = resolution.Connection!;
+
+        if (string.IsNullOrWhiteSpace(from) || from.Trim().Length < 3)
+            return "Tell me whose mail to bring back — an address, or enough of one to be sure.";
+
+        try
+        {
+            if (!confirm)
+            {
+                var waiting = await mail.RecoverableCountAsync(c, from.Trim(), ct);
+
+                return waiting == 0
+                    ? $"Nothing from \"{Untrusted.Scrub(from)}\" is in Recoverable Items on {c.Label}. "
+                      + "If it went missing, it may have been there longer than the retention window."
+                    : $"{waiting} message{(waiting == 1 ? "" : "s")} from \"{Untrusted.Scrub(from)}\" "
+                      + $"{(waiting == 1 ? "is" : "are")} in Recoverable Items on {c.Label}. "
+                      + "Say go ahead and I'll put them back in the Inbox.";
+            }
+
+            var done = await mail.RecoverAsync(c, from.Trim(), ct: ct);
+
+            if (done.Deleted == 0 && done.Failed == 0)
+                return $"Nothing from \"{Untrusted.Scrub(from)}\" left in Recoverable Items on {c.Label}.";
+
+            var said = $"Put {done.Deleted} message{(done.Deleted == 1 ? "" : "s")} from "
+                     + $"\"{Untrusted.Scrub(from)}\" back in the Inbox on {c.Label}.";
+
+            if (done.Throttled) said += " " + Slow(done.RetryAfter);
+
+            if (done.Failed > 0)
+                said += $" {done.Failed} wouldn't move — those may be past the retention window.";
+
+            if (done.Remaining > 0)
+                said += $" {done.Remaining} still to go — say go ahead again for the next lot.";
+
+            return said;
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
+    }
+
+    /// <summary>
+    /// Which folders a clear-out covers, and how to say it.
+    /// <para>
+    /// The default is the Inbox and Clutter rather than the whole mailbox, and that is
+    /// OP2-227: clearing everything also emptied a folder the user had just filed that
+    /// sender's receipts into. Filing something is an act of keeping it, so the places mail
+    /// is <em>put</em> are now out of scope unless asked for by name. "all" is the way to
+    /// ask for everything, said out loud as part of the proposal.
+    /// </para>
+    /// </summary>
+    public static (IReadOnlyList<string>? Scope, string Where, string? Problem) Scope(
+        IReadOnlyList<MailFolder> folders, string? said, string label)
+    {
+        if (!string.IsNullOrWhiteSpace(said)
+            && said.Trim().Equals("all", StringComparison.OrdinalIgnoreCase))
+            return (null, " everywhere in the mailbox, including folders you've filed into", null);
+
+        if (!string.IsNullOrWhiteSpace(said))
+        {
+            var wk = WellKnown(said);
+            if (wk is not null)
+            {
+                var one = folders.FirstOrDefault(f => Same(f.WellKnownName, wk));
+                return one is null
+                    ? (null, "", NoFolder(label, said, folders))
+                    : ((IReadOnlyList<string>)[one.Id], $" in {Spoken(said)}", null);
+            }
+
+            var (match, problem) = Pick(folders, said, label);
+            if (problem is not null) return (null, "", problem);
+            return ([match!.Id], $" in {match.Path}", null);
+        }
+
+        // Clutter is included because it is where mail lands rather than where it is put —
+        // Outlook files there on the user's behalf, not on their instruction.
+        var landing = folders
+            .Where(f => Same(f.WellKnownName, "inbox") || Same(f.Name, "Clutter"))
+            .Select(f => f.Id)
+            .ToList();
+
+        return landing.Count == 0
+            ? (null, " in the whole mailbox", null)
+            : (landing, " in the Inbox and Clutter", null);
+    }
+
     /// <summary>
     /// What a clear-out would do, written to be read out loud before it happens.
     /// <para>
-    /// The senders are the point. "Everything from Dave" matching three different Daves is
-    /// something the user has to hear <em>before</em> several hundred messages move, and a
-    /// bare count cannot tell them. This is the only gate between a misheard name and a
-    /// mailbox emptied of the wrong mail.
+    /// Two things have to survive being said in a car. The <b>senders</b>: "everything from
+    /// Dave" matching three different Daves has to be heard before several hundred messages
+    /// move, and a bare count cannot say that. And the <b>folders being skipped</b>: OP2-227
+    /// was filed because a clear-out silently took mail out of a folder the user had just
+    /// filed it into, and the dry run never mentioned that any match was outside the Inbox.
     /// </para>
     /// </summary>
     public static string Proposal(
-        string said, string label, string where, string when, ClearPreview preview)
+        string said, string label, string where, string when, ClearPreview preview,
+        IReadOnlyList<MailFolder> folders)
     {
-        var sb = new StringBuilder(
-            $"{preview.Matched} message{(preview.Matched == 1 ? "" : "s")} match \"{Untrusted.Scrub(said)}\""
-            + $"{where}{when} in {label}");
+        var sb = new StringBuilder();
 
-        if (preview.Senders.Count == 1)
+        if (preview.Matched == 0)
         {
-            sb.Append($", all from {Untrusted.Scrub(preview.Senders[0].Display)} "
-                    + $"<{Untrusted.Scrub(preview.Senders[0].Address)}>");
+            sb.Append($"Nothing from \"{Untrusted.Scrub(said)}\"{where}{when} in {label}");
         }
-        else if (preview.Senders.Count > 1)
+        else
         {
-            sb.Append($", from {preview.Senders.Count} different senders: ");
-            sb.Append(Untrusted.Scrub(string.Join(", ", preview.Senders
-                .Take(5)
-                .Select(s => $"{s.Address} ({s.Count}"
-                           + (preview.Sampled ? " of the ones I looked at)" : ")")))));
+            sb.Append($"{preview.Matched} message{(preview.Matched == 1 ? "" : "s")} match "
+                    + $"\"{Untrusted.Scrub(said)}\"{where}{when} in {label}");
 
-            if (preview.Senders.Count > 5) sb.Append(", and more");
+            if (preview.Senders.Count == 1)
+            {
+                sb.Append($", all from {Untrusted.Scrub(preview.Senders[0].Display)} "
+                        + $"<{Untrusted.Scrub(preview.Senders[0].Address)}>");
+            }
+            else if (preview.Senders.Count > 1)
+            {
+                sb.Append($", from {preview.Senders.Count} different senders: ");
+                sb.Append(Untrusted.Scrub(string.Join(", ", preview.Senders
+                    .Take(5)
+                    .Select(s => $"{s.Address} ({s.Count}"
+                               + (preview.Sampled ? " of the ones I looked at)" : ")")))));
+
+                if (preview.Senders.Count > 5) sb.Append(", and more");
+            }
         }
 
         sb.Append('.');
 
-        // Said whenever the tally came from a sample, because "3 senders" from a sample of
-        // fifty is not a promise that there is no fourth.
         if (preview.Sampled && preview.Senders.Count > 1)
             sb.Append(" That's from a sample, so there may be senders I haven't named.");
 
-        sb.Append(" Nothing has been deleted. Say go ahead and they all move to Deleted Items.");
+        // The whole point of OP2-227. A number said here is mail that would otherwise go
+        // without anybody mentioning it.
+        var filed = preview.Everywhere - preview.Matched;
+        if (filed > 0)
+        {
+            sb.Append($" There {(filed == 1 ? "is" : "are")} another {filed} from them "
+                    + "in folders you've filed into");
+
+            var named = preview.SkippedFolderIds
+                .Select(id => folders.FirstOrDefault(f => f.Id == id)?.Path)
+                .Where(n => n is not null)
+                .Take(4)
+                .ToList();
+
+            if (named.Count > 0)
+                sb.Append($" — {Untrusted.Scrub(string.Join(", ", named))}"
+                        + (preview.SkippedFolderIds.Count > named.Count ? ", and others" : ""));
+
+            sb.Append(". I'm leaving those alone. Say \"everywhere\" if you want them too.");
+        }
+
+        if (preview.Matched > 0)
+            sb.Append(" Nothing has been moved. Say go ahead and they all go to Deleted Items, "
+                    + "where they stay until you empty it.");
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// What to say when Microsoft started refusing requests part-way through (OP2-229).
+    /// <para>
+    /// Written for the agent reading it as much as the person hearing it. A throttle is the
+    /// one outcome where the correct next move is to do nothing for a bit, and an agent told
+    /// only "that didn't finish" will try again immediately — which is how a thirty-second
+    /// limit becomes a five-minute one. So: a number of seconds, and why.
+    /// </para>
+    /// </summary>
+    public static string Slow(TimeSpan? retryAfter)
+    {
+        var seconds = Math.Max(5, (int)Math.Ceiling((retryAfter ?? TimeSpan.FromSeconds(30)).TotalSeconds));
+
+        return "Microsoft then started rate-limiting the mailbox, so I stopped there rather "
+             + "than push. Nothing was lost — what I've said is done is done. Wait about "
+             + $"{seconds} seconds before asking for the rest, and don't retry immediately: "
+             + "that extends the limit instead of clearing it.";
     }
 
     /// <summary>

@@ -55,14 +55,24 @@ public interface IMailService
         Connection connection, ClearTarget target, CancellationToken ct = default);
 
     /// <summary>
-    /// Deletes everything matching, in batches, up to a ceiling per call.
+    /// Moves everything matching into Deleted Items, in batches, up to a ceiling per call.
     /// <para>
-    /// Deleted means Deleted Items, not gone: Graph does offer a <c>permanentDelete</c> and
-    /// this deliberately does not use it. A misheard sender has to be recoverable.
+    /// A move, not a <c>DELETE</c>: Graph's <c>DELETE</c> on a message puts it in
+    /// Recoverable Items instead, which is not where anybody looks (OP2-228).
     /// </para>
     /// </summary>
     Task<ClearOutcome> ClearAsync(
         Connection connection, ClearTarget target, int ceiling = 1000, CancellationToken ct = default);
+
+    /// <summary>
+    /// Brings a sender's mail back out of Recoverable Items into the Inbox (OP2-228).
+    /// </summary>
+    Task<ClearOutcome> RecoverAsync(
+        Connection connection, string from, int ceiling = 1000, CancellationToken ct = default);
+
+    /// <summary>How many of a sender's messages are sitting in Recoverable Items.</summary>
+    Task<int> RecoverableCountAsync(
+        Connection connection, string from, CancellationToken ct = default);
 
     Task MarkReadAsync(Connection connection, string messageId, bool read, CancellationToken ct = default);
 
@@ -126,8 +136,17 @@ public interface IMailService
 public sealed class MailService(
     IMicrosoftConnectionServiceAccessor tokens,
     IHttpClientFactory httpFactory,
-    ILogger<MailService> log) : IMailService
+    ILogger<MailService> log,
+    Func<TimeSpan, CancellationToken, Task>? sleep = null) : IMailService
 {
+    /// <summary>
+    /// How a throttle is waited out. Injectable only so the tests for it do not actually
+    /// sleep — a unit suite that waits six real seconds to prove a backoff is a suite
+    /// people start skipping.
+    /// </summary>
+    private readonly Func<TimeSpan, CancellationToken, Task> _sleep =
+        sleep ?? ((wait, ct) => Task.Delay(wait, ct));
+
     private const string Graph = "https://graph.microsoft.com/v1.0";
 
     /// <summary>
@@ -753,10 +772,40 @@ public sealed class MailService(
         return clause;
     }
 
-    private static string ClearPath(ClearTarget target) =>
-        target.FolderId is null
+    /// <summary>
+    /// Outlook's own Deleted Items, by its well-known name. Graph takes one of these
+    /// wherever it takes a folder id.
+    /// </summary>
+    private const string DeletedItems = "deleteditems";
+
+    private static string ScopePath(string? folderId) =>
+        folderId is null
             ? "me/messages"
-            : $"me/mailFolders/{Uri.EscapeDataString(target.FolderId)}/messages";
+            : $"me/mailFolders/{Uri.EscapeDataString(folderId)}/messages";
+
+    /// <summary>The scopes to walk: each folder in turn, or the whole mailbox.</summary>
+    private static IReadOnlyList<string?> Scopes(ClearTarget target) =>
+        target.FolderIds is null or { Count: 0 }
+            ? [null]
+            : [.. target.FolderIds];
+
+    private async Task<int> CountAsync(
+        HttpClient http, Connection connection, string? folderId, string filter,
+        CancellationToken ct)
+    {
+        using var resp = await SendAsync(http, () =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get,
+                $"{ScopePath(folderId)}?$filter={filter}&$count=true&$top=1&$select=id");
+
+            req.Headers.Add("ConsistencyLevel", "eventual");
+            return req;
+        }, connection, "counting mail", ct);
+
+        await EnsureAsync(resp, connection, "could not count that mail", ct);
+
+        return (await resp.Content.ReadFromJsonAsync<GraphCountedList<GraphMessage>>(ct))?.Count ?? 0;
+    }
 
     public async Task<ClearPreview> PreviewClearAsync(
         Connection connection, ClearTarget target, CancellationToken ct = default)
@@ -764,23 +813,33 @@ public sealed class MailService(
         using var http = await ClientAsync(connection, ct);
 
         var filter = Uri.EscapeDataString(SenderFilter(target));
-        var path = ClearPath(target);
 
-        // One request for the exact total, and a sample for everything that has to be said
-        // out loud. $count is exact and costs nothing; tallying senders across thousands of
-        // matches would cost a request per hundred, to answer a question the sample already
-        // answers well enough.
-        var url = $"{path}?$filter={filter}&$count=true&$top=50"
-                + "&$select=id,subject,from,receivedDateTime";
+        // Exact counts, one request each: the scope, and then the whole mailbox. The
+        // difference between them is mail the user has filed somewhere, and OP2-227 is what
+        // happens when nobody mentions it — a clear-out that also emptied the folder he had
+        // just sorted that sender's receipts into.
+        var matched = 0;
+        foreach (var scope in Scopes(target))
+            matched += await CountAsync(http, connection, scope, filter, ct);
 
-        using var req = new HttpRequestMessage(HttpMethod.Get, url);
-        req.Headers.Add("ConsistencyLevel", "eventual");
+        var everywhere = target.FolderIds is null or { Count: 0 }
+            ? matched
+            : await CountAsync(http, connection, null, filter, ct);
 
-        using var resp = await http.SendAsync(req, ct);
-        await EnsureAsync(resp, connection, $"could not count the mail from \"{target.From}\"", ct);
+        // A sample from the WHOLE mailbox, so the folders being skipped can be named and the
+        // senders tallied. $orderby is refused beside a $filter, so this is whatever order
+        // the service chose rather than the newest.
+        using var sampleReq = new HttpRequestMessage(HttpMethod.Get,
+            "me/messages?$filter=" + filter
+            + "&$top=50&$select=id,subject,from,receivedDateTime,parentFolderId");
 
-        var body = await resp.Content.ReadFromJsonAsync<GraphCountedList<GraphMessage>>(ct);
-        var items = body?.Value ?? [];
+        sampleReq.Headers.Add("ConsistencyLevel", "eventual");
+
+        using var sampleResp = await http.SendAsync(sampleReq, ct);
+        await EnsureAsync(sampleResp, connection, "could not look at that mail", ct);
+
+        var items = (await sampleResp.Content
+            .ReadFromJsonAsync<GraphList<GraphMessage>>(ct))?.Value ?? [];
 
         var senders = items
             .GroupBy(m => m.From?.EmailAddress?.Address ?? "(unknown)", StringComparer.OrdinalIgnoreCase)
@@ -789,19 +848,26 @@ public sealed class MailService(
             .OrderByDescending(s => s.Count)
             .ToList();
 
-        var matched = body?.Count ?? items.Count;
+        var inScope = target.FolderIds is null or { Count: 0 }
+            ? null
+            : new HashSet<string>(target.FolderIds, StringComparer.Ordinal);
+
+        var skipped = inScope is null
+            ? (IReadOnlyList<string>)[]
+            : items
+                .Select(m => m.ParentFolderId)
+                .Where(f => f is not null && !inScope.Contains(f))
+                .Select(f => f!)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
 
         return new ClearPreview
         {
             Matched = matched,
+            Everywhere = everywhere,
+            SkippedFolderIds = skipped,
             Senders = senders,
-            Oldest = items.Count == 0 ? null : items.Min(m => m.ReceivedDateTime),
-            Newest = items.Count == 0 ? null : items.Max(m => m.ReceivedDateTime),
-
-            // $orderby is refused next to a filter, so the sample is whatever order the
-            // service chose. It is a sample of the matches, not the newest of them, and
-            // the dates above describe only what was sampled.
-            Sampled = matched > items.Count,
+            Sampled = everywhere > items.Count,
         };
     }
 
@@ -811,82 +877,216 @@ public sealed class MailService(
         using var http = await ClientAsync(connection, ct);
 
         var filter = Uri.EscapeDataString(SenderFilter(target));
-        var path = ClearPath(target);
         var wanted = Math.Clamp(ceiling, 1, 5000);
 
-        var deleted = 0;
+        var cleared = 0;
         var failed = 0;
 
-        // Fetched and deleted in turn rather than all ids first: a delete changes the
-        // collection being paged, so a nextLink taken before deleting walks a list that is
-        // shifting underneath it. Asking for the first page again each time is the only
-        // stable way round that, and it is cheap because the page just deleted is gone.
-        while (deleted + failed < wanted)
+        foreach (var scope in Scopes(target))
         {
-            var take = Math.Min(BatchLimit, wanted - deleted - failed);
+            var path = ScopePath(scope);
 
-            using var req = new HttpRequestMessage(HttpMethod.Get,
-                $"{path}?$filter={filter}&$select=id&$top={take}");
-            req.Headers.Add("ConsistencyLevel", "eventual");
+            // Fetched and moved in turn rather than all ids first: a move changes the
+            // collection being paged AND reissues every id, so a nextLink taken before
+            // moving walks a list shifting underneath it. Asking for the first page again
+            // each time is the only stable way round that, and it is cheap because the page
+            // just cleared is no longer in the results.
+            while (cleared + failed < wanted)
+            {
+                var take = Math.Min(BatchLimit, wanted - cleared - failed);
 
-            using var listed = await http.SendAsync(req, ct);
-            await EnsureAsync(listed, connection, $"could not find the mail from \"{target.From}\"", ct);
+                using var listed = await SendAsync(http, () =>
+                {
+                    var req = new HttpRequestMessage(HttpMethod.Get,
+                        $"{path}?$filter={filter}&$select=id&$top={take}");
+
+                    req.Headers.Add("ConsistencyLevel", "eventual");
+                    return req;
+                }, connection, "finding mail to clear", ct, done: cleared, of: wanted);
+
+                await EnsureAsync(listed, connection, "could not find that mail", ct,
+                    done: cleared, of: wanted);
+
+                var page = await listed.Content.ReadFromJsonAsync<GraphList<GraphMessage>>(ct);
+                var ids = (page?.Value ?? []).Select(m => m.Id).ToList();
+
+                if (ids.Count == 0) break;
+
+                int ok, bad;
+                try
+                {
+                    (ok, bad) = await MoveBatchAsync(http, connection, ids, DeletedItems, ct);
+                }
+                catch (MailThrottledException throttle)
+                {
+                    // Stop, but keep what was done. Throwing here would lose the count of
+                    // several hundred messages that really did move, and the caller would
+                    // start again from the beginning — doing the work twice against the very
+                    // limit that just refused it.
+                    log.LogWarning(throttle,
+                        "Throttled part-way through clearing {Label}: {Cleared} moved.",
+                        connection.Label, cleared);
+
+                    return new ClearOutcome
+                    {
+                        Deleted = cleared,
+                        Failed = failed,
+                        Remaining = 0,
+                        Throttled = true,
+                        RetryAfter = throttle.RetryAfter,
+                    };
+                }
+
+                cleared += ok;
+                failed += bad;
+
+                // Every id in the page was refused, so asking again returns the same page
+                // and this would spin for ever inside a tool call nobody can interrupt.
+                if (ok == 0) break;
+            }
+        }
+
+        // What is left, asked for separately: the caller has to be able to say "and there
+        // are still 600 to go" rather than implying the job is finished.
+        var remaining = 0;
+        if (cleared + failed >= wanted)
+            foreach (var scope in Scopes(target))
+                remaining += await CountAsync(http, connection, scope, filter, ct);
+
+        log.LogInformation(
+            "Cleared {Cleared} message(s) from \"{From}\" to Deleted Items in {Label}; "
+            + "{Failed} refused, {Remaining} left.",
+            cleared, target.From, connection.Label, failed, remaining);
+
+        return new ClearOutcome { Deleted = cleared, Failed = failed, Remaining = remaining };
+    }
+
+    /// <summary>
+    /// Everything of this sender's sitting in Recoverable Items, moved back to the Inbox
+    /// (OP2-228).
+    /// <para>
+    /// This exists because the first version of <c>clear_mail</c> used <c>DELETE</c>, which
+    /// does not do what its name suggests, and 188 of the user's messages went somewhere he
+    /// was told they had not gone. They are still there — Recoverable Items keeps them for a
+    /// retention window — and this is how they come back.
+    /// </para>
+    /// </summary>
+    public async Task<ClearOutcome> RecoverAsync(
+        Connection connection, string from, int ceiling = 1000, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+
+        var filter = Uri.EscapeDataString(SenderFilter(new ClearTarget { From = from }));
+        var wanted = Math.Clamp(ceiling, 1, 5000);
+
+        var back = 0;
+        var failed = 0;
+
+        while (back + failed < wanted)
+        {
+            var take = Math.Min(BatchLimit, wanted - back - failed);
+
+            using var listed = await SendAsync(http, () =>
+            {
+                var req = new HttpRequestMessage(HttpMethod.Get,
+                    $"me/mailFolders/{Recoverable}/messages?$filter={filter}&$select=id&$top={take}");
+
+                req.Headers.Add("ConsistencyLevel", "eventual");
+                return req;
+            }, connection, "finding mail to recover", ct, done: back, of: wanted);
+
+            await EnsureAsync(listed, connection, "could not look in Recoverable Items", ct,
+                done: back, of: wanted);
 
             var page = await listed.Content.ReadFromJsonAsync<GraphList<GraphMessage>>(ct);
             var ids = (page?.Value ?? []).Select(m => m.Id).ToList();
 
             if (ids.Count == 0) break;
 
-            var (ok, bad) = await DeleteBatchAsync(http, connection, ids, ct);
-            deleted += ok;
+            int ok, bad;
+            try
+            {
+                (ok, bad) = await MoveBatchAsync(http, connection, ids, "inbox", ct);
+            }
+            catch (MailThrottledException throttle)
+            {
+                log.LogWarning(throttle,
+                    "Throttled part-way through recovering {Label}: {Back} restored.",
+                    connection.Label, back);
+
+                return new ClearOutcome
+                {
+                    Deleted = back,
+                    Failed = failed,
+                    Throttled = true,
+                    RetryAfter = throttle.RetryAfter,
+                };
+            }
+
+            back += ok;
             failed += bad;
 
-            // Every id in the page was refused, so asking again returns the same page and
-            // this would spin for ever on a tool call nobody can interrupt.
             if (ok == 0) break;
         }
 
-        // What is left, asked for separately: the caller has to be able to say "and there
-        // are still 600 to go" rather than implying the job is finished.
         var remaining = 0;
-        if (deleted + failed >= wanted)
-        {
-            using var req = new HttpRequestMessage(HttpMethod.Get,
-                $"{path}?$filter={filter}&$count=true&$top=1&$select=id");
-            req.Headers.Add("ConsistencyLevel", "eventual");
-
-            using var resp = await http.SendAsync(req, ct);
-            if (resp.IsSuccessStatusCode)
-                remaining = (await resp.Content
-                    .ReadFromJsonAsync<GraphCountedList<GraphMessage>>(ct))?.Count ?? 0;
-        }
+        if (back + failed >= wanted)
+            remaining = await CountAsync(http, connection, Recoverable, filter, ct);
 
         log.LogInformation(
-            "Cleared {Deleted} message(s) from \"{From}\" in {Label}; {Failed} refused, {Remaining} left.",
-            deleted, target.From, connection.Label, failed, remaining);
+            "Recovered {Back} message(s) from \"{From}\" in {Label}; {Failed} refused.",
+            back, from, connection.Label, failed);
 
-        return new ClearOutcome { Deleted = deleted, Failed = failed, Remaining = remaining };
+        return new ClearOutcome { Deleted = back, Failed = failed, Remaining = remaining };
+    }
+
+    /// <summary>How many of this sender's messages are sitting in Recoverable Items.</summary>
+    public async Task<int> RecoverableCountAsync(
+        Connection connection, string from, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+
+        return await CountAsync(http, connection, Recoverable,
+            Uri.EscapeDataString(SenderFilter(new ClearTarget { From = from })), ct);
     }
 
     /// <summary>
-    /// One <c>$batch</c> of deletes. Returns how many went and how many were refused.
+    /// Where a <c>DELETE</c> on a message really puts it, which is not Deleted Items. Graph
+    /// exposes it as a well-known folder, which is the only reason OP2-228 is recoverable
+    /// rather than simply a loss.
+    /// </summary>
+    private const string Recoverable = "recoverableitemsdeletions";
+
+    /// <summary>
+    /// One <c>$batch</c> of moves. Returns how many moved and how many were refused.
     /// <para>
-    /// A <c>DELETE</c> on a message moves it to Deleted Items. Each sub-request carries its
-    /// own status, so a batch is partially successful as a matter of course and the two
-    /// numbers have to be counted separately — a batch that returns 200 is not a batch
-    /// whose contents all worked.
+    /// A move and not a <c>DELETE</c>, and that is the whole of OP2-228. <c>DELETE
+    /// /me/messages/{id}</c> answers <c>204</c> and puts the message in <b>Recoverable
+    /// Items</b>, not Deleted Items — measured on the mailbox that reported it, where 188
+    /// messages this tool had called recoverable "in Deleted Items" were not there at all.
+    /// <c>POST /move</c> to <c>deleteditems</c> puts it where the user looks, and leaves it
+    /// there until they empty the folder themselves.
+    /// </para>
+    /// <para>
+    /// Success is read from each sub-request's own status, never from a follow-up search. A
+    /// <c>$filter</c> run straight after a move found the message on one run and not on the
+    /// next, so checking that way would invent failures; the move's own 201 is authoritative
+    /// and carries the message's new id.
     /// </para>
     /// </summary>
-    private async Task<(int Ok, int Failed)> DeleteBatchAsync(
-        HttpClient http, Connection connection, IReadOnlyList<string> ids, CancellationToken ct)
+    private async Task<(int Ok, int Failed)> MoveBatchAsync(
+        HttpClient http, Connection connection, IReadOnlyList<string> ids, string destination,
+        CancellationToken ct)
     {
         var payload = new
         {
             requests = ids.Select((id, i) => new
             {
                 id = (i + 1).ToString(),
-                method = "DELETE",
-                url = $"/me/messages/{Uri.EscapeDataString(id)}",
+                method = "POST",
+                url = $"/me/messages/{Uri.EscapeDataString(id)}/move",
+                body = new { destinationId = destination },
+                headers = new Dictionary<string, string> { ["Content-Type"] = "application/json" },
             }).ToArray(),
         };
 
@@ -896,22 +1096,33 @@ public sealed class MailService(
         {
             using var resp = await http.PostAsJsonAsync("$batch", payload, ct);
 
-            // Bulk work is exactly what Graph throttles. Retrying the whole batch is safe:
-            // a delete that already happened answers 404 the second time and is counted as
-            // refused, which is the right answer for a message that is no longer there.
-            if (resp.StatusCode == HttpStatusCode.TooManyRequests && attempt < attempts - 1)
+            // Bulk work is exactly what Graph throttles. Retrying the whole batch is safe: a
+            // move that already happened reissued the id, so the old one answers 404 and is
+            // counted as refused — the right answer for a message no longer where it was.
+            if (resp.StatusCode == HttpStatusCode.TooManyRequests)
             {
-                var wait = resp.Headers.RetryAfter?.Delta
-                           ?? TimeSpan.FromSeconds(Math.Pow(2, attempt + 1));
+                var wait = RetryAfter(resp) ?? TimeSpan.FromSeconds(Math.Pow(2, attempt + 1));
 
-                log.LogWarning("Throttled clearing mail in {Label}; waiting {Seconds}s.",
+                // Wait only while waiting is still cheap. Past that the caller is better
+                // served by being told to come back: somebody is listening to this, and a
+                // tool call that sits silent for two minutes has already failed them even
+                // if it eventually succeeds.
+                if (attempt >= attempts - 1 || wait > TimeSpan.FromSeconds(20))
+                {
+                    log.LogWarning("Giving the throttle back to the caller for {Label}.",
+                        connection.Label);
+
+                    throw new MailThrottledException(connection.Label, wait);
+                }
+
+                log.LogWarning("Throttled moving mail in {Label}; waiting {Seconds}s.",
                     connection.Label, wait.TotalSeconds);
 
-                await Task.Delay(wait > TimeSpan.FromSeconds(30) ? TimeSpan.FromSeconds(30) : wait, ct);
+                await _sleep(wait, ct);
                 continue;
             }
 
-            await EnsureAsync(resp, connection, "could not delete that mail", ct);
+            await EnsureAsync(resp, connection, "could not move that mail", ct);
 
             var answer = await resp.Content.ReadFromJsonAsync<GraphBatchReplies>(ct);
             var ok = 0;
@@ -924,9 +1135,8 @@ public sealed class MailService(
             return (ok, failed);
         }
 
-        // Only reachable if every attempt was throttled, and the last one is not retried —
-        // it goes through EnsureAsync above, which throws. Here for the compiler.
-        throw new MailException($"{connection.Label}: could not delete that mail — still throttled.");
+        // Unreachable: the loop either returns or throws. Here for the compiler.
+        throw new MailThrottledException(connection.Label, null);
     }
 
     private async Task<GraphList<GraphFolder>?> FolderPageAsync(
@@ -1108,8 +1318,14 @@ public sealed class MailService(
     /// <see cref="MailAuthRequiredException"/> because they need a browser, not a retry —
     /// the two are indistinguishable to a caller that only sees a status code.
     /// </summary>
+    /// <param name="done">
+    /// How much of a bulk job had already succeeded, so a throttle can say so. Work already
+    /// done and not reported is work the caller will do again.
+    /// </param>
+    /// <param name="of">The size of that job, when it is known.</param>
     private async Task EnsureAsync(
-        HttpResponseMessage resp, Connection connection, string what, CancellationToken ct)
+        HttpResponseMessage resp, Connection connection, string what, CancellationToken ct,
+        int done = 0, int of = 0)
     {
         if (resp.IsSuccessStatusCode) return;
 
@@ -1120,7 +1336,72 @@ public sealed class MailService(
         if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             throw new MailAuthRequiredException(connection.Label);
 
+        // 429 ahead of the general case, and as its own type (OP2-229). Described as "could
+        // not do that" it reads like a fault, and the agent retries immediately — which is
+        // the one response that makes a throttle worse. This mailbox refuses with
+        // ApplicationThrottled / MailboxConcurrency, and the only useful answer is a number
+        // of seconds and an instruction to do less.
+        if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            throw new MailThrottledException(connection.Label, RetryAfter(resp), done, of);
+
         throw new MailException($"{connection.Label}: {what} — {Describe(resp.StatusCode, body)}");
+    }
+
+    /// <summary>
+    /// How long Graph asked us to wait. It sends <c>Retry-After</c> as delta seconds, but
+    /// not always, so the fallback matters as much as the header.
+    /// </summary>
+    private static TimeSpan? RetryAfter(HttpResponseMessage resp)
+    {
+        if (resp.Headers.RetryAfter?.Delta is { } delta) return delta;
+
+        if (resp.Headers.RetryAfter?.Date is { } when)
+        {
+            var wait = when - DateTimeOffset.UtcNow;
+            if (wait > TimeSpan.Zero) return wait;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// A request that waits out a throttle rather than failing on it, for the ordinary
+    /// single-shot calls. Bounded tightly: somebody is waiting for an answer out loud, so a
+    /// couple of short waits is the most that helps and anything longer belongs to the
+    /// caller, who can be told to come back.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendAsync(
+        HttpClient http, Func<HttpRequestMessage> build, Connection connection,
+        string what, CancellationToken ct, int done = 0, int of = 0)
+    {
+        const int attempts = 3;
+
+        for (var attempt = 0; attempt < attempts - 1; attempt++)
+        {
+            using var req = build();
+            var resp = await http.SendAsync(req, ct);
+
+            if (resp.StatusCode != System.Net.HttpStatusCode.TooManyRequests) return resp;
+
+            var wait = RetryAfter(resp) ?? TimeSpan.FromSeconds(2 * (attempt + 1));
+            resp.Dispose();
+
+            // Past a few seconds the caller is better served by being told to come back:
+            // somebody is listening to this, and a tool call that sits silent for a minute
+            // has already failed them even if it eventually succeeds.
+            if (wait > TimeSpan.FromSeconds(10))
+                throw new MailThrottledException(connection.Label, wait, done, of);
+
+            log.LogWarning("Throttled on {What} for {Label}; waiting {Seconds}s.",
+                what, connection.Label, wait.TotalSeconds);
+
+            await _sleep(wait, ct);
+        }
+
+        // Last go: whatever comes back is the answer, and a 429 here becomes a throttle
+        // report through EnsureAsync like any other.
+        using var last = build();
+        return await http.SendAsync(last, ct);
     }
 
     public async Task<IReadOnlyList<MailAttachment>> ListAttachmentsAsync(
@@ -1303,7 +1584,59 @@ public interface IMicrosoftConnectionServiceAccessor
     Task<string?> GetAccessTokenAsync(Connection connection, CancellationToken ct = default);
 }
 
-public sealed class MailException(string message) : Exception(message);
+public class MailException(string message) : Exception(message);
+
+/// <summary>
+/// Microsoft is rate-limiting this mailbox (OP2-229).
+/// <para>
+/// Its own type because it is the one failure where the right response is to <b>wait and do
+/// less</b>, and nothing else in this surface can say that. A generic "could not do that"
+/// invites an immediate retry, which is the behaviour the throttle exists to stop — and the
+/// agent on the other end of this will cheerfully retry in a loop unless it is told
+/// otherwise, in words, with a number of seconds in them.
+/// </para>
+/// <para>
+/// It derives from <see cref="MailException"/> so that every tool already catching one keeps
+/// working and keeps speaking the message, rather than this needing a new catch in each of
+/// twenty places to avoid becoming an unhandled 500.
+/// </para>
+/// </summary>
+public sealed class MailThrottledException : MailException
+{
+    public MailThrottledException(string label, TimeSpan? retryAfter, int done = 0, int of = 0)
+        : base(Say(label, retryAfter, done, of))
+    {
+        Label = label;
+        RetryAfter = retryAfter;
+        Done = done;
+    }
+
+    public string Label { get; }
+    public TimeSpan? RetryAfter { get; }
+    public int Done { get; }
+
+    /// <summary>The seconds to wait, rounded for saying out loud and floored at five.</summary>
+    public int Seconds => Math.Max(5, (int)Math.Ceiling((RetryAfter ?? TimeSpan.FromSeconds(30)).TotalSeconds));
+
+    private static string Say(string label, TimeSpan? retryAfter, int done, int of)
+    {
+        var wait = Math.Max(5, (int)Math.Ceiling((retryAfter ?? TimeSpan.FromSeconds(30)).TotalSeconds));
+
+        // Progress first, because a throttle part-way through a bulk job is the case where
+        // the agent most needs to know that the work was not wasted and must not be redone
+        // from the start.
+        var progress = done > 0
+            ? of > 0
+                ? $"I got through {done} of {of} before "
+                : $"I got through {done} before "
+            : "";
+
+        return $"{progress}Microsoft is rate-limiting {label} right now — it is refusing "
+             + $"requests because too many have gone through too quickly. Wait about {wait} "
+             + "seconds before asking again, and do it in smaller pieces. Retrying straight "
+             + "away will only extend the limit.";
+    }
+}
 
 /// <summary>
 /// The connection needs an interactive sign-in. Distinct from a general failure because

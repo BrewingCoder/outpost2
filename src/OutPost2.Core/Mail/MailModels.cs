@@ -250,11 +250,19 @@ public sealed record OutgoingMail
 /// </summary>
 public sealed record ClearTarget
 {
-    /// <summary>An address, or a fragment to match against addresses and display names.</summary>
+    /// <summary>An address, or a fragment to match against addresses.</summary>
     public required string From { get; init; }
 
-    /// <summary>Restricts the clear-out to one folder. Null means the whole mailbox.</summary>
-    public string? FolderId { get; init; }
+    /// <summary>
+    /// The folders to clear, by id. Null means the whole mailbox.
+    /// <para>
+    /// A list rather than one folder because the default is deliberately narrow (OP2-227):
+    /// clearing the whole mailbox by default also emptied folders the user had just filed
+    /// that sender's mail into, and filing something is an act of keeping it. The default
+    /// is now the places mail lands rather than the places it has been put.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string>? FolderIds { get; init; }
 
     /// <summary>Only messages received strictly before this. Null means all of them.</summary>
     public DateTimeOffset? Before { get; init; }
@@ -263,21 +271,33 @@ public sealed record ClearTarget
 /// <summary>What a clear-out WOULD do. Always read back before anything is deleted.</summary>
 public sealed record ClearPreview
 {
+    /// <summary>Matches inside the scope — the number that would actually be deleted.</summary>
     public required int Matched { get; init; }
 
     /// <summary>
-    /// The distinct senders behind those matches, commonest first. This is the gate that
+    /// Matches anywhere in the mailbox, including folders outside the scope. When this is
+    /// larger than <see cref="Matched"/> the user has filed some of this sender's mail, and
+    /// has to be told that it is being left alone rather than discovering either way later
+    /// (OP2-227).
+    /// </summary>
+    public int Everywhere { get; init; }
+
+    /// <summary>
+    /// Folders holding matches that the scope excludes, by folder id. Named by the caller,
+    /// which is the layer that knows folder names.
+    /// </summary>
+    public IReadOnlyList<string> SkippedFolderIds { get; init; } = [];
+
+    /// <summary>
+    /// The distinct senders behind the matches, commonest first. This is the gate that
     /// catches a misheard name: "everything from Dave" matching three different Daves is
     /// something the user has to hear before it happens.
     /// </summary>
     public IReadOnlyList<SenderTally> Senders { get; init; } = [];
 
-    public DateTimeOffset? Oldest { get; init; }
-    public DateTimeOffset? Newest { get; init; }
-
     /// <summary>
     /// True when the senders were tallied from a sample rather than every match, so the
-    /// list may be missing one. The count itself is always exact.
+    /// list may be missing one. The counts themselves are always exact.
     /// </summary>
     public bool Sampled { get; init; }
 }
@@ -297,4 +317,17 @@ public sealed record ClearOutcome
 
     /// <summary>Matches left over because the per-call ceiling was reached.</summary>
     public int Remaining { get; init; }
+
+    /// <summary>
+    /// True when Microsoft started refusing requests and the job stopped early (OP2-229).
+    /// <para>
+    /// Distinct from <see cref="Remaining"/>, which means "there is more to do". This means
+    /// "there is more to do <em>and</em> going straight back will make it worse". The caller
+    /// has to be able to tell the user to wait rather than cheerfully trying again.
+    /// </para>
+    /// </summary>
+    public bool Throttled { get; init; }
+
+    /// <summary>Roughly how long to wait before asking again, when throttled.</summary>
+    public TimeSpan? RetryAfter { get; init; }
 }
