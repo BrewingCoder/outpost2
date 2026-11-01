@@ -822,9 +822,23 @@ public sealed class MailService(
         foreach (var scope in Scopes(target))
             matched += await CountAsync(http, connection, scope, filter, ct);
 
-        var everywhere = target.FolderIds is null or { Count: 0 }
-            ? matched
-            : await CountAsync(http, connection, null, filter, ct);
+        // Everywhere else, minus the places mail has already been disposed of. Counting
+        // Deleted Items here reported "another 1,033 in folders you've filed into — Sync
+        // Issues/Conflicts, Deleted Items", which is both a wrong description and a number
+        // that would have "everywhere" re-moving a thousand already-deleted messages.
+        var everywhere = matched;
+
+        if (target.FolderIds is not (null or { Count: 0 }))
+        {
+            everywhere = await CountAsync(http, connection, null, filter, ct);
+
+            foreach (var bin in Disposed)
+                everywhere -= await CountAsync(http, connection, bin, filter, ct);
+
+            // Each count is taken a moment apart on a live mailbox, so the arithmetic can
+            // cross zero. Never report fewer elsewhere than are in scope.
+            everywhere = Math.Max(everywhere, matched);
+        }
 
         // A sample from the WHOLE mailbox, so the folders being skipped can be named and the
         // senders tallied. $orderby is refused beside a $filter, so this is whatever order
@@ -1055,6 +1069,12 @@ public sealed class MailService(
     /// exposes it as a well-known folder, which is the only reason OP2-228 is recoverable
     /// rather than simply a loss.
     /// </summary>
+    /// <summary>
+    /// Folders whose contents the user has already finished with. Excluded from "and there
+    /// are more elsewhere", because mail in the bin is not mail that has been filed.
+    /// </summary>
+    private static readonly string[] Disposed = ["deleteditems", "junkemail"];
+
     private const string Recoverable = "recoverableitemsdeletions";
 
     /// <summary>

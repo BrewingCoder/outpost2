@@ -634,6 +634,66 @@ public class ClearMailTests
         Assert.Contains("everywhere", said);
     }
 
+    /// <summary>
+    /// The part of a proposal that lists the folders being skipped, so an assertion about
+    /// it cannot be satisfied or broken by the sentence that promises Deleted Items.
+    /// </summary>
+    private static string Clause(string said)
+    {
+        var from = said.IndexOf("filed into", StringComparison.Ordinal);
+        if (from < 0) return "";
+
+        var to = said.IndexOf("leaving those alone", from, StringComparison.Ordinal);
+        return to < 0 ? said[from..] : said[from..to];
+    }
+
+    [Fact]
+    public void Mail_already_in_the_bin_is_not_described_as_filed()
+    {
+        // The deployed output read "another 1033 in folders you've filed into — Sync
+        // Issues/Conflicts, Deleted Items". Deleted Items is not a folder anybody filed
+        // into, and counting it would have "everywhere" re-moving a thousand messages that
+        // were already thrown away. The service leaves those out of the count, so naming
+        // them here would describe a number that does not include them.
+        MailFolder[] mailbox =
+        [
+            Folder("Inbox", "inbox"),
+            Folder("Clutter"),
+            Folder("Deleted Items", "deleteditems"),
+            Folder("Junk Email", "junkemail"),
+            Folder("Inbox/Receipts"),
+        ];
+
+        var said = MailTools.Proposal("linkedin", "home", " in the Inbox and Clutter", "",
+            Preview(188, everywhere: 191,
+                skipped: ["id-Deleted Items", "id-Junk Email", "id-Inbox/Receipts"],
+                senders: new SenderTally("LinkedIn", "news@linkedin.com", 50)), mailbox);
+
+        // Only the clause that lists the skipped folders — "Deleted Items" legitimately
+        // appears in the closing promise about where everything goes.
+        var clause = Clause(said);
+
+        Assert.Contains("Inbox/Receipts", clause);
+        Assert.DoesNotContain("Deleted Items", clause);
+        Assert.DoesNotContain("Junk Email", clause);
+    }
+
+    [Fact]
+    public void A_skip_list_of_nothing_but_bins_still_reads_cleanly()
+    {
+        // All that is left elsewhere is in the bin, so there is no folder worth naming —
+        // and a dangling "— ." would be the obvious way to get that wrong.
+        MailFolder[] mailbox = [Folder("Inbox", "inbox"), Folder("Deleted Items", "deleteditems")];
+
+        var said = MailTools.Proposal("linkedin", "home", " in the Inbox and Clutter", "",
+            Preview(188, everywhere: 190, skipped: ["id-Deleted Items"],
+                senders: new SenderTally("LinkedIn", "news@linkedin.com", 50)), mailbox);
+
+        Assert.DoesNotContain("Deleted Items", Clause(said));
+        Assert.DoesNotContain("—  .", said);
+        Assert.DoesNotContain("into .", said);
+    }
+
     [Fact]
     public void Nothing_filed_elsewhere_means_no_warning_to_wade_through()
     {

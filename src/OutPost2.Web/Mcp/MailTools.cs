@@ -1141,9 +1141,12 @@ public sealed partial class MailTools(
             sb.Append($" There {(filed == 1 ? "is" : "are")} another {filed} from them "
                     + "in folders you've filed into");
 
+            // Deleted Items and Junk are left out: the service does not count them, so
+            // naming them here would describe a number that does not include them.
             var named = preview.SkippedFolderIds
-                .Select(id => folders.FirstOrDefault(f => f.Id == id)?.Path)
-                .Where(n => n is not null)
+                .Select(id => folders.FirstOrDefault(f => f.Id == id))
+                .Where(f => f is not null && !Disposal(f.WellKnownName))
+                .Select(f => f!.Path)
                 .Take(4)
                 .ToList();
 
@@ -1191,6 +1194,13 @@ public sealed partial class MailTools(
         return $"{nothing} That's only the {asked - failed.Count} of {asked} mailboxes I could "
              + $"reach — {Untrusted.Scrub(trouble)}, so there may be more there.";
     }
+
+    /// <summary>
+    /// Whether a folder is somewhere mail has already been thrown away rather than filed.
+    /// </summary>
+    private static bool Disposal(string? wellKnownName) =>
+        Same(wellKnownName, "deleteditems") || Same(wellKnownName, "junkemail")
+        || Same(wellKnownName, "recoverableitemsdeletions");
 
     /// <summary>
     /// A stable name for one clear-out request, so a retried tool call joins the job that is
