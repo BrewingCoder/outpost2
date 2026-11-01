@@ -126,6 +126,19 @@ public sealed class MailService(
     /// </summary>
     private const int MaxSearchPages = 25;
 
+    /// <summary>
+    /// The most folders a mailbox will be reported as having. A real mailbox here holds 112,
+    /// so this is a guard against a pathological tree rather than a limit anyone meets.
+    /// </summary>
+    private const int MaxFolders = 1000;
+
+    /// <summary>
+    /// How many requests the folder walk will spend. One per folder that has children the
+    /// expand did not reach, so a deep mailbox costs more than a flat one — and a folder
+    /// nobody can name is worse than a walk that stops, so this is generous.
+    /// </summary>
+    private const int MaxFolderRequests = 60;
+
     private async Task<HttpClient> ClientAsync(Connection connection, CancellationToken ct)
     {
         var token = await tokens.GetAccessTokenAsync(connection, ct)
@@ -580,31 +593,111 @@ public sealed class MailService(
         return moved?.Id ?? messageId;
     }
 
+    /// <summary>
+    /// Every folder in the mailbox, parents before their children.
+    /// <para>
+    /// This used to be one request with <c>$expand=childFolders</c>. OP2-213 is what that
+    /// cost, and measuring it found two separate causes where the ticket described one
+    /// symptom — a folder visible in Outlook, already filed into earlier in the same
+    /// session, refused as nonexistent:
+    /// </para>
+    /// <list type="number">
+    /// <item><b>The expanded collection stops at ten.</b> The mailbox that reported it has
+    /// an Inbox with eleven children, and the eleventh was the folder in question. Graph
+    /// offers no <c>childFolders@odata.nextLink</c> to carry on with, and it answers
+    /// <c>200</c> to a nested <c>$expand=childFolders($top=200)</c> while returning the same
+    /// ten — accepted and ignored, which is worse than a refusal.</item>
+    /// <item><b>The expand reaches one level down.</b> Another mailbox here has 84 folders
+    /// under a single one of them; 87 of its 112 were below the horizon entirely.</item>
+    /// </list>
+    /// <para>
+    /// So the expand is kept, because it still earns its place by bringing the second level
+    /// back on the first request, and then the children of any folder that says it has more
+    /// than arrived are asked for directly. <c>childFolderCount</c> comes from the folder
+    /// itself, so the walk knows what it is still missing rather than guessing — and the
+    /// direct collection does page, so <c>@odata.nextLink</c> is followed at both levels.
+    /// </para>
+    /// </summary>
     public async Task<IReadOnlyList<MailFolder>> ListFoldersAsync(
         Connection connection, CancellationToken ct = default)
     {
         using var http = await ClientAsync(connection, ct);
 
-        // One level of children as well as the top level: people keep their filing folders
-        // under Inbox, and a destination list that stops at the root would miss all of them.
-        //
+        var folders = new List<MailFolder>();
+
+        // Folders known to have children that have not been listed yet. Appended to while
+        // it is walked, which makes the walk breadth-first: the shallow folders people
+        // actually name are listed even if a deep corner of the mailbox runs the budget out.
+        var pending = new List<MailFolder>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var at = new Dictionary<string, int>(StringComparer.Ordinal);
+        var requests = 0;
+
         // $expand with no nested options, and no $select beside it. Graph rejects
-        // $select + $expand on mailFolders outright with a 400, and rejects nested
-        // $select/$top inside the expand as well — so the shape here is the one it accepts,
-        // not the narrowest one that looks reasonable.
-        using var resp = await http.GetAsync("me/mailFolders?$top=100&$expand=childFolders", ct);
+        // $select + $expand on mailFolders outright with a 400 — so the shape here is the
+        // one it accepts, not the narrowest one that looks reasonable.
+        var next = "me/mailFolders?$top=100&$expand=childFolders";
+
+        while (next is not null && requests < MaxFolderRequests && folders.Count < MaxFolders)
+        {
+            var page = await FolderPageAsync(http, connection, next, ct);
+            requests++;
+
+            foreach (var f in page?.Value ?? []) Add(f, null);
+            next = page?.NextLink;
+        }
+
+        for (var i = 0; i < pending.Count && folders.Count < MaxFolders; i++)
+        {
+            var parent = pending[i];
+            var url = $"me/mailFolders/{Uri.EscapeDataString(parent.Id)}/childFolders?$top=100";
+            var got = 0;
+
+            while (url is not null && requests < MaxFolderRequests && folders.Count < MaxFolders)
+            {
+                var page = await FolderPageAsync(http, connection, url, ct);
+                requests++;
+
+                foreach (var f in page?.Value ?? []) { Add(f, parent.Path); got++; }
+                url = page?.NextLink;
+            }
+
+            // Only when the asking finished. Graph's childFolderCount can simply be wrong —
+            // this mailbox has a Conversation History that claims one child and returns none,
+            // even with includeHiddenFolders=true — and a count nobody can act on makes the
+            // surface warn, for ever, that it cannot see everything. So record what was
+            // actually there. A folder cut off by the budget keeps Graph's number instead,
+            // which is what lets the surface tell the two cases apart.
+            if (url is null && got != parent.ChildCount && at.TryGetValue(parent.Id, out var slot))
+                folders[slot] = folders[slot] with { ChildCount = got };
+        }
+
+        return folders;
+
+        void Add(GraphFolder f, string? parentPath)
+        {
+            // A folder reached twice would be listed twice and walked twice. Nothing in the
+            // tree should repeat, but the budget is spent on the assumption that it cannot.
+            if (folders.Count >= MaxFolders || !seen.Add(f.Id)) return;
+
+            var mapped = f.ToFolder(parentPath);
+            at[mapped.Id] = folders.Count;
+            folders.Add(mapped);
+
+            var inline = f.ChildFolders ?? [];
+            foreach (var child in inline) Add(child, mapped.Path);
+
+            if (f.ChildFolderCount > inline.Count) pending.Add(mapped);
+        }
+    }
+
+    private async Task<GraphList<GraphFolder>?> FolderPageAsync(
+        HttpClient http, Connection connection, string url, CancellationToken ct)
+    {
+        using var resp = await http.GetAsync(url, ct);
         await EnsureAsync(resp, connection, "could not list the folders", ct);
 
-        var page = await resp.Content.ReadFromJsonAsync<GraphList<GraphFolder>>(ct);
-
-        var folders = new List<MailFolder>();
-        foreach (var f in page?.Value ?? [])
-        {
-            folders.Add(f.ToFolder(null));
-            foreach (var child in f.ChildFolders ?? [])
-                folders.Add(child.ToFolder(f.DisplayName));
-        }
-        return folders;
+        return await resp.Content.ReadFromJsonAsync<GraphList<GraphFolder>>(ct);
     }
 
     public async Task<MailFolder> CreateFolderAsync(
