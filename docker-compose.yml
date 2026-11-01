@@ -117,8 +117,14 @@ services:
       vault-dev:
         condition: service_healthy
     environment:
-      ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_HTTP_PORTS: "8080"
+      # Production, not Development. This container answers on a public hostname through
+      # the Cloudflare tunnel, and Development serves the developer exception page: source
+      # paths, the middleware pipeline and the request's own headers, to anyone who can
+      # make it throw (OP2-259). Migrating on boot is asked for separately below, because
+      # this stack is one container and does need it.
+      ASPNETCORE_ENVIRONMENT: "Production"
+      OutPost2__MigrateOnBoot: "true"
       OutPost2__PublicBaseUrl: "https://outpost.brewingcoder.com"
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-outpost2};Username=${POSTGRES_USER:-outpost2};Password=${POSTGRES_PASSWORD:-outpost2-dev}"
       OutPost2__Vault__Address: "http://vault-dev:8200"

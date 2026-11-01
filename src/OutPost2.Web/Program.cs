@@ -289,14 +289,27 @@ var app = builder.Build();
 
 app.UseForwardedHeaders();
 
-// Dev convenience only. Production applies migrations as a deliberate deploy step, not on
-// boot — concurrent replicas racing to migrate is a good way to corrupt a schema.
-if (app.Environment.IsDevelopment())
+// Migrating on boot is its own decision, asked for explicitly (OP2-259).
+//
+// It used to be keyed off Development, which quietly tied "apply the schema" to "hand out
+// stack traces to anybody who can reach me" — and the second of those is not something a
+// publicly reachable host should do. Two unrelated questions on one switch means neither
+// can be answered without the other: this deployment needs the migration and must not have
+// the developer exception page, and there was no way to say so.
+//
+// Still off by default, for the reason the old comment gave: concurrent replicas racing to
+// migrate is a good way to corrupt a schema. The single-container dev stack sets it on.
+if (app.Configuration.GetValue("OutPost2:MigrateOnBoot", false))
 {
     await using var scope = app.Services.CreateAsyncScope();
     await scope.ServiceProvider.GetRequiredService<OutPostDbContext>().Database.MigrateAsync();
 }
 
+// Anywhere but a developer's own machine, an unhandled exception is one sentence. In
+// Development ASP.NET Core serves the developer exception page instead, which returns
+// internal source paths, the middleware pipeline, line numbers and the request's own
+// headers echoed back — fine on a laptop, and an invitation on a host that is reachable
+// from the internet and custodying other people's mailboxes (OP2-259).
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
