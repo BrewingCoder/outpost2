@@ -1949,8 +1949,6 @@ public sealed partial class MailTools(
     private static List<string> Split(string? csv) =>
         (csv ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
-    private static string Ago(DateTimeOffset when) => Timestamps.Ago(when);
-
     /// <summary>
     /// The mailbox's own zone, for printing exact times (OP2-264). Never allowed to break a
     /// read: if the zone cannot be had, UTC is still an exact and unambiguous instant, and
