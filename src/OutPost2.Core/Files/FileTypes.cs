@@ -42,7 +42,24 @@ public static class FileTypes
             or "multipart/form-data" or "binary/octet-stream";
     }
 
-    public static bool HasExtension(string fileName) => Path.GetExtension(fileName).Length > 1;
+    /// <summary>
+    /// Whether the name ends in something a machine will read as a file type. Not just "has
+    /// a dot": "report v1.2" and "Mr. Smith notes" both have one, and both would go out as
+    /// files nothing can open. A real extension is short, letters and digits only, and has
+    /// at least one letter — ".pdf", ".docx", ".7z", ".mp3" — so ".2" and ". Smith notes"
+    /// are not.
+    /// </summary>
+    public static bool HasExtension(string fileName)
+    {
+        var ext = Path.GetExtension(fileName.TrimEnd());
+        if (ext.Length < 2 || ext.Length > 11) return false;
+        var body = ext.AsSpan(1);
+        foreach (var ch in body)
+            if (!char.IsAsciiLetterOrDigit(ch)) return false;
+        foreach (var ch in body)
+            if (char.IsAsciiLetter(ch)) return true;
+        return false;
+    }
 
     /// <summary>
     /// What a seekable stream's bytes are, or null. Leaves the position where it found it.
@@ -92,7 +109,10 @@ public static class FileTypes
             if (names.Any(n => n.StartsWith("ppt/", StringComparison.Ordinal))) return Pptx;
             return null;
         }
-        catch (InvalidDataException) { return null; }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or NotSupportedException)
+        {
+            return null;
+        }
     }
 
     /// <summary>From a declared type, when it is specific enough to trust.</summary>

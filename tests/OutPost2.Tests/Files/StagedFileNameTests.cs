@@ -116,6 +116,29 @@ public sealed class StagedFileNameTests
         Assert.Equal("application/octet-stream", type);
     }
 
+    [Theory]
+    [InlineData("report.pdf", true)]
+    [InlineData("Q3.docx", true)]
+    [InlineData("archive.7z", true)]
+    [InlineData("track.mp3", true)]
+    [InlineData("quarterly report", false)]
+    [InlineData("report v1.2", false)]          // a version number, not a type
+    [InlineData("Mr. Smith notes", false)]      // a dot in the prose
+    [InlineData("notes.", false)]
+    [InlineData("weird.p d f", false)]
+    public void An_extension_is_a_real_one_not_just_a_dot(string name, bool expected)
+    {
+        Assert.Equal(expected, FileTypes.HasExtension(name));
+    }
+
+    [Fact]
+    public void A_versioned_name_still_gets_its_type_added()
+    {
+        using var pdf = Text("%PDF-1.4");
+        Assert.Equal("report v1.2.pdf",
+            FileTypes.Complete("report v1.2", "application/x-www-form-urlencoded", pdf).FileName);
+    }
+
     // ── what the tools say ───────────────────────────────────────────────────
 
     [Fact]
