@@ -94,6 +94,19 @@ public sealed class JobWrites(
     }
 
     /// <summary>
+    /// Closes the gate without recording an outcome, once any write in flight has finished.
+    /// For a job being left for the abandoned-job sweep to resume: nothing more may be
+    /// written to it from this attempt, and the scope's context must not be disposed under
+    /// a progress write still running on it.
+    /// </summary>
+    public async Task CloseAsync()
+    {
+        await _gate.WaitAsync();
+        _closed = true;
+        _gate.Release();
+    }
+
+    /// <summary>
     /// Records the outcome and closes the gate to everything after it. Never throws, and
     /// never takes a cancellation token: a shutdown arriving after the message went must
     /// not stop the job saying so. Returns false only when every attempt failed — then the

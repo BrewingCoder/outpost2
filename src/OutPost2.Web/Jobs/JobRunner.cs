@@ -173,13 +173,29 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
                 (state, c) => writes.ResumeAsync(JsonSerializer.Serialize(state), c),
                 writes, ct);
         }
-        catch (Exception ex) when (writes.MayHaveSent)
+        catch (Exception ex)
         {
-            // The sender handles its own failures, so this is belt and braces: anything
-            // escaping it after the send request went out is "may have gone", never
-            // "worth trying again".
-            log.LogError(ex, "Job {JobId} threw after its send request went out.", job.Id);
-            outcome = new SendOutcome(false, SendOutcome.MaybeSentMessage, false, null, MaybeSent: true);
+            // The sender handles its own failures, so this is belt and braces — but it
+            // matters which side of the send request it lands on. After it: "may have
+            // gone", never "worth trying again". Before it: an ordinary failure, recorded
+            // through the gate below rather than by RunAsync's catch-all, which would write
+            // on the context while a progress write could still be running on it.
+            log.LogError(ex, "Job {JobId} threw while sending.", job.Id);
+            outcome = writes.MayHaveSent
+                ? new SendOutcome(false, SendOutcome.MaybeSentMessage, false, null, MaybeSent: true)
+                : new SendOutcome(false, ex.Message, true, null);
+        }
+
+        // Shut down before the send request went out: nothing has left the mailbox, and
+        // the job is still Staging or Uploading. Left exactly there, the abandoned-job
+        // sweep resumes it after the restart from its saved state. Recording it as a
+        // failure would turn every deploy during an upload into "Failed: A task was
+        // canceled" for the user to sort out.
+        if (!outcome.Ok && !outcome.MaybeSent && ct.IsCancellationRequested)
+        {
+            await writes.CloseAsync();
+            log.LogInformation("Job {JobId} interrupted by shutdown before sending; left to resume.", job.Id);
+            return;
         }
 
         if (!await writes.FinishAsync(outcome.Ok, outcome.Error, outcome.Retryable))

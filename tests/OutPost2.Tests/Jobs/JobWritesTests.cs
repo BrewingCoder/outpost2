@@ -132,6 +132,24 @@ public sealed class JobWritesTests
     }
 
     [Fact]
+    public async Task Closing_without_an_outcome_waits_for_the_write_in_flight_and_stops_the_rest()
+    {
+        // A shutdown before sending: the job is left for the sweep to resume, so nothing
+        // is recorded — but nothing from this attempt may land after, either.
+        var jobs = new OneAtATime();
+        var writes = Writes(jobs);
+
+        writes.Report((40, "uploading"));
+        await writes.CloseAsync();
+        Assert.Equal(["progress 40"], jobs.Writes);   // the one in flight finished first
+
+        writes.Report((60, "uploading"));
+        await writes.Pending;
+        Assert.Equal(["progress 40"], jobs.Writes);
+        Assert.Null(jobs.Outcome);
+    }
+
+    [Fact]
     public async Task A_failed_outcome_write_is_retried_rather_than_lost()
     {
         var jobs = new OneAtATime { FailCompletes = JobWrites.FinishAttempts - 1 };
