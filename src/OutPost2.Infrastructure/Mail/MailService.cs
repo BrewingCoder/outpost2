@@ -212,7 +212,7 @@ public sealed class MailService(
         // history — the single highest-value change on the read path. Without it a
         // ten-reply thread dumps ten copies of itself into context.
         var q = $"me/messages/{Uri.EscapeDataString(messageId)}" +
-                "?$select=id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead," +
+                "?$select=id,subject,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,isRead," +
                 "hasAttachments,uniqueBody,body,conversationId";
 
         using var resp = await http.GetAsync(q, ct);
@@ -240,6 +240,7 @@ public sealed class MailService(
             To = (m.ToRecipients ?? []).Select(r => r.EmailAddress?.Format() ?? "").Where(x => x != "").ToList(),
             Cc = (m.CcRecipients ?? []).Select(r => r.EmailAddress?.Format() ?? "").Where(x => x != "").ToList(),
             ReceivedAt = m.ReceivedDateTime,
+            SentAt = m.SentDateTime,
             IsRead = m.IsRead,
             HasAttachments = m.HasAttachments,
             Body = text,
@@ -1523,7 +1524,8 @@ public sealed class MailService(
         [property: JsonPropertyName("bodyPreview")] string? BodyPreview,
         [property: JsonPropertyName("uniqueBody")] GraphBody? UniqueBody,
         [property: JsonPropertyName("body")] GraphBody? Body,
-        [property: JsonPropertyName("parentFolderId")] string? ParentFolderId = null)
+        [property: JsonPropertyName("parentFolderId")] string? ParentFolderId = null,
+        [property: JsonPropertyName("sentDateTime")] DateTimeOffset? SentDateTime = null)
     {
         public MailSummary ToSummary(string label) => new()
         {

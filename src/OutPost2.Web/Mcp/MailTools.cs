@@ -41,6 +41,7 @@ public sealed partial class MailTools(
     ISearchContinuations pages,
     OutPost2.Infrastructure.Mail.IAttachmentExtractor extractor,
     IJobService jobs,
+    OutPost2.Infrastructure.Calendar.ICalendarService calendar,
     PublicUrls urls)
 {
     private Guid UserId => http.HttpContext?.User.UserId()
@@ -113,6 +114,9 @@ public sealed partial class MailTools(
         var refs = index.Remember(UserId,
             ordered.Select(x => (x.Item.Id, x.Label, x.Item.Subject, x.Item.From)).ToList());
 
+        var zones = await ZonesAsync(
+            resolution.Connections.Where(c => ordered.Any(x => x.Label == c.Label)), ct);
+
         var sb = new StringBuilder();
         if (ordered.Count == 0)
         {
@@ -137,7 +141,7 @@ public sealed partial class MailTools(
                 sb.Append($"{Untrusted.Scrub(m.From)} — {Untrusted.Scrub(m.Subject)}");
                 if (!m.IsRead) sb.Append(" (unread)");
                 if (m.HasAttachments) sb.Append(" (has attachments)");
-                sb.AppendLine($" — {Ago(m.ReceivedAt)}");
+                sb.AppendLine($" — {When(m.ReceivedAt, label, zones)}");
             }
         }
 
@@ -177,7 +181,13 @@ public sealed partial class MailTools(
             if (m.Cc.Count > 0) sb.AppendLine($"Cc: {Untrusted.Scrub(string.Join(", ", m.Cc))}");
 
             sb.AppendLine($"Subject: {Untrusted.Scrub(m.Subject)}");
-            sb.AppendLine($"Received: {Ago(m.ReceivedAt)} ({c.Label})");
+            // Exact first, because that is the value a deadline is checked against; the
+            // phrase is there for reading aloud (OP2-264). Sent is shown too and labelled:
+            // it is the sender's clock, the Date header, and can differ from receipt.
+            var zone = await ZoneAsync(c, ct);
+            sb.AppendLine($"Received: {Timestamps.Exact(m.ReceivedAt, zone)} ({Ago(m.ReceivedAt)}, {c.Label})");
+            if (m.SentAt is { } sent && sent != m.ReceivedAt)
+                sb.AppendLine($"Sent: {Timestamps.Exact(sent, zone)}");
             sb.AppendLine($"Handle: {item.Ref}");
             if (m.HasAttachments) sb.AppendLine("Has attachments.");
             sb.AppendLine();
@@ -350,6 +360,9 @@ public sealed partial class MailTools(
         var refs = index.Remember(UserId,
             ordered.Select(x => (x.Item.Id, x.Label, x.Item.Subject, x.Item.From)).ToList());
 
+        var zones = await ZonesAsync(
+            searching.Where(c => ordered.Any(x => x.Label == c.Label)), ct);
+
         var sb = new StringBuilder(
             $"{ordered.Count} result{(ordered.Count == 1 ? "" : "s")} for \"{query}\"{scope}:\n");
 
@@ -358,7 +371,7 @@ public sealed partial class MailTools(
             var (label, m) = ordered[n];
             sb.Append($"{n + 1}. [{refs[n].Ref}] ");
             if (resolution.Connections.Count > 1) sb.Append($"[{label}] ");
-            sb.Append($"{Untrusted.Scrub(m.From)} — {Untrusted.Scrub(m.Subject)} — {Ago(m.ReceivedAt)}");
+            sb.Append($"{Untrusted.Scrub(m.From)} — {Untrusted.Scrub(m.Subject)} — {When(m.ReceivedAt, label, zones)}");
 
             // Where it is, when the search covered more than one folder. Without this,
             // mail that has already been filed is indistinguishable from mail still in the
@@ -1776,14 +1789,35 @@ public sealed partial class MailTools(
     private static List<string> Split(string? csv) =>
         (csv ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
-    /// <summary>Relative time, because "received 2026-10-27T18:42:11Z" is unspeakable.</summary>
-    private static string Ago(DateTimeOffset when)
+    private static string Ago(DateTimeOffset when) => Timestamps.Ago(when);
+
+    /// <summary>
+    /// The mailbox's own zone, for printing exact times (OP2-264). Never allowed to break a
+    /// read: if the zone cannot be had, UTC is still an exact and unambiguous instant, and
+    /// the offset printed beside it says which one it is.
+    /// </summary>
+    private async Task<TimeZoneInfo> ZoneAsync(Connection c, CancellationToken ct)
     {
-        var d = DateTimeOffset.UtcNow - when;
-        if (d < TimeSpan.FromMinutes(2)) return "just now";
-        if (d < TimeSpan.FromHours(1)) return $"{(int)d.TotalMinutes} minutes ago";
-        if (d < TimeSpan.FromHours(24)) return $"{(int)d.TotalHours} hour{((int)d.TotalHours == 1 ? "" : "s")} ago";
-        if (d < TimeSpan.FromDays(7)) return $"{(int)d.TotalDays} day{((int)d.TotalDays == 1 ? "" : "s")} ago";
-        return when.ToString("d MMM");
+        try { return await calendar.TimeZoneAsync(c, ct); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception) { return TimeZoneInfo.Utc; }
     }
+
+    /// <summary>
+    /// Zones for every mailbox a listing drew from, fetched one after another AFTER the
+    /// fan-out rather than inside it. They are cached, so this is usually free, and it adds
+    /// no new concurrent work on the request's scoped services (OP2-239).
+    /// </summary>
+    private async Task<Dictionary<string, TimeZoneInfo>> ZonesAsync(
+        IEnumerable<Connection> used, CancellationToken ct)
+    {
+        var zones = new Dictionary<string, TimeZoneInfo>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in used)
+            if (!zones.ContainsKey(c.Label)) zones[c.Label] = await ZoneAsync(c, ct);
+        return zones;
+    }
+
+    /// <summary>"2 hours ago (2026-11-03 00:44 -05:00)": the phrase, then the value to act on.</summary>
+    private static string When(DateTimeOffset at, string label, Dictionary<string, TimeZoneInfo> zones) =>
+        $"{Ago(at)} ({Timestamps.Short(at, zones.GetValueOrDefault(label) ?? TimeZoneInfo.Utc)})";
 }

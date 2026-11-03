@@ -52,6 +52,13 @@ public sealed record MailMessage
     public required IReadOnlyList<string> To { get; init; }
     public required IReadOnlyList<string> Cc { get; init; }
     public required DateTimeOffset ReceivedAt { get; init; }
+
+    /// <summary>
+    /// When the sender's client says it was sent — the <c>Date</c> header. Kept apart from
+    /// <see cref="ReceivedAt"/> because for a deadline those are different facts (OP2-264).
+    /// </summary>
+    public DateTimeOffset? SentAt { get; init; }
+
     public required bool IsRead { get; init; }
     public required bool HasAttachments { get; init; }
 
