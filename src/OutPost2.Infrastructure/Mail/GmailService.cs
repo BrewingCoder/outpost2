@@ -134,10 +134,6 @@ public sealed partial class GmailService(
 
     private static string Trim(string s) => s.Length > 400 ? s[..400] : s;
 
-    private static Exception NotYet(Connection c, string what) =>
-        new MailException($"{Cap(what)} isn't available for Gmail yet, so nothing was done on {c.Label}.");
-
-    private static string Cap(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
 
     /// <summary>Fetches each id's message, in order, a bounded number at a time; gone ones are dropped.</summary>
     private async Task<List<GMessage>> FetchAllAsync(
@@ -798,36 +794,427 @@ public sealed partial class GmailService(
         }
     }
 
-    public Task<ClearPreview> PreviewClearAsync(Connection connection, ClearTarget target, CancellationToken ct = default) =>
-        throw NotYet(connection, "clearing mail");
-    public Task<ClearOutcome> ClearAsync(Connection connection, ClearTarget target, int ceiling = 1000, CancellationToken ct = default) =>
-        throw NotYet(connection, "clearing mail");
-    public Task<ClearOutcome> RecoverAsync(Connection connection, string from, int ceiling = 1000, CancellationToken ct = default) =>
-        throw NotYet(connection, "recovering mail");
-    public Task<int> RecoverableCountAsync(Connection connection, string from, CancellationToken ct = default) =>
-        throw NotYet(connection, "recovering mail");
-    public Task MarkReadAsync(Connection connection, string messageId, bool read, CancellationToken ct = default) =>
-        throw NotYet(connection, "marking mail read or unread");
-    public Task<string> MoveAsync(Connection connection, string messageId, string destinationFolderId, CancellationToken ct = default) =>
-        throw NotYet(connection, "moving mail");
-    public Task<MailFolder> CreateFolderAsync(Connection connection, string name, string? parentFolderId = null, CancellationToken ct = default) =>
-        throw NotYet(connection, "creating labels");
-    public Task<MailFolder> RenameFolderAsync(Connection connection, string folderId, string name, CancellationToken ct = default) =>
-        throw NotYet(connection, "renaming labels");
-    public Task DeleteFolderAsync(Connection connection, string folderId, CancellationToken ct = default) =>
-        throw NotYet(connection, "deleting labels");
-    public Task<string?> MarkAsJunkAsync(Connection connection, string messageId, CancellationToken ct = default) =>
-        throw NotYet(connection, "reporting spam");
-    public Task FlagAsync(Connection connection, string messageId, bool flagged, DateTimeOffset? dueAt, CancellationToken ct = default) =>
-        throw NotYet(connection, "starring mail");
-    public Task<IReadOnlyList<string>> GetCategoriesAsync(Connection connection, string messageId, CancellationToken ct = default) =>
-        throw NotYet(connection, "labelling mail");
-    public Task SetCategoriesAsync(Connection connection, string messageId, IReadOnlyList<string> categories, CancellationToken ct = default) =>
-        throw NotYet(connection, "labelling mail");
-    public Task<IReadOnlyList<MailCategory>?> ListCategoriesAsync(Connection connection, CancellationToken ct = default) =>
-        throw NotYet(connection, "listing categories");
-    public Task<MailCategory?> CreateCategoryAsync(Connection connection, string name, string preset, CancellationToken ct = default) =>
-        throw NotYet(connection, "creating categories");
+    // ── organising (OP2-282) ─────────────────────────────────────────────────
+    //
+    // Gmail has labels where Outlook has folders AND categories, so the mapping has to be
+    // one the user can predict:
+    //   move to a label   add it and remove INBOX — "moving" in Gmail's own terms
+    //   archive           remove INBOX
+    //   trash             messages.trash (never a hard delete)
+    //   spam              add SPAM, remove INBOX
+    //   inbox             add INBOX (untrashing first if it was in Trash)
+    //   categorise        add or remove user labels, leaving INBOX alone
+    //   flag              STARRED; Gmail stars have no due date
+    // Message ids never change in Gmail, so every move returns the id it was given.
+
+    private const int ClearParallel = 8;
+
+    private async Task PostAsync(HttpClient http, Connection c, string path, object? body, CancellationToken ct)
+    {
+        using var content = body is null ? null : JsonContent.Create(body);
+        using var resp = await http.PostAsync(Api + path, content, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+            throw new MailException("That message or label no longer exists in Gmail.");
+        await EnsureAsync(resp, c, ct);
+    }
+
+    private Task ModifyAsync(HttpClient http, Connection c, string messageId,
+        IReadOnlyList<string> add, IReadOnlyList<string> remove, CancellationToken ct) =>
+        PostAsync(http, c, $"messages/{Uri.EscapeDataString(messageId)}/modify",
+            new { addLabelIds = add, removeLabelIds = remove }, ct);
+
+    private async Task<IReadOnlyList<string>> LabelsOnAsync(HttpClient http, Connection c, string messageId, CancellationToken ct)
+    {
+        var m = await GetAsync<GMessage>(http, c, $"messages/{Uri.EscapeDataString(messageId)}?format=minimal", ct)
+            ?? throw new MailException("That message no longer exists in Gmail.");
+        return m.LabelIds ?? [];
+    }
+
+    public async Task MarkReadAsync(Connection connection, string messageId, bool read, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+        await ModifyAsync(http, connection, messageId,
+            read ? [] : ["UNREAD"], read ? ["UNREAD"] : [], ct);
+    }
+
+    public async Task FlagAsync(
+        Connection connection, string messageId, bool flagged, DateTimeOffset? dueAt, CancellationToken ct = default)
+    {
+        // dueAt has nowhere to go: a Gmail star is on or off. The tool says so.
+        using var http = await ClientAsync(connection, ct);
+        await ModifyAsync(http, connection, messageId,
+            flagged ? ["STARRED"] : [], flagged ? [] : ["STARRED"], ct);
+    }
+
+    public async Task<string?> MarkAsJunkAsync(Connection connection, string messageId, CancellationToken ct = default)
+    {
+        // Gmail's API cannot block a sender (that needs settings access Outpost does not ask
+        // for); reporting spam is what trains Gmail's filter, and the tool says exactly that.
+        using var http = await ClientAsync(connection, ct);
+        await ModifyAsync(http, connection, messageId, ["SPAM"], ["INBOX"], ct);
+        return messageId;
+    }
+
+    public async Task<string> MoveAsync(
+        Connection connection, string messageId, string destinationFolderId, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+        var dest = destinationFolderId.Trim();
+
+        switch (dest.ToLowerInvariant())
+        {
+            case "deleteditems" or "trash":
+                await PostAsync(http, connection, $"messages/{Uri.EscapeDataString(messageId)}/trash", null, ct);
+                return messageId;
+
+            case "sentitems" or "sent" or "drafts" or "draft":
+                throw new MailException("Gmail doesn't let mail be moved into Sent or Drafts.");
+        }
+
+        var on = await LabelsOnAsync(http, connection, messageId, ct);
+
+        // Out of Trash first: Gmail will not take TRASH off through modify.
+        if (on.Contains("TRASH"))
+            await PostAsync(http, connection, $"messages/{Uri.EscapeDataString(messageId)}/untrash", null, ct);
+
+        switch (dest.ToLowerInvariant())
+        {
+            case "archive":
+                await ModifyAsync(http, connection, messageId, [], ["INBOX", "SPAM"], ct);
+                break;
+            case "inbox":
+                await ModifyAsync(http, connection, messageId, ["INBOX"], ["SPAM"], ct);
+                break;
+            case "junkemail" or "spam":
+                await ModifyAsync(http, connection, messageId, ["SPAM"], ["INBOX"], ct);
+                break;
+            default:
+                // A label: filed there and out of the Inbox, which is what moving means.
+                await ModifyAsync(http, connection, messageId, [dest], ["INBOX", "SPAM"], ct);
+                break;
+        }
+
+        return messageId;
+    }
+
+    // ── labels as folders: making, renaming, deleting ────────────────────────
+
+    private async Task<List<GLabel>> AllLabelsAsync(HttpClient http, Connection c, CancellationToken ct) =>
+        (await GetAsync<GLabels>(http, c, "labels", ct))?.Labels ?? [];
+
+    private static bool IsSystem(string labelId) => !labelId.StartsWith("Label_", StringComparison.Ordinal);
+
+    public async Task<MailFolder> CreateFolderAsync(
+        Connection connection, string name, string? parentFolderId = null, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+
+        // Gmail nests labels by name, so "inside Receipts" is "Receipts/<name>". A system
+        // label (Inbox, say) cannot be a parent; the tool says so before calling this.
+        var path = name.Trim();
+        if (parentFolderId is { } pid && !IsSystem(pid) && !SystemFolders.ContainsKey(pid.ToUpperInvariant()))
+        {
+            var parent = (await AllLabelsAsync(http, connection, ct)).FirstOrDefault(l => l.Id == pid)
+                ?? throw new MailException("The label to put it under no longer exists in Gmail.");
+            path = parent.Name + "/" + path;
+        }
+
+        using var resp = await http.PostAsync(Api + "labels", JsonContent.Create(new
+        {
+            name = path,
+            labelListVisibility = "labelShow",
+            messageListVisibility = "show",
+        }), ct);
+
+        if (resp.StatusCode == HttpStatusCode.Conflict)
+            throw new MailException($"{connection.Label} already has a label called {path}.");
+        await EnsureAsync(resp, connection, ct);
+
+        var made = await resp.Content.ReadFromJsonAsync<GLabel>(Json, ct)
+            ?? throw new MailException("Gmail made the label but didn't say what it was.");
+
+        return Folders([made]).Single();
+    }
+
+    public async Task<MailFolder> RenameFolderAsync(
+        Connection connection, string folderId, string name, CancellationToken ct = default)
+    {
+        if (IsSystem(folderId)) throw new MailException("Gmail's own labels can't be renamed.");
+
+        using var http = await ClientAsync(connection, ct);
+        var all = await AllLabelsAsync(http, connection, ct);
+        var label = all.FirstOrDefault(l => l.Id == folderId)
+            ?? throw new MailException("That label no longer exists in Gmail.");
+
+        var slash = label.Name.LastIndexOf('/');
+        var renamed = (slash >= 0 ? label.Name[..(slash + 1)] : "") + name.Trim();
+
+        // Children too. Gmail nests by name, so renaming "Receipts" alone would leave
+        // "Receipts/2026" pointing at a parent that no longer exists.
+        var family = all.Where(l => l.Id == label.Id || l.Name.StartsWith(label.Name + "/", StringComparison.Ordinal)).ToList();
+        foreach (var l in family)
+        {
+            var newName = renamed + l.Name[label.Name.Length..];
+            using var resp = await http.PatchAsync(Api + $"labels/{Uri.EscapeDataString(l.Id)}",
+                JsonContent.Create(new { name = newName }), ct);
+            if (resp.StatusCode == HttpStatusCode.Conflict)
+                throw new MailException($"{connection.Label} already has a label called {newName}.");
+            await EnsureAsync(resp, connection, ct);
+        }
+
+        return Folders([label with { Name = renamed }]).Single();
+    }
+
+    public async Task DeleteFolderAsync(Connection connection, string folderId, CancellationToken ct = default)
+    {
+        if (IsSystem(folderId)) throw new MailException("Gmail's own labels can't be deleted.");
+
+        using var http = await ClientAsync(connection, ct);
+        var all = await AllLabelsAsync(http, connection, ct);
+        var label = all.FirstOrDefault(l => l.Id == folderId)
+            ?? throw new MailException("That label no longer exists in Gmail.");
+
+        // Sublabels first, then the label: the tool's confirmation counted them in. Deleting a
+        // Gmail label takes it off its messages; the messages themselves stay in All Mail.
+        var doomed = all
+            .Where(l => l.Name.StartsWith(label.Name + "/", StringComparison.Ordinal))
+            .OrderByDescending(l => l.Name.Length)
+            .Append(label);
+
+        foreach (var l in doomed)
+        {
+            using var resp = await http.DeleteAsync(Api + $"labels/{Uri.EscapeDataString(l.Id)}", ct);
+            if (resp.StatusCode == HttpStatusCode.NotFound) continue;
+            await EnsureAsync(resp, connection, ct);
+        }
+    }
+
+    // ── labels as categories ────────────────────────────────────────────────
+
+    /// <summary>
+    /// User labels, as categories. Gmail has one kind of label for both jobs; the
+    /// difference is only whether the message also leaves the Inbox, which categorising
+    /// never does. Gmail colours are a different palette from Outlook's and are not set.
+    /// </summary>
+    public async Task<IReadOnlyList<MailCategory>?> ListCategoriesAsync(Connection connection, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+        return (await AllLabelsAsync(http, connection, ct))
+            .Where(l => l.Type == "user")
+            .OrderBy(l => l.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(l => new MailCategory { Id = l.Id, Name = l.Name, Preset = "none" })
+            .ToList();
+    }
+
+    public async Task<MailCategory?> CreateCategoryAsync(
+        Connection connection, string name, string preset, CancellationToken ct = default)
+    {
+        var made = await CreateFolderAsync(connection, name, null, ct);
+        return new MailCategory { Id = made.Id, Name = made.Path, Preset = "none" };
+    }
+
+    public async Task<IReadOnlyList<string>> GetCategoriesAsync(
+        Connection connection, string messageId, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+        var on = await LabelsOnAsync(http, connection, messageId, ct);
+        var all = await AllLabelsAsync(http, connection, ct);
+        return all.Where(l => l.Type == "user" && on.Contains(l.Id)).Select(l => l.Name).ToList();
+    }
+
+    public async Task SetCategoriesAsync(
+        Connection connection, string messageId, IReadOnlyList<string> categories, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+        var on = await LabelsOnAsync(http, connection, messageId, ct);
+        var user = (await AllLabelsAsync(http, connection, ct)).Where(l => l.Type == "user").ToList();
+
+        var wanted = new List<string>();
+        foreach (var name in categories)
+        {
+            var l = user.FirstOrDefault(x => string.Equals(x.Name, name.Trim(), StringComparison.OrdinalIgnoreCase))
+                ?? throw new MailException($"{connection.Label} has no label called {name}.");
+            wanted.Add(l.Id);
+        }
+
+        // Only the difference, and only user labels: INBOX, STARRED and the rest are never
+        // touched by categorising.
+        var current = user.Where(l => on.Contains(l.Id)).Select(l => l.Id).ToList();
+        var add = wanted.Except(current).ToList();
+        var remove = current.Except(wanted).ToList();
+        if (add.Count == 0 && remove.Count == 0) return;
+
+        await ModifyAsync(http, connection, messageId, add, remove, ct);
+    }
+
+    // ── clearing a sender out, and bringing them back ────────────────────────
+
+    /// <summary>Gmail's query for a sender (and a cut-off), quoted so a space cannot widen it.</summary>
+    public static string SenderQuery(string from, DateTimeOffset? before = null)
+    {
+        var who = from.Trim().Replace("\"", "");
+        var q = who.Contains(' ') ? $"from:\"{who}\"" : $"from:{who}";
+        if (before is { } b) q += $" before:{b.UtcDateTime:yyyy/MM/dd}";
+        return q;
+    }
+
+    /// <summary>The label scopes a clear covers: one per folder id, or the whole mailbox.</summary>
+    private static IReadOnlyList<IReadOnlyList<string>> ClearScopes(ClearTarget t) =>
+        t.FolderIds is null or { Count: 0 }
+            ? [Array.Empty<string>()]
+            : t.FolderIds.Select(id => (IReadOnlyList<string>)[id]).ToList();
+
+    /// <summary>Every id matching, paged, up to a cap. Trash and Spam only when asked for.</summary>
+    private async Task<List<string>> AllIdsAsync(HttpClient http, Connection c, string q,
+        IReadOnlyList<string> labels, int cap, bool includeTrash, CancellationToken ct)
+    {
+        var ids = new List<string>();
+
+        // Nothing left to ask for. Gmail rejects maxResults=0, so a clear whose first scope
+        // already filled the ceiling would otherwise fail on its second.
+        if (cap <= 0) return ids;
+
+        string? token = null;
+        do
+        {
+            var query = new List<string> { $"maxResults={Math.Min(500, cap - ids.Count)}", "q=" + Uri.EscapeDataString(q) };
+            query.AddRange(labels.Select(l => "labelIds=" + Uri.EscapeDataString(l)));
+            if (includeTrash) query.Add("includeSpamTrash=true");
+            if (token is not null) query.Add("pageToken=" + Uri.EscapeDataString(token));
+
+            var page = await GetAsync<GList>(http, c, "messages?" + string.Join('&', query), ct);
+            ids.AddRange((page?.Messages ?? []).Select(m => m.Id));
+            token = page?.NextPageToken;
+        }
+        while (token is not null && ids.Count < cap);
+
+        return ids;
+    }
+
+    /// <summary>A bound on counting, so a preview over a vast mailbox still answers.</summary>
+    private const int CountCap = 10_000;
+
+    public async Task<ClearPreview> PreviewClearAsync(Connection connection, ClearTarget target, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+        var q = SenderQuery(target.From, target.Before);
+
+        var matched = 0;
+        foreach (var scope in ClearScopes(target))
+            matched += (await AllIdsAsync(http, connection, q, scope, CountCap, false, ct)).Count;
+
+        // Everywhere: the whole mailbox, which in Gmail already leaves out Spam and Trash —
+        // the same "not counting what's already been thrown away" the Graph side computes.
+        var everywhereIds = await AllIdsAsync(http, connection, q, [], CountCap, false, ct);
+        var everywhere = Math.Max(everywhereIds.Count, matched);
+
+        var sample = await FetchAllAsync(http, connection, everywhereIds.Take(50), MetadataFormat, ct);
+        var senders = sample
+            .Select(m => GmailMime.Recipients(Headers(m.Payload).GetValueOrDefault("from")).FirstOrDefault())
+            .Where(r => r is not null)
+            .GroupBy(r => r!.Address, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new SenderTally(g.First()!.Name ?? g.Key, g.Key, g.Count()))
+            .OrderByDescending(t => t.Count)
+            .ToList();
+
+        var inScope = target.FolderIds is null or { Count: 0 } ? null : target.FolderIds.ToHashSet(StringComparer.Ordinal);
+        var skipped = inScope is null
+            ? (IReadOnlyList<string>)[]
+            : sample.Select(m => PrimaryLabel(m.LabelIds)).Where(l => l is not null && !inScope.Contains(l))
+                .Select(l => l!).Distinct(StringComparer.Ordinal).ToList();
+
+        return new ClearPreview
+        {
+            Matched = matched, Everywhere = everywhere, SkippedFolderIds = skipped,
+            Senders = senders, Sampled = everywhere > sample.Count,
+        };
+    }
+
+    public async Task<ClearOutcome> ClearAsync(
+        Connection connection, ClearTarget target, int ceiling = 1000, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+        var q = SenderQuery(target.From, target.Before);
+        var wanted = Math.Clamp(ceiling, 1, 5000);
+
+        var ids = new List<string>();
+        foreach (var scope in ClearScopes(target))
+            ids.AddRange(await AllIdsAsync(http, connection, q, scope, wanted - ids.Count, false, ct));
+        ids = ids.Distinct().Take(wanted).ToList();
+
+        // Trash, not delete: Gmail keeps it for 30 days, which is what makes this undoable.
+        var outcome = await EachAsync(http, connection, ids,
+            id => PostAsync(http, connection, $"messages/{Uri.EscapeDataString(id)}/trash", null, ct), ct);
+
+        var remaining = 0;
+        if (!outcome.Throttled && ids.Count >= wanted)
+            foreach (var scope in ClearScopes(target))
+                remaining += (await AllIdsAsync(http, connection, q, scope, CountCap, false, ct)).Count;
+
+        log.LogInformation("Moved {Cleared} Gmail message(s) from \"{From}\" to Trash in {Label}; {Failed} refused, {Remaining} left.",
+            outcome.Deleted, target.From, connection.Label, outcome.Failed, remaining);
+
+        return outcome with { Remaining = remaining };
+    }
+
+    public async Task<int> RecoverableCountAsync(Connection connection, string from, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+        return (await AllIdsAsync(http, connection, SenderQuery(from), ["TRASH"], CountCap, true, ct)).Count;
+    }
+
+    public async Task<ClearOutcome> RecoverAsync(
+        Connection connection, string from, int ceiling = 1000, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+        var ids = await AllIdsAsync(http, connection, SenderQuery(from), ["TRASH"], Math.Clamp(ceiling, 1, 5000), true, ct);
+
+        // Out of Trash and back in the Inbox, as the Graph side brings them back to the Inbox.
+        var outcome = await EachAsync(http, connection, ids, async id =>
+        {
+            await PostAsync(http, connection, $"messages/{Uri.EscapeDataString(id)}/untrash", null, ct);
+            await ModifyAsync(http, connection, id, ["INBOX"], [], ct);
+        }, ct);
+
+        var remaining = outcome.Throttled || ids.Count < ceiling
+            ? 0
+            : (await AllIdsAsync(http, connection, SenderQuery(from), ["TRASH"], CountCap, true, ct)).Count;
+
+        return outcome with { Remaining = remaining };
+    }
+
+    /// <summary>
+    /// One action per message, a bounded number at a time. A throttle stops the run and
+    /// reports what was done — the work is not wasted and must not be redone from the start.
+    /// A message that has gone in the meantime is a refusal, not a failure of the whole.
+    /// </summary>
+    private async Task<ClearOutcome> EachAsync(HttpClient http, Connection c, IReadOnlyList<string> ids,
+        Func<string, Task> act, CancellationToken ct)
+    {
+        int ok = 0, bad = 0;
+        MailThrottledException? throttled = null;
+        using var gate = new SemaphoreSlim(ClearParallel);
+
+        await Task.WhenAll(ids.Select(async id =>
+        {
+            await gate.WaitAsync(ct);
+            try
+            {
+                if (Volatile.Read(ref throttled) is not null) return;
+                await act(id);
+                Interlocked.Increment(ref ok);
+            }
+            catch (MailThrottledException t) { Interlocked.CompareExchange(ref throttled, t, null); }
+            catch (MailException) { Interlocked.Increment(ref bad); }
+            finally { gate.Release(); }
+        }));
+
+        return new ClearOutcome
+        {
+            Deleted = ok, Failed = bad,
+            Throttled = throttled is not null, RetryAfter = throttled?.RetryAfter,
+        };
+    }
 
     // ── headers, addresses, dates ────────────────────────────────────────────
 

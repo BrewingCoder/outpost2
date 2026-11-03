@@ -540,20 +540,6 @@ public sealed class GmailReadTests
         Assert.Contains("having trouble", ex.Message);
     }
 
-    // ── not yet ──────────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task Organising_says_plainly_it_is_not_here_yet()
-    {
-        var (mail, wire) = Build(_ => throw new InvalidOperationException("must not be called"));
-
-        // Sending arrived in OP2-281; organising is still to come (OP2-282).
-        var move = await Assert.ThrowsAsync<MailException>(() => mail.MoveAsync(Personal, "18c1", "archive"));
-        Assert.Equal("Moving mail isn't available for Gmail yet, so nothing was done on personal.", move.Message);
-        await Assert.ThrowsAsync<MailException>(() => mail.FlagAsync(Personal, "18c1", true, null));
-        Assert.Empty(wire.Urls);
-    }
-
     [Fact]
     public void Gmail_is_registered_as_the_google_provider()
     {

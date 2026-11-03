@@ -1,3 +1,4 @@
+using OutPost2.Core.Connections;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using OutPost2.Core.Jobs;
@@ -304,7 +305,7 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
                     job.Id, wait.TotalSeconds);
 
                 await jobs.UpdateProgressAsync(job.Id, JobState.Sending, Percent(cleared, payload.Expected),
-                    $"{cleared} moved so far, paused for {(int)wait.TotalSeconds}s because Microsoft is "
+                    $"{cleared} moved so far, paused for {(int)wait.TotalSeconds}s because {(connection.Provider == ProviderKind.Google ? "Google" : "Microsoft")} is "
                     + "rate-limiting the mailbox", ct);
 
                 await Task.Delay(wait, ct);
@@ -321,7 +322,7 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
             failed += outcome.Failed;
 
             await jobs.UpdateProgressAsync(job.Id, JobState.Sending, Percent(cleared, payload.Expected),
-                $"{cleared} moved to Deleted Items", ct);
+                $"{cleared} moved to {TrashName(connection)}", ct);
 
             // Nothing moved and nothing refused: there is nothing left matching, so this is
             // done rather than stalled.
@@ -336,7 +337,7 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
         }
 
         var summary = $"{cleared} message{(cleared == 1 ? "" : "s")} from \"{payload.From}\" "
-                    + $"moved to Deleted Items in {connection.Label}"
+                    + $"moved to {TrashName(connection)} in {connection.Label}"
                     + (failed > 0 ? $", {failed} refused" : "")
                     + ". They stay there until you empty it.";
 
@@ -358,6 +359,10 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
     /// cannot occupy the worker for ever. 200 passes is 40,000 messages.
     /// </summary>
     private const int MaxClearPasses = 200;
+
+    /// <summary>Where a clear puts mail, in the provider's own word (OP2-282).</summary>
+    private static string TrashName(Connection c) =>
+        c.Provider == ProviderKind.Google ? "Trash" : "Deleted Items";
 }
 
 /// <summary>Housekeeping: expired staging files, spent auth codes and pending connections.</summary>
