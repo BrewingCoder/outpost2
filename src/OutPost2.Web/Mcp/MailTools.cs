@@ -143,6 +143,7 @@ public sealed partial class MailTools(
                 sb.Append($"{Untrusted.Scrub(m.From)} — {Untrusted.Scrub(m.Subject)}");
                 if (!m.IsRead) sb.Append(" (unread)");
                 if (m.HasAttachments) sb.Append(" (has attachments)");
+                sb.Append(Marker(m.Importance));
                 sb.AppendLine($" — {When(m.ReceivedAt, label, zones)}");
             }
         }
@@ -200,6 +201,8 @@ public sealed partial class MailTools(
                 && sentText != received)
                 sb.AppendLine($"Sent: {sentText}");
             sb.AppendLine($"Handle: {item.Ref}");
+            if (m.Importance != MailImportance.Normal)
+                sb.AppendLine($"Importance: {m.Importance.Wire()}");
             if (m.HasAttachments) sb.AppendLine("Has attachments.");
             sb.AppendLine();
             sb.AppendLine(Untrusted.Fence("message body", HtmlToText.Clamp(m.Body, 8000)));
@@ -382,7 +385,7 @@ public sealed partial class MailTools(
             var (label, m) = ordered[n];
             sb.Append($"{n + 1}. [{refs[n].Ref}] ");
             if (resolution.Connections.Count > 1) sb.Append($"[{label}] ");
-            sb.Append($"{Untrusted.Scrub(m.From)} — {Untrusted.Scrub(m.Subject)} — {When(m.ReceivedAt, label, zones)}");
+            sb.Append($"{Untrusted.Scrub(m.From)} — {Untrusted.Scrub(m.Subject)}{Marker(m.Importance)} — {When(m.ReceivedAt, label, zones)}");
 
             // Where it is, when the search covered more than one folder. Without this,
             // mail that has already been filed is indistinguishable from mail still in the
@@ -456,8 +459,11 @@ public sealed partial class MailTools(
         [Description("Body. Markdown is supported.")] string body,
         [Description("Which connection to send from, e.g. 'work'. Required when more than one could send.")] string? connection = null,
         [Description("CC addresses, comma separated.")] string? cc = null,
+        [Description("Importance: 'high' for Outlook's red exclamation mark and High Importance label, 'low', or 'normal' (the default). Only set it when the user asked.")] string? importance = null,
         CancellationToken ct = default)
     {
+        if (ImportanceProblem(importance, out var level) is { } bad) return bad;
+
         // isWrite: true. An ambiguous send ASKS rather than using the default — you cannot
         // unsend, and the recipient sees whichever identity we guessed.
         var resolution = ConnectionResolver.Resolve(
@@ -483,9 +489,10 @@ public sealed partial class MailTools(
             await mail.SendAsync(c, new OutgoingMail
             {
                 To = recipients, Cc = Split(cc), Subject = subject, Body = body, IsHtml = true,
+                Importance = level,
             }, ct);
 
-            return $"Sent from {c.Label} to {string.Join(", ", recipients)}.";
+            return $"Sent from {c.Label} to {string.Join(", ", recipients)}{Marked(level)}.";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
@@ -500,8 +507,11 @@ public sealed partial class MailTools(
         [Description("Extra addresses to put on the To line, comma separated.")] string? addTo = null,
         [Description("Extra addresses to copy in, comma separated.")] string? addCc = null,
         [Description("Addresses or names already on the thread to take off, comma separated. Must match exactly what read_mail showed; nothing is sent if one matches nobody.")] string? drop = null,
+        [Description("Importance: 'high' for Outlook's red exclamation mark and High Importance label, 'low', or 'normal' (the default). Only set it when the user asked.")] string? importance = null,
         CancellationToken ct = default)
     {
+        if (ImportanceProblem(importance, out var level) is { } bad) return bad;
+
         // The thread decides which mailbox and which identity, so there is nothing for the
         // resolver to ask about and the capabilities are the only gate. Both of them:
         // sending is obvious, filing less so — Graph composes a threaded reply as a draft
@@ -520,20 +530,20 @@ public sealed partial class MailTools(
         try
         {
             var sent = await mail.SendReplyAsync(
-                c, item.ItemId, replyAll ? ReplyKind.All : ReplyKind.Sender, body, null, edit, ct);
+                c, item.ItemId, replyAll ? ReplyKind.All : ReplyKind.Sender, body, null, edit, level, ct);
 
             // Read back who it ACTUALLY went to rather than what was asked for. When
             // recipients were edited that is the only confirmation the user gets that the
             // wrong address is off and the right one is on.
             if (!edit.Any)
                 return replyAll
-                    ? $"Replied to everyone on \"{sent.Subject}\" from {c.Label}."
-                    : $"Replied to {item.From} on \"{sent.Subject}\" from {c.Label}.";
+                    ? $"Replied to everyone on \"{sent.Subject}\" from {c.Label}{Marked(level)}."
+                    : $"Replied to {item.From} on \"{sent.Subject}\" from {c.Label}{Marked(level)}.";
 
             return $"Replied on \"{sent.Subject}\" from {c.Label}. It went to {Who(sent.To)}"
                  + (sent.Cc.Count > 0 ? $", copying {Who(sent.Cc)}" : "")
                  + (sent.Dropped.Count > 0 ? $". Took {Who(sent.Dropped)} off" : "")
-                 + ".";
+                 + Marked(level) + ".";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
@@ -545,8 +555,11 @@ public sealed partial class MailTools(
         [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
         [Description("Who to forward it to, comma separated.")] string to,
         [Description("A note to put above the forwarded message. Markdown is supported.")] string? body = null,
+        [Description("Importance: 'high' for Outlook's red exclamation mark and High Importance label, 'low', or 'normal' (the default). Only set it when the user asked.")] string? importance = null,
         CancellationToken ct = default)
     {
+        if (ImportanceProblem(importance, out var level) is { } bad) return bad;
+
         // Both: sending is obvious, filing is not — Graph composes a threaded reply as a
         // draft in the mailbox before sending it.
         var found = await ResolveAsync(message, ct, Capabilities.MailSend, Capabilities.MailWrite);
@@ -559,9 +572,9 @@ public sealed partial class MailTools(
         try
         {
             var sent = await mail.SendReplyAsync(
-                c, item.ItemId, ReplyKind.Forward, body ?? "", recipients, null, ct);
+                c, item.ItemId, ReplyKind.Forward, body ?? "", recipients, null, level, ct);
 
-            return $"Forwarded \"{sent.Subject}\" to {Who(sent.To)} from {c.Label}.";
+            return $"Forwarded \"{sent.Subject}\" to {Who(sent.To)} from {c.Label}{Marked(level)}.";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
@@ -1680,6 +1693,36 @@ public sealed partial class MailTools(
             + "Ask for a new link and run it again. In Windows PowerShell, call curl.exe rather than curl.");
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Reads the importance a caller asked for, or says why it cannot (OP2-276). A value
+    /// that is not understood is refused rather than sent as normal: the user asked for
+    /// something specific and would believe it went out that way.
+    /// </summary>
+    public static string? ImportanceProblem(string? said, out MailImportance level)
+    {
+        var parsed = MailImportances.Parse(said);
+        level = parsed ?? MailImportance.Normal;
+        return parsed is null
+            ? $"I don't know the importance \"{said}\". It can be high, normal or low. Nothing was sent."
+            : null;
+    }
+
+    /// <summary>Read back with the confirmation, so "it went out flagged" is something the user was told rather than assumed.</summary>
+    public static string Marked(MailImportance level) => level switch
+    {
+        MailImportance.High => ", marked high importance",
+        MailImportance.Low => ", marked low importance",
+        _ => "",
+    };
+
+    /// <summary>For listings: only the exception is said, so a normal line reads as before.</summary>
+    public static string Marker(MailImportance level) => level switch
+    {
+        MailImportance.High => " (high importance)",
+        MailImportance.Low => " (low importance)",
+        _ => "",
+    };
 
     // ── shared plumbing ──────────────────────────────────────────────────────
 

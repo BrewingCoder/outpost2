@@ -45,6 +45,7 @@ public interface IMailService
     Task<ReplySent> SendReplyAsync(
         Connection connection, string messageId, ReplyKind kind, string markdownBody,
         IReadOnlyList<string>? forwardTo = null, RecipientEdit? edit = null,
+        MailImportance importance = MailImportance.Normal,
         CancellationToken ct = default);
 
     /// <summary>
@@ -196,7 +197,7 @@ public sealed class MailService(
         var q = $"me/mailFolders/{Uri.EscapeDataString(folder)}/messages" +
                 $"?$top={Math.Clamp(top, 1, 100)}" +
                 "&$orderby=receivedDateTime desc" +
-                "&$select=id,subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview";
+                "&$select=id,subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview,importance";
 
         if (unreadOnly) q += "&$filter=isRead eq false";
 
@@ -213,7 +214,7 @@ public sealed class MailService(
         // ten-reply thread dumps ten copies of itself into context.
         var q = $"me/messages/{Uri.EscapeDataString(messageId)}" +
                 "?$select=id,subject,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,isRead," +
-                "hasAttachments,uniqueBody,body,conversationId";
+                "hasAttachments,uniqueBody,body,conversationId,importance";
 
         using var resp = await http.GetAsync(q, ct);
         if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
@@ -242,6 +243,7 @@ public sealed class MailService(
             ReceivedAt = m.ReceivedDateTime,
             SentAt = m.SentDateTime,
             IsRead = m.IsRead,
+            Importance = MailImportances.FromWire(m.Importance),
             HasAttachments = m.HasAttachments,
             Body = text,
             QuotedHistoryStripped = m.UniqueBody is not null,
@@ -282,7 +284,7 @@ public sealed class MailService(
         // yield 50 and no way to see the others (OP2-189).
         var url = $"{where}?$search={Uri.EscapeDataString($"\"{query}\"")}" +
                   $"&$top={Math.Min(wanted, 100)}" +
-                  "&$select=id,subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview,parentFolderId";
+                  "&$select=id,subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview,parentFolderId,importance";
 
         return await WalkAsync(http, connection, url, wanted, ct);
     }
@@ -368,6 +370,7 @@ public sealed class MailService(
                 body = new { contentType, content },
                 toRecipients = mail.To.Select(Recipient).ToArray(),
                 ccRecipients = mail.Cc.Select(Recipient).ToArray(),
+                importance = mail.Importance.Wire(),
             },
             saveToSentItems = true,
         };
@@ -443,6 +446,7 @@ public sealed class MailService(
     public async Task<ReplySent> SendReplyAsync(
         Connection connection, string messageId, ReplyKind kind, string markdownBody,
         IReadOnlyList<string>? forwardTo = null, RecipientEdit? edit = null,
+        MailImportance importance = MailImportance.Normal,
         CancellationToken ct = default)
     {
         using var http = await ClientAsync(connection, ct);
@@ -503,6 +507,11 @@ public sealed class MailService(
                     content = Prepend(MarkdownToHtml.Render(markdownBody), draft.Body?.Content),
                 },
             };
+
+            // Only when asked for, so an ordinary reply still goes out exactly as Graph
+            // composed it (OP2-276).
+            if (importance != MailImportance.Normal)
+                patch["importance"] = importance.Wire();
 
             // Written back only when they changed, so an ordinary reply still sends exactly
             // the draft Graph composed.
@@ -1525,7 +1534,8 @@ public sealed class MailService(
         [property: JsonPropertyName("uniqueBody")] GraphBody? UniqueBody,
         [property: JsonPropertyName("body")] GraphBody? Body,
         [property: JsonPropertyName("parentFolderId")] string? ParentFolderId = null,
-        [property: JsonPropertyName("sentDateTime")] DateTimeOffset? SentDateTime = null)
+        [property: JsonPropertyName("sentDateTime")] DateTimeOffset? SentDateTime = null,
+        [property: JsonPropertyName("importance")] string? Importance = null)
     {
         public MailSummary ToSummary(string label) => new()
         {
@@ -1538,6 +1548,7 @@ public sealed class MailService(
             HasAttachments = HasAttachments,
             Preview = (BodyPreview ?? "").Trim(),
             FolderId = ParentFolderId,
+            Importance = MailImportances.FromWire(Importance),
         };
     }
 

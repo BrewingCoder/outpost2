@@ -4,6 +4,7 @@ using System.Text;
 using ModelContextProtocol.Server;
 using OutPost2.Core.Connections;
 using OutPost2.Core.Jobs;
+using OutPost2.Core.Mail;
 using OutPost2.Infrastructure.Connections;
 using OutPost2.Core.Files;
 using OutPost2.Infrastructure.Files;
@@ -103,8 +104,11 @@ public sealed class FileAndJobTools(
         [Description("Names of staged files to attach, comma separated, e.g. 'signed contract'.")] string attachments,
         [Description("Which connection to send from. Required when more than one could send.")] string? connection = null,
         [Description("CC addresses, comma separated.")] string? cc = null,
+        [Description("Importance: 'high' for Outlook's red exclamation mark and High Importance label, 'low', or 'normal' (the default). Only set it when the user asked.")] string? importance = null,
         CancellationToken ct = default)
     {
+        if (MailTools.ImportanceProblem(importance, out var level) is { } bad) return bad;
+
         var resolution = ConnectionResolver.Resolve(
             await connections.ListAsync(UserId, ct), Capabilities.MailSend, connection, isWrite: true);
 
@@ -139,16 +143,19 @@ public sealed class FileAndJobTools(
 
         // Idempotency key derived from the request itself, so a retried tool call after a
         // timeout joins the existing job instead of sending a second copy.
+        // Importance is deliberately NOT part of the key (OP2-276). The same message asked
+        // for again with only its importance changed must join the job already queued,
+        // not put a second copy in front of every recipient.
         var key = Fingerprint(c.Id, recipients, subject, body, found.Select(f => f.Id));
 
         var (job, existed) = await jobs.EnqueueAsync(
             UserId, JobKind.SendMail,
             $"{subject} to {string.Join(", ", recipients)}",
-            new SendMailPayload(c.Id, recipients, Split(cc), subject, body, found.Select(f => f.Id).ToList()),
+            new SendMailPayload(c.Id, recipients, Split(cc), subject, body, found.Select(f => f.Id).ToList(), level),
             key, c.Label, requiresApproval: false, ct);
 
-        if (existed && job.IsTerminal) return job.Spoken();
-        if (existed) return $"Already underway. {job.Spoken()}";
+        if (existed && job.IsTerminal) return job.Spoken() + ImportanceUnchanged(job.Payload, level);
+        if (existed) return $"Already underway. {job.Spoken()}" + ImportanceUnchanged(job.Payload, level);
 
         // Never block on the upload. A 150 MB attachment takes minutes and would blow
         // through any tool timeout long before it finished.
@@ -156,7 +163,7 @@ public sealed class FileAndJobTools(
             ? $"{totalBytes / 1024} KB"
             : $"{totalBytes / (1024.0 * 1024):0.#} MB";
 
-        return $"Sending from {c.Label} with {found.Count} attachment{(found.Count == 1 ? "" : "s")} ({size}). " +
+        return $"Sending from {c.Label} with {found.Count} attachment{(found.Count == 1 ? "" : "s")} ({size}){MailTools.Marked(level)}. " +
                (totalBytes > 8 * 1024 * 1024
                    ? "That'll take a minute — ask me for the queue to check on it."
                    : "I'll have it in your queue.");
@@ -180,6 +187,28 @@ public sealed class FileAndJobTools(
                           urls.Jobs);
 
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// Said when a request joins a job already queued but asked for a different importance
+    /// (OP2-276). Joining is right — it is what stops a second copy going out — but the
+    /// importance it goes with is the first request's, and the user must not believe it
+    /// went flagged when it did not.
+    /// </summary>
+    public static string ImportanceUnchanged(string payloadJson, Core.Mail.MailImportance asked)
+    {
+        Core.Mail.MailImportance queued;
+        try
+        {
+            queued = System.Text.Json.JsonSerializer.Deserialize<SendMailPayload>(payloadJson)?.Importance
+                     ?? Core.Mail.MailImportance.Normal;
+        }
+        catch (System.Text.Json.JsonException) { return ""; }
+
+        return queued == asked
+            ? ""
+            : $" It was queued at {queued.Wire()} importance, and that cannot be changed now — "
+              + $"it is not going as {asked.Wire()} importance.";
     }
 
     private static List<string> Split(string? csv) =>

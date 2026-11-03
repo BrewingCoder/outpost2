@@ -14,6 +14,9 @@ public sealed record MailSummary
     public required bool HasAttachments { get; init; }
     public required string Preview { get; init; }
 
+    /// <summary>So triage can tell a high-importance message from the rest (OP2-276).</summary>
+    public MailImportance Importance { get; init; } = MailImportance.Normal;
+
     /// <summary>
     /// Which folder it is in, when the provider said. Set on search results so a listing
     /// can show that a hit is already filed — a clean-up pass could not otherwise tell
@@ -61,6 +64,8 @@ public sealed record MailMessage
 
     public required bool IsRead { get; init; }
     public required bool HasAttachments { get; init; }
+
+    public MailImportance Importance { get; init; } = MailImportance.Normal;
 
     /// <summary>Clean text, converted from HTML and with quoted history already removed.</summary>
     public required string Body { get; init; }
@@ -243,6 +248,52 @@ public sealed record OutgoingMail
 
     /// <summary>Defaults to HTML: most corporate mail is, and plain text looks like a 1998 utility.</summary>
     public bool IsHtml { get; init; } = true;
+
+    /// <summary>Outlook's importance marker (OP2-276). Normal unless somebody asked.</summary>
+    public MailImportance Importance { get; init; } = MailImportance.Normal;
+}
+
+/// <summary>
+/// Graph's <c>importance</c> on a message: what drives Outlook's red exclamation mark and
+/// "High Importance" label, and what recipients' rules and filters see (OP2-276).
+/// </summary>
+public enum MailImportance
+{
+    Normal,
+    Low,
+    High,
+}
+
+public static class MailImportances
+{
+    /// <summary>
+    /// What somebody said, as an importance. Null for anything not recognised, so the
+    /// caller can refuse rather than quietly send at normal when "urgent" was asked for and
+    /// misheard — the user would believe it went flagged.
+    /// </summary>
+    public static MailImportance? Parse(string? said) => (said ?? "").Trim().ToLowerInvariant() switch
+    {
+        "" or "normal" or "default" or "none" => MailImportance.Normal,
+        "high" or "urgent" or "important" or "high importance" => MailImportance.High,
+        "low" or "low importance" => MailImportance.Low,
+        _ => null,
+    };
+
+    /// <summary>The value Graph takes and returns.</summary>
+    public static string Wire(this MailImportance i) => i switch
+    {
+        MailImportance.High => "high",
+        MailImportance.Low => "low",
+        _ => "normal",
+    };
+
+    /// <summary>Graph's string back to ours; anything unexpected is normal.</summary>
+    public static MailImportance FromWire(string? wire) => (wire ?? "").ToLowerInvariant() switch
+    {
+        "high" => MailImportance.High,
+        "low" => MailImportance.Low,
+        _ => MailImportance.Normal,
+    };
 }
 
 /// <summary>

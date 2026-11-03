@@ -13,7 +13,9 @@ public sealed record SendMailPayload(
     IReadOnlyList<string> Cc,
     string Subject,
     string Body,
-    IReadOnlyList<Guid> AttachmentIds);
+    IReadOnlyList<Guid> AttachmentIds,
+    // Defaulted so a payload queued before OP2-276 still reads, as normal importance.
+    Core.Mail.MailImportance Importance = Core.Mail.MailImportance.Normal);
 
 /// <summary>
 /// Payload for a <see cref="JobKind.ClearMail"/> job (OP2-231).
