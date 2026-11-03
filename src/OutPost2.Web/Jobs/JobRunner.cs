@@ -327,15 +327,18 @@ public sealed class HousekeepingService(IServiceScopeFactory scopes, ILogger<Hou
                 var pendings = await scope.ServiceProvider
                     .GetRequiredService<IPendingConnectionStore>().PurgeExpiredAsync(stoppingToken);
 
+                var downloads = await scope.ServiceProvider
+                    .GetRequiredService<IDownloadTicketService>().PurgeExpiredAsync(stoppingToken);
+
                 var db = scope.ServiceProvider.GetRequiredService<OutPostDbContext>();
                 var codes = await db.OAuthAuthCodes
                     .Where(c => c.ExpiresAt < DateTimeOffset.UtcNow.AddHours(-1))
                     .ExecuteDeleteAsync(stoppingToken);
 
-                if (purged + pendings + codes > 0)
+                if (purged + pendings + codes + downloads > 0)
                     log.LogInformation(
-                        "Housekeeping removed {Files} staged file(s), {Pendings} pending connection(s), {Codes} auth code(s).",
-                        purged, pendings, codes);
+                        "Housekeeping removed {Files} staged file(s), {Pendings} pending connection(s), {Codes} auth code(s), {Downloads} download ticket(s).",
+                        purged, pendings, codes, downloads);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception ex) { log.LogError(ex, "Housekeeping pass failed."); }

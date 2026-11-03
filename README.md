@@ -37,7 +37,7 @@ organisation, and you may not run it as a service for other people. See
 | Area | Tools |
 |---|---|
 | Connections | `list_connections` |
-| Mail — read | `list_mail` `read_mail` `search_mail` `list_attachments` `read_attachment` |
+| Mail — read | `list_mail` `read_mail` `search_mail` `list_attachments` `read_attachment` `save_attachment` |
 | Mail — write | `send_mail` `send_mail_with_attachments` `reply_mail` `forward_mail` |
 | Mail — manage | `mark_mail` `move_mail` `flag_mail` `categorise_mail` `list_categories` `report_junk` |
 | Mail — folders | `list_folders` `create_folder` `rename_folder` `delete_folder` |

@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Server;
 using OutPost2.Core.Connections;
+using OutPost2.Core.Files;
 using OutPost2.Core.Jobs;
 using OutPost2.Core.Mail;
 using OutPost2.Infrastructure.Connections;
@@ -41,6 +42,7 @@ public sealed partial class MailTools(
     ISearchContinuations pages,
     OutPost2.Infrastructure.Mail.IAttachmentExtractor extractor,
     IJobService jobs,
+    OutPost2.Infrastructure.Files.IDownloadTicketService downloads,
     PublicUrls urls)
 {
     private Guid UserId => http.HttpContext?.User.UserId()
@@ -1472,7 +1474,7 @@ public sealed partial class MailTools(
     }
 
     [McpServerTool(Name = "read_attachment", ReadOnly = true, OpenWorld = true)]
-    [Description("Read the text content of an attachment — PDF, Word, Excel, PowerPoint or plain text. Pass the message handle and the attachment number.")]
+    [Description("Read the text content of an attachment — PDF, Word, Excel, PowerPoint or plain text. Pass the message handle and the attachment number. To keep the original file itself rather than its text, use save_attachment.")]
     public async Task<string> ReadAttachment(
         [Description("The message handle from the listing, or the number shown beside it.")] string message,
         [Description("Which attachment, from list_attachments. Defaults to the first.")] int attachmentNumber = 1,
@@ -1506,6 +1508,140 @@ public sealed partial class MailTools(
         var text = await extractor.ExtractAsync(a.Name, bytes, ct);
         return $"{Untrusted.Scrub(a.Name)}:{Environment.NewLine}{Environment.NewLine}"
              + Untrusted.Fence("attachment text", HtmlToText.Clamp(text, 12000));
+    }
+
+    [McpServerTool(Name = "save_attachment", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
+    [Description("Save the ORIGINAL file of an attachment — byte for byte, any type — to disk on the machine you are running on. Use this rather than read_attachment when the file itself is wanted, not its text. This server cannot write to your filesystem, so it returns a one-use download link per file and the exact command to fetch it into 'directory'; you run the command. Pass the message handle and the attachment number, or all=true for every attachment on the message.")]
+    public async Task<string> SaveAttachment(
+        [Description("The message handle from the listing, or the number shown beside it.")] string message,
+        [Description("Which attachment, from list_attachments. Defaults to the first. Ignored when all is true.")] int attachmentNumber = 1,
+        [Description("Every attachment on the message in one call.")] bool all = false,
+        [Description("The directory on YOUR machine to save into, e.g. 'C:/archive/2026/acme' or '~/records'. Put into the commands; created if missing. Omit to save into the current directory.")] string? directory = null,
+        CancellationToken ct = default)
+    {
+        var problem = DirectoryProblem(directory);
+        if (problem is not null) return problem;
+
+        var found = await ResolveAsync(message, ct, Capabilities.MailRead);
+        if (found.Problem is not null) return found.Problem;
+        var (item, c) = (found.Item!, found.Connection!);
+
+        try
+        {
+            var items = await mail.ListAttachmentsAsync(c, item.ItemId, ct);
+            if (items.Count == 0) return "That message has no attachments.";
+
+            List<int> chosen;
+            if (all) chosen = Enumerable.Range(0, items.Count).ToList();
+            else
+            {
+                var i = attachmentNumber - 1;
+                if (i < 0 || i >= items.Count)
+                    return $"There {(items.Count == 1 ? "is only 1 attachment" : $"are only {items.Count} attachments")}.";
+                chosen = [i];
+            }
+
+            // Names made safe and distinct across the WHOLE message, not just the chosen
+            // ones, so attachment 3 saved today and attachment 5 saved tomorrow cannot land
+            // on the same path when both were called image001.png.
+            var safeNames = SafeFileName.Distinct(items.Select(a => a.Name));
+
+            var skipped = new List<string>();
+            var wanted = new List<(int N, MailAttachment A, string Safe)>();
+            foreach (var i in chosen)
+            {
+                var a = items[i];
+                if (a.IsLink) skipped.Add($"{i + 1}. {Untrusted.Scrub(a.Name)} — a cloud link, so there is no file behind it to save.");
+                else if (a.IsEmbeddedItem) skipped.Add($"{i + 1}. {Untrusted.Scrub(a.Name)} — an embedded message rather than a file.");
+                else wanted.Add((i + 1, a, safeNames[i]));
+            }
+
+            if (wanted.Count == 0)
+                return "Nothing there can be saved as a file:\n" + string.Join("\n", skipped);
+
+            var minted = await downloads.MintAsync(UserId, c.Id, item.ItemId,
+                wanted.Select(w => new OutPost2.Infrastructure.Files.DownloadRequest(w.A.Id, w.Safe, w.A.SizeBytes)).ToList(),
+                ct);
+
+            return SaveInstructions(item.Subject, directory,
+                wanted.Select((w, k) => (w.N, w.A.Name, w.Safe, w.A.HumanSize,
+                    Url: $"{urls.Base}/files/attachment/{minted[k].Token}")).ToList(),
+                skipped);
+        }
+        catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (InvalidOperationException ex) { return ex.Message; }
+    }
+
+    /// <summary>
+    /// Refuses a directory that could not be put safely inside single quotes. The directory
+    /// comes from the caller, not a sender, but it still ends up in a command that runs, and
+    /// a quote in it would end the quoting.
+    /// </summary>
+    public static string? DirectoryProblem(string? directory)
+    {
+        if (directory is null) return null;
+        if (directory.Trim().Length == 0) return "Give a directory, or leave it out to save into the current one.";
+        if (directory.Length > 400) return "That directory path is too long.";
+        if (directory.Any(ch => ch == '\'' || ch == '`' || char.IsControl(ch)))
+            return "That directory has a quote or a control character in it, which I can't put "
+                 + "into a command safely. Use a path without one.";
+        return null;
+    }
+
+    /// <summary>
+    /// Where the file goes, joined with a forward slash: curl accepts that on Windows as well
+    /// as everywhere else. A leading <c>~</c> is left for the shell to expand, so it is
+    /// written outside the quotes.
+    /// </summary>
+    public static string Target(string? directory, string safeName)
+    {
+        if (directory is null) return Quote(safeName);
+
+        var dir = directory.Trim().TrimEnd('/', '\\');
+        if (dir == "~" || dir.StartsWith("~/", StringComparison.Ordinal))
+            return "~/" + Quote((dir.Length > 2 ? dir[2..] + "/" : "") + safeName);
+
+        return Quote((dir.Length == 0 ? "/" : dir + "/") + safeName);
+    }
+
+    /// <summary>
+    /// Single quotes, which are literal in sh, bash and PowerShell. Safe because neither a
+    /// <see cref="SafeFileName"/> nor a directory that passed <see cref="DirectoryProblem"/>
+    /// can contain one.
+    /// </summary>
+    private static string Quote(string s) => $"'{s}'";
+
+    public static string SaveInstructions(
+        string subject, string? directory,
+        IReadOnlyList<(int Number, string Original, string Safe, string Size, string Url)> files,
+        IReadOnlyList<string> skipped)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(files.Count == 1
+            ? $"Ready to save 1 attachment from \"{Untrusted.Scrub(subject)}\". Run:"
+            : $"Ready to save {files.Count} attachments from \"{Untrusted.Scrub(subject)}\". Run each:");
+
+        foreach (var f in files)
+        {
+            sb.Append($"{f.Number}. {f.Safe} ({f.Size})");
+            if (f.Safe != f.Original) sb.Append($" — renamed from {Untrusted.Scrub(f.Original)} to be safe on disk");
+            sb.AppendLine();
+            sb.AppendLine($"   curl -fsS --create-dirs -o {Target(directory, f.Safe)} '{f.Url}'");
+        }
+
+        if (skipped.Count > 0)
+        {
+            sb.AppendLine("Not saved:");
+            foreach (var s in skipped) sb.AppendLine(s);
+        }
+
+        sb.AppendLine();
+        sb.AppendLine($"Each link works once and expires in {(int)DownloadTicket.Lifetime.TotalMinutes} minutes. "
+            + "The file is the original bytes; the response's X-Content-SHA256 header is its "
+            + "SHA-256 if you need to prove the copy is exact.");
+        sb.Append("If a command exits non-zero, that file was NOT saved — do not say it was. "
+            + "Ask for a new link and run it again. In Windows PowerShell, call curl.exe rather than curl.");
+        return sb.ToString();
     }
 
     // ── shared plumbing ──────────────────────────────────────────────────────

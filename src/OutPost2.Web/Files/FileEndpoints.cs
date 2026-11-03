@@ -1,3 +1,7 @@
+using System.Security.Cryptography;
+using OutPost2.Core.Connections;
+using OutPost2.Infrastructure.Connections;
+using OutPost2.Infrastructure.Mail;
 using OutPost2.Infrastructure.Files;
 using OutPost2.Web.Files.Internal;
 using OutPost2.Infrastructure.Jobs;
@@ -96,6 +100,75 @@ public static class FileEndpoints
             // protect: the request carries its own single-use credential. Said explicitly
             // rather than relying on that inference.
             .DisableAntiforgery()
+            .AllowAnonymous();
+
+        // Redeeming a download ticket (OP2-265): the inbound mirror of the PUT above, and
+        // outside the authorised group for the same reason — the ticket is the credential.
+        // What it reads is somebody's mail, so everything the ticket says is re-checked
+        // against the connection as it is NOW, not as it was when the link was minted.
+        app.MapGet("/files/attachment/{token}", async (
+                HttpContext ctx, IDownloadTicketService tickets, IConnectionStore connections,
+                IMailService mail, ILogger<Program> log, string token) =>
+            {
+                var ticket = await tickets.RedeemAsync(
+                    token, ctx.Connection.RemoteIpAddress?.ToString(), ctx.RequestAborted);
+
+                // One answer for unknown, spent and expired, as for uploads.
+                if (ticket is null)
+                    return Results.Problem(
+                        "That download link is not valid any more. Ask for a new one.",
+                        statusCode: StatusCodes.Status403Forbidden);
+
+                var c = await connections.GetAsync(ticket.UserId, ticket.ConnectionId, ctx.RequestAborted);
+                var read = c?.Capabilities.FirstOrDefault(x => x.Name == Capabilities.MailRead);
+                if (c is null || c.State != ConnectionState.Consented || read is null || !read.Usable)
+                    return Results.Problem(
+                        "The mailbox this link reads from is no longer connected for reading.",
+                        statusCode: StatusCodes.Status403Forbidden);
+
+                try
+                {
+                    var bytes = await mail.OpenAttachmentAsync(
+                        c, ticket.MessageId, ticket.AttachmentId, ctx.RequestAborted);
+
+                    if (bytes is null)
+                        return Results.Problem(
+                            "The mail server would not hand that attachment over — the message may "
+                            + "have been moved or deleted. The link is spent; ask for a new one.",
+                            statusCode: StatusCodes.Status502BadGateway);
+
+                    // A digest the caller can check, because the reason to want the original
+                    // is usually that the original is the record. The stream is already in
+                    // memory (OpenAttachmentAsync buffers it), so this costs one pass.
+                    var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+                    bytes.Position = 0;
+                    ctx.Response.Headers["X-Content-SHA256"] = digest;
+
+                    // Never served as what the sender said it was. This is the app's own
+                    // origin, and an HTML attachment rendered here would run as the app.
+                    ctx.Response.Headers.XContentTypeOptions = "nosniff";
+
+                    log.LogInformation(
+                        "Served attachment \"{Name}\" ({Bytes} bytes) for {User} from a download ticket.",
+                        ticket.FileName, bytes.Length, ticket.UserId);
+
+                    return Results.File(bytes, "application/octet-stream", ticket.FileName);
+                }
+                catch (MailAuthRequiredException)
+                {
+                    return Results.Problem(
+                        "The mailbox this link reads from needs signing in again.",
+                        statusCode: StatusCodes.Status403Forbidden);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Logged in full, answered in one line (OP2-259).
+                    log.LogError(ex, "A download ticket redeemed by {User} could not be served.", ticket.UserId);
+                    return Results.Problem(
+                        "The attachment could not be fetched. The link is spent — ask for a new one.",
+                        statusCode: StatusCodes.Status502BadGateway);
+                }
+            })
             .AllowAnonymous();
 
         var files = app.MapGroup("/files").RequireAuthorization();
