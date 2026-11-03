@@ -89,11 +89,13 @@ public sealed class IssueTools(
     }
 
     [McpServerTool(Name = "get_issue", ReadOnly = true, OpenWorld = true)]
-    [Description("Read one issue in full: reporter, dates, every field, links, comments and the full description. Issue keys like OP2-14 are speakable, so they are used directly. A very long description is returned in parts; if the reply says it continues, call again with descriptionFrom before answering any question about its later sections.")]
+    [Description("Read one issue in full: reporter, dates, every field, links, comments and the full description. Issue keys like OP2-14 are speakable, so they are used directly. A very long description is returned in parts; if the reply says it continues, call again with descriptionFrom before answering any question about its later sections. Comments are numbered; a long one is shortened in the overview, and passing its number as 'comment' returns that comment in full (in parts, with commentFrom, if it is very long).")]
     public async Task<string> GetIssue(
         [Description("Issue key, e.g. OP2-14.")] string issueKey,
         [Description("Connection name, e.g. 'lab'. Required unless a default tracker has been set.")] string? connection = null,
         [Description("Character offset to resume the description from. Only needed when a previous call said the description continues; pass the offset it gave you.")] int descriptionFrom = 0,
+        [Description("Read just this comment, in full, by the number shown beside it (#1 is the oldest). Omit for the whole issue.")] int? comment = null,
+        [Description("Character offset to resume that comment from. Only needed when a previous call said the comment continues; pass the offset it gave you.")] int commentFrom = 0,
         CancellationToken ct = default)
     {
         var (c, msg) = await ResolveAsync(connection, Capabilities.IssuesRead, false, ct);
@@ -102,7 +104,43 @@ public sealed class IssueTools(
         var i = await youtrack.GetIssueAsync(c, issueKey, ct);
         if (i is null) return $"No issue {issueKey} on {c.Label}.";
 
-        return Describe(i, descriptionFrom);
+        return comment is { } n ? DescribeComment(i, n, commentFrom) : Describe(i, descriptionFrom);
+    }
+
+    /// <summary>
+    /// One comment, all of it (OP2-263). The overview shortens long comments so that ten of
+    /// them fit, and until this there was no way to read past the cut: descriptionFrom pages
+    /// only the description, so the end of a long comment — often the conclusion of the
+    /// discussion — could not be reached at all.
+    /// </summary>
+    public static string DescribeComment(IssueDetail i, int number, int from = 0)
+    {
+        if (i.Comments.Count == 0) return $"{i.Key} has no comments.";
+
+        if (number < 1 || number > i.Comments.Count)
+            return $"{i.Key} has {i.Comments.Count} comment{(i.Comments.Count == 1 ? "" : "s")}, "
+                 + $"numbered 1 to {i.Comments.Count} from the oldest. There is no comment {number}.";
+
+        var cm = i.Comments[number - 1];
+        if (from > 0 && from >= cm.Text.Length)
+            return $"Comment {number} on {i.Key} is only {cm.Text.Length:N0} characters long; nothing is left from {from:N0}.";
+
+        var (text, remaining) = Window(cm.Text, from, DescriptionWindow);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"{i.Key}, comment {number} of {i.Comments.Count}, by {Untrusted.Scrub(cm.Author)}"
+                      + (cm.At is { } at ? $" ({When(at)})" : "")
+                      + (from > 0 ? $", from character {from:N0}" : "") + ":");
+        sb.AppendLine(Untrusted.Fence("issue comment", text));
+
+        if (remaining > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"[{remaining:N0} more characters of this comment. Call get_issue again with "
+                          + $"comment: {number}, commentFrom: {cm.Text.Length - remaining} to read on.]");
+        }
+
+        return sb.ToString().TrimEnd();
     }
 
     /// <summary>
@@ -222,20 +260,30 @@ public sealed class IssueTools(
             sb.AppendLine();
 
             // Say how many there are before showing a subset, so a truncated view is never
-            // mistaken for the whole conversation.
-            var shown = i.Comments.TakeLast(10).ToList();
+            // mistaken for the whole conversation — and how to reach the rest (OP2-263).
+            var skip = Math.Max(0, i.Comments.Count - 10);
+            var shown = i.Comments.Skip(skip).ToList();
             sb.AppendLine(shown.Count < i.CommentCount
-                ? $"{i.CommentCount} comments, most recent {shown.Count}:"
+                ? $"{i.CommentCount} comments, most recent {shown.Count}"
+                  + (skip > 0 ? $" (#{skip + 1}–#{i.Comments.Count}; read an earlier one with comment: 1 to {skip})" : "")
+                  + ":"
                 : $"{i.CommentCount} comment{(i.CommentCount == 1 ? "" : "s")}:");
 
             // Fenced once around the whole block rather than per comment: the boundary is
             // what matters, and ten fences would cost more in noise than they buy.
+            //
+            // Numbered by position from the oldest, so the number is stable across calls and
+            // is what get_issue takes to return a comment whole.
             var block = new StringBuilder();
-            foreach (var cm in shown)
+            for (var k = 0; k < shown.Count; k++)
             {
+                var cm = shown[k];
+                var number = skip + k + 1;
                 var (text, remaining) = Window(cm.Text, 0, CommentWindow);
-                var more = remaining > 0 ? $" [+{remaining:N0} more characters]" : "";
-                block.AppendLine($"- {Untrusted.Scrub(cm.Author)}{(cm.At is { } at ? $" ({When(at)})" : "")}: {text}{more}");
+                var more = remaining > 0
+                    ? $" [+{remaining:N0} more characters — get_issue with comment: {number} reads all of it]"
+                    : "";
+                block.AppendLine($"- #{number} {Untrusted.Scrub(cm.Author)}{(cm.At is { } at ? $" ({When(at)})" : "")}: {text}{more}");
             }
             sb.AppendLine(Untrusted.Fence("issue comments", block.ToString()));
         }

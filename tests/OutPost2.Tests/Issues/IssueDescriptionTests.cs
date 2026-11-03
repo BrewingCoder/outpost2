@@ -1,3 +1,4 @@
+using System.Text;
 using OutPost2.Infrastructure.Issues;
 using OutPost2.Web.Mcp;
 
@@ -260,7 +261,7 @@ public sealed class IssueDescriptionTests
             new("Jordan Lee", Criteria(200), DateTimeOffset.UtcNow),
         ]));
 
-        Assert.Contains("more characters]", text);
+        Assert.Contains("more characters — get_issue with comment: 1 reads all of it]", text);
     }
 
     [Fact]
@@ -270,5 +271,95 @@ public sealed class IssueDescriptionTests
 
         Assert.Contains("Created", text);
         Assert.Contains("24 Oct 2026", text);
+    }
+
+    // ── reading a long comment to the end (OP2-263) ─────────────────────────
+
+    private static IssueDetail WithComments(params string[] texts) => Issue(comments:
+        texts.Select((t, n) => new IssueComment($"Author {n + 1}", t,
+            new DateTimeOffset(2026, 11, 1, 9, n, 0, TimeSpan.Zero))).ToList());
+
+    [Fact]
+    public void Comments_are_numbered_from_the_oldest()
+    {
+        var text = IssueTools.Describe(WithComments("first", "second", "third"));
+
+        Assert.Contains("#1 Author 1", text);
+        Assert.Contains("#3 Author 3", text);
+    }
+
+    [Fact]
+    public void The_overview_says_how_to_reach_comments_older_than_the_ten_shown()
+    {
+        var many = Enumerable.Range(1, 25).Select(n => $"Comment {n}").ToArray();
+        var text = IssueTools.Describe(WithComments(many));
+
+        Assert.Contains("#16–#25", text);
+        Assert.Contains("comment: 1 to 15", text);
+        Assert.Contains("#16 Author 16", text);
+    }
+
+    [Fact]
+    public void A_comment_asked_for_by_number_comes_back_whole()
+    {
+        // The reported case: long enough to be cut in the overview, with its conclusion in
+        // the part that was cut.
+        var body = Criteria(40) + "\n\nConclusion: ship it behind the flag.";
+        var i = WithComments("short", body);
+
+        Assert.DoesNotContain("Conclusion: ship it", IssueTools.Describe(i));
+
+        var one = IssueTools.DescribeComment(i, 2);
+        Assert.Contains("comment 2 of 2, by Author 2", one);
+        Assert.Contains("Conclusion: ship it behind the flag.", one);
+        Assert.DoesNotContain("more characters of this comment", one);
+    }
+
+    [Fact]
+    public void A_very_long_comment_pages_with_commentFrom_and_loses_nothing()
+    {
+        var body = string.Join("\n", Enumerable.Range(1, 3000).Select(n => $"Line {n} of the comment."));
+        var i = WithComments(body);
+
+        var seen = new StringBuilder();
+        var from = 0;
+        for (var page = 0; page < 20; page++)
+        {
+            var reply = IssueTools.DescribeComment(i, 1, from);
+            seen.Append(reply);
+
+            var m = System.Text.RegularExpressions.Regex.Match(reply, @"commentFrom: (\d+)");
+            if (!m.Success) break;
+            var next = int.Parse(m.Groups[1].Value);
+            Assert.True(next > from);
+            from = next;
+        }
+
+        // Every line reached, the last one included.
+        foreach (var n in new[] { 1, 1500, 2999, 3000 })
+            Assert.Contains($"Line {n} of the comment.", seen.ToString());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    [InlineData(-1)]
+    public void A_comment_number_that_does_not_exist_says_what_does(int number)
+    {
+        var reply = IssueTools.DescribeComment(WithComments("a", "b"), number);
+        Assert.Contains("numbered 1 to 2", reply);
+    }
+
+    [Fact]
+    public void Asking_for_a_comment_on_an_issue_with_none_says_so()
+    {
+        Assert.Contains("has no comments", IssueTools.DescribeComment(Issue(), 1));
+    }
+
+    [Fact]
+    public void A_stale_offset_past_the_end_says_so_rather_than_returning_nothing()
+    {
+        var reply = IssueTools.DescribeComment(WithComments("short"), 1, 5000);
+        Assert.Contains("nothing is left", reply);
     }
 }
