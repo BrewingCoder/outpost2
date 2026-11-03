@@ -104,7 +104,11 @@ public sealed class IssueTools(
         var i = await youtrack.GetIssueAsync(c, issueKey, ct);
         if (i is null) return $"No issue {issueKey} on {c.Label}.";
 
-        return comment is { } n ? DescribeComment(i, n, commentFrom) : Describe(i, descriptionFrom);
+        // 0 is "not asked", not "comment zero": a client that fills in defaults sends it,
+        // and answering "there is no comment 0" would hide the issue it asked for.
+        return comment is { } n and not 0
+            ? DescribeComment(i, n, commentFrom)
+            : Describe(i, descriptionFrom);
     }
 
     /// <summary>
