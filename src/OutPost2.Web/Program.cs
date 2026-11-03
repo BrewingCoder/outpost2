@@ -98,8 +98,10 @@ builder.Services.AddHttpClient("graph-upload").ConfigureHttpClient(c => c.Timeou
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMicrosoftConnectionServiceAccessor>(
     sp => sp.GetRequiredService<IMicrosoftConnectionService>());
 // Mail is routed by the connection's provider (OP2-278): each provider registers itself as
-// an IMailProvider, and the tools get the router. Microsoft Graph is the only one so far.
+// an IMailProvider, and the tools get the router. Microsoft Graph and Gmail (OP2-280).
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailProvider, OutPost2.Infrastructure.Mail.MailService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailProvider, OutPost2.Infrastructure.Mail.GmailService>();
+builder.Services.AddHttpClient("gmail").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(60));
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailService, OutPost2.Infrastructure.Mail.MailServiceRouter>();
 
 // Scoped like the other Graph services -- it resolves an access token per request, and a
