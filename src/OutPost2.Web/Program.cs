@@ -42,6 +42,7 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Auth.IOAuthService, OutPost2.
 builder.Services.Configure<OutPost2.Infrastructure.Security.VaultOptions>(
     builder.Configuration.GetSection(OutPost2.Infrastructure.Security.VaultOptions.SectionName));
 builder.Services.Configure<EntraOptions>(builder.Configuration.GetSection(EntraOptions.SectionName));
+builder.Services.Configure<GoogleOptions>(builder.Configuration.GetSection(GoogleOptions.SectionName));
 builder.Services.Configure<OutPost2.Infrastructure.Files.StorageOptions>(
     builder.Configuration.GetSection(OutPost2.Infrastructure.Files.StorageOptions.SectionName));
 builder.Services.Configure<OutPost2.Infrastructure.Feedback.FeedbackOptions>(
@@ -80,6 +81,13 @@ builder.Services.AddScoped<IConnectionStore>(sp =>
     new SerialisedConnectionStore(sp.GetRequiredService<ConnectionStore>()));
 builder.Services.AddScoped<IPendingConnectionStore, PendingConnectionStore>();
 builder.Services.AddScoped<IMicrosoftConnectionService, MicrosoftConnectionService>();
+
+// Gmail sign-in (OP2-279). Scoped for the same reason as Microsoft's: it reads and writes
+// the connection through the request's store. The token accessor is the same object under
+// the narrower interface the Gmail provider will take.
+builder.Services.AddScoped<IGoogleConnectionService, GoogleConnectionService>();
+builder.Services.AddScoped<IGoogleTokenAccessor>(sp => sp.GetRequiredService<IGoogleConnectionService>());
+builder.Services.AddHttpClient("google").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddHttpClient("graph").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(60));
 
 // Upload-session chunks, which carry their own authorisation in the URL and must NOT

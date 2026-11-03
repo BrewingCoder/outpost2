@@ -267,7 +267,7 @@
                         {
                             <button class="op-btn op-btn--secondary op-btn--sm" type="button" data-open="dlg-replace-@c.Id">Replace token</button>
                         }
-                        else if (c.Provider == ProviderKind.Microsoft)
+                        else if (c.Provider is ProviderKind.Microsoft or ProviderKind.Google)
                         {
                             @*
                                 The OAuth equivalent of "Replace token". Renews the
@@ -383,7 +383,7 @@
     </section>
 }
 
-<partial name="_AddConnection" model="Model.Groups" />
+<partial name="_AddConnection" model="Model.Groups" view-data='new ViewDataDictionary(ViewData) { ["GoogleOffered"] = Model.GoogleOffered }' />
 
 @section Scripts {
     <script src="~/js/outpost.js" asp-append-version="true"></script>

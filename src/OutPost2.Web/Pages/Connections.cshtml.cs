@@ -7,7 +7,9 @@ using OutPost2.Web.Connections;
 namespace OutPost2.Web.Pages;
 
 [Authorize]
-public class ConnectionsModel(IConnectionStore store) : PageModel
+public class ConnectionsModel(
+    IConnectionStore store,
+    Microsoft.Extensions.Options.IOptions<OutPost2.Infrastructure.Connections.GoogleOptions> google) : PageModel
 {
     /// <summary>
     /// One provider's worth of the page. Grouping happens here rather than in the view so
@@ -52,7 +54,7 @@ public class ConnectionsModel(IConnectionStore store) : PageModel
         Groups =
         [
             .. Enum.GetValues<ProviderKind>()
-                .Where(p => Offered.Contains(p) || all.Any(c => c.Provider == p))
+                .Where(p => Offered(p) || all.Any(c => c.Provider == p))
                 .Select(p =>
                 {
                     var mine = all.Where(c => c.Provider == p)
@@ -64,9 +66,18 @@ public class ConnectionsModel(IConnectionStore store) : PageModel
         ];
     }
 
-    /// <summary>The providers a user can add a connection for from this page.</summary>
-    public static readonly IReadOnlySet<ProviderKind> Offered =
-        new HashSet<ProviderKind> { ProviderKind.Microsoft, ProviderKind.YouTrack, ProviderKind.GitHub };
+    /// <summary>
+    /// Whether a user can add a connection for this provider from this page. Gmail only
+    /// when this server has a Google OAuth client configured (OP2-279): without one there
+    /// is nowhere to send the browser, and a button that can only fail is worse than none.
+    /// </summary>
+    public bool Offered(ProviderKind p) => p switch
+    {
+        ProviderKind.Google => google.Value.IsConfigured,
+        _ => true,
+    };
+
+    public bool GoogleOffered => Offered(ProviderKind.Google);
 
     // ── presentation helpers, kept here so the view stays declarative ──────
 
@@ -176,6 +187,9 @@ public class ConnectionsModel(IConnectionStore store) : PageModel
         if (c.CredentialExpiresAt is { } when)
             return $"Token expires {when:d MMM yyyy}";
 
+        // Not said for Google, though its sign-in does renew: while the OAuth client is in
+        // Google's testing mode it lasts seven days, and saying "renews automatically" over
+        // a connection that will die on Tuesday is exactly the wrong reassurance (OP2-283).
         return c.Provider == ProviderKind.Microsoft ? "Sign-in renews automatically" : null;
     }
 
