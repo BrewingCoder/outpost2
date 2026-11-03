@@ -58,10 +58,15 @@ public sealed partial class GmailService(
 
     // ── plumbing ─────────────────────────────────────────────────────────────
 
-    private async Task<HttpClient> ClientAsync(Connection c, CancellationToken ct)
+    /// <param name="sending">
+    /// The long-timeout client, for anything that uploads a message. A forward carrying 20 MB
+    /// of attachments can outlast the ordinary minute, and a timeout mid-upload would be
+    /// reported — correctly but needlessly — as "may have been sent" (OP2-281).
+    /// </param>
+    private async Task<HttpClient> ClientAsync(Connection c, CancellationToken ct, bool sending = false)
     {
         var token = await tokens.GetAccessTokenAsync(c, ct) ?? throw new MailAuthRequiredException(c.Label);
-        var http = httpFactory.CreateClient("gmail");
+        var http = httpFactory.CreateClient(sending ? "gmail-upload" : "gmail");
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return http;
     }
@@ -605,7 +610,7 @@ public sealed partial class GmailService(
             mail.To.Select(MailService.ParseRecipient), mail.Cc.Select(MailService.ParseRecipient),
             mail.Subject, html, mail.Importance);
 
-        using var http = await ClientAsync(connection, ct);
+        using var http = await ClientAsync(connection, ct, sending: true);
         await SendRawAsync(http, connection, message, threadId: null, log, ct);
 
         log.LogInformation("Sent Gmail from {Label} to {Count} recipient(s).", connection.Label, mail.To.Count);
@@ -615,7 +620,7 @@ public sealed partial class GmailService(
         IReadOnlyList<string>? forwardTo = null, RecipientEdit? edit = null,
         MailImportance importance = MailImportance.Normal, CancellationToken ct = default)
     {
-        using var http = await ClientAsync(connection, ct);
+        using var http = await ClientAsync(connection, ct, sending: true);
 
         var m = await GetAsync<GMessage>(http, connection, $"messages/{Uri.EscapeDataString(messageId)}?format=full", ct)
             ?? throw new MailException("That message no longer exists, so there is nothing to reply to.");
