@@ -186,10 +186,19 @@ public sealed partial class MailTools(
             // Exact first, because that is the value a deadline is checked against; the
             // phrase is there for reading aloud (OP2-264). Sent is shown too and labelled:
             // it is the sender's clock, the Date header, and can differ from receipt.
-            var zone = await ZoneAsync(c, ct);
-            sb.AppendLine($"Received: {Timestamps.Exact(m.ReceivedAt, zone)} ({Ago(m.ReceivedAt)}, {c.Label})");
-            if (m.SentAt is { } sent && sent != m.ReceivedAt)
-                sb.AppendLine($"Sent: {Timestamps.Exact(sent, zone)}");
+            var mz = await ZoneAsync(c, ct);
+            var zone = mz.Zone;
+            var received = Timestamps.Exact(m.ReceivedAt, zone);
+
+            sb.AppendLine($"Received: {received} "
+                        + $"({Timestamps.Ago(m.ReceivedAt, zone)}, {c.Label}{Unknown(mz)})");
+
+            // Compared as RENDERED, not as instants. Graph keeps milliseconds and these
+            // print to the second, so a message sent and received 40 ms apart passed an
+            // inequality on the instants and printed the same timestamp twice.
+            if (m.SentAt is { } sent && Timestamps.Exact(sent, zone) is var sentText
+                && sentText != received)
+                sb.AppendLine($"Sent: {sentText}");
             sb.AppendLine($"Handle: {item.Ref}");
             if (m.HasAttachments) sb.AppendLine("Has attachments.");
             sb.AppendLine();
@@ -1529,7 +1538,7 @@ public sealed partial class MailTools(
         [Description("The message handle from the listing, or the number shown beside it.")] string message,
         [Description("Which attachment, from list_attachments. Defaults to the first. Ignored when all is true.")] int attachmentNumber = 1,
         [Description("Every attachment on the message in one call.")] bool all = false,
-        [Description("The directory on YOUR machine to save into, e.g. 'C:/archive/2026/acme' or '~/records'. Put into the commands; created if missing. Omit to save into the current directory.")] string? directory = null,
+        [Description("The directory on YOUR machine to save into, e.g. 'C:/archive/2026/acme' or '/home/me/records'. Must be a full path — '~' is refused because it does not expand on Windows. Created if missing. Omit to save into the current directory.")] string? directory = null,
         CancellationToken ct = default)
     {
         var problem = DirectoryProblem(directory);
@@ -1582,7 +1591,7 @@ public sealed partial class MailTools(
                 skipped);
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (InvalidOperationException ex) { return ex.Message; }
+        catch (TooManyTicketsException ex) { return ex.Message; }
     }
 
     /// <summary>
@@ -1595,6 +1604,17 @@ public sealed partial class MailTools(
         if (directory is null) return null;
         if (directory.Trim().Length == 0) return "Give a directory, or leave it out to save into the current one.";
         if (directory.Length > 400) return "That directory path is too long.";
+        var trimmed = directory.Trim();
+
+        // Refused rather than guessed at: whether "~" means anything depends on the shell
+        // the caller runs the command in, and this server cannot know which that is.
+        if (trimmed == "~" || trimmed.StartsWith("~/", StringComparison.Ordinal)
+            || trimmed.StartsWith("~\\", StringComparison.Ordinal))
+            return "I can't use \"~\" — whether it means your home directory depends on the "
+                 + "shell, and on Windows it would make a folder actually called \"~\". "
+                 + "Give me the full path instead, or leave the directory out to save into "
+                 + "the current one.";
+
         if (directory.Any(ch => ch == '\'' || ch == '`' || char.IsControl(ch)))
             return "That directory has a quote or a control character in it, which I can't put "
                  + "into a command safely. Use a path without one.";
@@ -1611,9 +1631,13 @@ public sealed partial class MailTools(
         if (directory is null) return Quote(safeName);
 
         var dir = directory.Trim().TrimEnd('/', '\\');
-        if (dir == "~" || dir.StartsWith("~/", StringComparison.Ordinal))
-            return "~/" + Quote((dir.Length > 2 ? dir[2..] + "/" : "") + safeName);
 
+        // No tilde. It was emitted outside the quotes so a POSIX shell would expand it,
+        // but this same message tells Windows callers to use curl.exe — and neither
+        // PowerShell, cmd nor curl.exe expands it in a native argument. With --create-dirs
+        // that silently made a directory literally named "~" in the shell's working
+        // directory and reported success. Refused in DirectoryProblem instead, where it
+        // can be explained; by here it cannot occur.
         return Quote((dir.Length == 0 ? "/" : dir + "/") + safeName);
     }
 
@@ -1932,28 +1956,51 @@ public sealed partial class MailTools(
     /// read: if the zone cannot be had, UTC is still an exact and unambiguous instant, and
     /// the offset printed beside it says which one it is.
     /// </summary>
-    private async Task<TimeZoneInfo> ZoneAsync(Connection c, CancellationToken ct)
+    private async Task<MailboxZone> ZoneAsync(Connection c, CancellationToken ct)
     {
-        try { return await calendar.TimeZoneAsync(c, ct); }
+        try { return new MailboxZone(await calendar.TimeZoneAsync(c, ct), true); }
         catch (OperationCanceledException) { throw; }
-        catch (Exception) { return TimeZoneInfo.Utc; }
+
+        // Known: false, so the surface can say the time is UTC because the zone could not
+        // be had — NOT inferred from the zone being UTC, because a mailbox genuinely set to
+        // UTC is not an unknown one and must not be labelled as one.
+        catch (Exception) { return new MailboxZone(TimeZoneInfo.Utc, false); }
     }
+
+    /// <summary>A mailbox's zone, and whether it is really the mailbox's.</summary>
+    public readonly record struct MailboxZone(TimeZoneInfo Zone, bool Known);
 
     /// <summary>
     /// Zones for every mailbox a listing drew from, fetched one after another AFTER the
     /// fan-out rather than inside it. They are cached, so this is usually free, and it adds
     /// no new concurrent work on the request's scoped services (OP2-239).
     /// </summary>
-    private async Task<Dictionary<string, TimeZoneInfo>> ZonesAsync(
+    private async Task<Dictionary<string, MailboxZone>> ZonesAsync(
         IEnumerable<Connection> used, CancellationToken ct)
     {
-        var zones = new Dictionary<string, TimeZoneInfo>(StringComparer.OrdinalIgnoreCase);
+        var zones = new Dictionary<string, MailboxZone>(StringComparer.OrdinalIgnoreCase);
         foreach (var c in used)
             if (!zones.ContainsKey(c.Label)) zones[c.Label] = await ZoneAsync(c, ct);
         return zones;
     }
 
     /// <summary>"2 hours ago (2026-11-03 00:44 -05:00)": the phrase, then the value to act on.</summary>
-    private static string When(DateTimeOffset at, string label, Dictionary<string, TimeZoneInfo> zones) =>
-        $"{Ago(at)} ({Timestamps.Short(at, zones.GetValueOrDefault(label) ?? TimeZoneInfo.Utc)})";
+    private static string When(DateTimeOffset at, string label, Dictionary<string, MailboxZone> zones)
+    {
+        var z = zones.TryGetValue(label, out var found) ? found : new MailboxZone(TimeZoneInfo.Utc, false);
+        return $"{Timestamps.Ago(at, z.Zone)} ({Timestamps.Short(at, z.Zone)}{Unknown(z)})";
+    }
+
+    /// <summary>
+    /// Says when a time is in UTC because the mailbox's own zone could not be had, rather
+    /// than because the mailbox is in UTC.
+    /// <para>
+    /// MailboxSettings is an optional scope, so a connection consented before it was asked
+    /// for answers 403 — and that fallback is cached for six hours. Unlabelled, somebody in
+    /// Eastern would read a correct UTC instant as their local clock on the one line the
+    /// whole ticket exists to make checkable against a deadline.
+    /// </para>
+    /// </summary>
+    public static string Unknown(MailboxZone zone) =>
+        zone.Known ? "" : " — UTC, mailbox zone unavailable";
 }

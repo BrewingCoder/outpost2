@@ -117,12 +117,33 @@ public class DownloadTicketTests : IAsyncLifetime
         await _tickets.MintAsync(_user, _connection, "msg-1",
             Enumerable.Range(0, DownloadTicket.MaxOutstanding - 1).Select(i => File($"f{i}.png")).ToList());
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        // Its own type, so the tool speaks this message and only this message — the blanket
+        // InvalidOperationException catch also swallowed anything EF or Npgsql threw inside
+        // the same try and read its text out to the caller.
+        var ex = await Assert.ThrowsAsync<TooManyTicketsException>(() =>
             _tickets.MintAsync(_user, _connection, "msg-2", [File("x.pdf"), File("y.pdf")]));
         Assert.Contains("limit", ex.Message);
 
         // All or none: half a message's attachments silently missing is the failure to avoid.
         Assert.Equal(DownloadTicket.MaxOutstanding - 1,
             await _db.DownloadTickets.CountAsync(t => t.UserId == _user));
+    }
+
+    [Fact]
+    public async Task A_message_with_more_attachments_than_the_cap_is_told_what_to_do_instead()
+    {
+        // With nothing outstanding, the refusal used to read "You already have 0 download
+        // links waiting to be used... Use or abandon those first" — advice the caller could
+        // not act on, for a message that could never be saved with all=true at any point.
+        var ex = await Assert.ThrowsAsync<TooManyTicketsException>(() =>
+            _tickets.MintAsync(_user, _connection, "huge",
+                Enumerable.Range(0, DownloadTicket.MaxOutstanding + 10)
+                    .Select(i => File($"f{i}.png")).ToList()));
+
+        Assert.DoesNotContain("You already have 0", ex.Message);
+        Assert.Contains("a few at a time", ex.Message);
+
+        // And nothing was minted, so a retry by number starts from a clean slate.
+        Assert.Equal(0, await _db.DownloadTickets.CountAsync(t => t.UserId == _user));
     }
 }

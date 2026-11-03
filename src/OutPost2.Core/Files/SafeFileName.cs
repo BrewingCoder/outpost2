@@ -53,8 +53,13 @@ public static class SafeFileName
 
         if (safe.Length > MaxLength)
         {
+            // The extension is kept, shortened if it has to be, never dropped. Dropping it
+            // meant a 400-character name ending ".verylongextensionname" was saved with no
+            // extension at all, so the file opened with the wrong application — which for a
+            // tool whose whole purpose is preserving the original is the wrong trade.
             var ext = Path.GetExtension(safe);
-            if (ext.Length > 20) ext = "";
+            if (ext.Length > 21) ext = ext[..21];
+
             safe = safe[..(MaxLength - ext.Length)].TrimEnd('.', ' ') + ext;
         }
 

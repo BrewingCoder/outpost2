@@ -148,6 +148,14 @@ public static class FileEndpoints
                     // origin, and an HTML attachment rendered here would run as the app.
                     ctx.Response.Headers.XContentTypeOptions = "nosniff";
 
+                    // Not cached, anywhere. The ticket is in the URL, the endpoint takes no
+                    // sign-in, and the body is somebody's mail — so a shared proxy or a
+                    // browser cache keyed on that URL would serve it again to anyone who
+                    // replays it, straight past the one-use UPDATE that is the entire
+                    // security model here.
+                    ctx.Response.Headers.CacheControl = "no-store, no-cache, max-age=0, private";
+                    ctx.Response.Headers.Pragma = "no-cache";
+
                     log.LogInformation(
                         "Served attachment \"{Name}\" ({Bytes} bytes) for {User} from a download ticket.",
                         ticket.FileName, bytes.Length, ticket.UserId);

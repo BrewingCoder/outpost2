@@ -68,8 +68,9 @@ public sealed class SaveAttachmentTests
     [InlineData("C:/archive/2026", "'C:/archive/2026/invoice.pdf'")]
     [InlineData("C:\\archive\\2026\\", "'C:\\archive\\2026/invoice.pdf'")]
     [InlineData("/srv/records/", "'/srv/records/invoice.pdf'")]
-    [InlineData("~/records", "~/'records/invoice.pdf'")]
-    [InlineData("~", "~/'invoice.pdf'")]
+    // No tilde rows: "~" is refused in DirectoryProblem now, because it was emitted
+    // outside the quotes to let a POSIX shell expand it and this same output tells
+    // Windows callers to use curl.exe, which does not. See the tilde tests below.
     public void The_target_is_the_directory_and_the_safe_name_quoted(string? dir, string expected)
     {
         Assert.Equal(expected, MailTools.Target(dir, "invoice.pdf"));
@@ -109,5 +110,58 @@ public sealed class SaveAttachmentTests
         Assert.Contains("cloud link", said);
         Assert.Contains("X-Content-SHA256", said);
         Assert.Contains("NOT saved", said);
+    }
+
+    // ── review findings ──────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("~")]
+    [InlineData("~/records")]
+    [InlineData("~/archive/2026")]
+    [InlineData(@"~\records")]
+    public void A_tilde_is_refused_because_it_does_not_expand_everywhere(string directory)
+    {
+        // It was emitted outside the quotes so a POSIX shell would expand it — but this
+        // same output tells Windows callers to use curl.exe, and neither PowerShell, cmd
+        // nor curl.exe expands it in a native argument. With --create-dirs that silently
+        // made a folder literally called "~" and reported success.
+        var problem = MailTools.DirectoryProblem(directory);
+
+        Assert.NotNull(problem);
+        Assert.Contains("full path", problem);
+    }
+
+    [Theory]
+    [InlineData("/home/me/records")]
+    [InlineData("C:/archive/2026/acme")]
+    [InlineData("archive")]
+    public void A_full_or_relative_path_is_still_fine(string directory)
+    {
+        Assert.Null(MailTools.DirectoryProblem(directory));
+    }
+
+    [Fact]
+    public void A_target_never_leaves_a_tilde_outside_the_quotes()
+    {
+        // Nothing can reach Target with one now, but the guarantee is worth stating where
+        // the quoting happens rather than only where it is refused.
+        Assert.Equal("'records/report.pdf'", MailTools.Target("records", "report.pdf"));
+        Assert.Equal("'C:/archive/report.pdf'", MailTools.Target("C:/archive", "report.pdf"));
+        Assert.Equal("'report.pdf'", MailTools.Target(null, "report.pdf"));
+    }
+
+    [Fact]
+    public void A_very_long_extension_is_shortened_rather_than_dropped()
+    {
+        // It used to be dropped entirely, so the saved file opened with the wrong
+        // application — for a tool whose whole point is preserving the original, the wrong
+        // trade.
+        var name = new string('x', 400) + ".verylongextensionnamehere";
+
+        var safe = SafeFileName.From(name);
+
+        Assert.True(safe.Length <= SafeFileName.MaxLength);
+        Assert.Contains('.', safe);
+        Assert.StartsWith(".verylongextensionnam", safe[safe.LastIndexOf('.')..]);
     }
 }

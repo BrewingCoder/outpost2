@@ -51,11 +51,18 @@ public sealed class DownloadTicketService(OutPostDbContext db, ILogger<DownloadT
         var outstanding = await db.DownloadTickets
             .CountAsync(t => t.UserId == userId && t.UsedAt == null && t.ExpiresAt > now, ct);
 
+        if (wanted.Count > DownloadTicket.MaxOutstanding)
+            throw new TooManyTicketsException(
+                $"That message has {wanted.Count} attachments to save and I can only hand out "
+                + $"{DownloadTicket.MaxOutstanding} links at a time. Ask for them a few at a "
+                + "time by number instead of all at once.");
+
         if (outstanding + wanted.Count > DownloadTicket.MaxOutstanding)
-            throw new InvalidOperationException(
-                $"You already have {outstanding} download links waiting to be used, and this "
+            throw new TooManyTicketsException(
+                $"You already have {outstanding} download link(s) waiting to be used, and this "
                 + $"would make {outstanding + wanted.Count}; the limit is {DownloadTicket.MaxOutstanding}. "
-                + "Use or abandon those first — they expire in fifteen minutes.");
+                + "Use or abandon those first — they expire in "
+                + $"{(int)DownloadTicket.Lifetime.TotalMinutes} minutes.");
 
         var minted = new List<(DownloadTicket, string)>(wanted.Count);
         foreach (var w in wanted)

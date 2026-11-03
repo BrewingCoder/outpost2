@@ -35,8 +35,18 @@ public static class Timestamps
     /// <summary>
     /// The friendly form, kept because it is what a person says out loud. Approximate by
     /// design — the exact value beside it is what to act on.
+    /// <para>
+    /// Past a week it becomes a date, and a date has to be stated in the mailbox's zone like
+    /// every other date here. Graph hands <c>receivedDateTime</c> back at offset zero, so
+    /// formatting <paramref name="when"/> directly prints the UTC day: a message received at
+    /// 20:30 Eastern is 00:30 UTC the next day, and the line read "<c>24 Oct</c>" beside an
+    /// exact value saying the 23rd. The year suffix had the same hole and in the worse
+    /// direction — 2025-12-31 20:00 EST is 2026-01-01Z, so last year's message compared
+    /// equal to this year and printed "1 Jan" with no year, which is precisely the
+    /// ambiguity the suffix exists to remove.
+    /// </para>
     /// </summary>
-    public static string Ago(DateTimeOffset when, DateTimeOffset now)
+    public static string Ago(DateTimeOffset when, DateTimeOffset now, TimeZoneInfo? zone = null)
     {
         var d = now - when;
         if (d < TimeSpan.FromMinutes(2)) return "just now";
@@ -44,9 +54,17 @@ public static class Timestamps
         if (d < TimeSpan.FromHours(24)) return $"{(int)d.TotalHours} hour{((int)d.TotalHours == 1 ? "" : "s")} ago";
         if (d < TimeSpan.FromDays(7)) return $"{(int)d.TotalDays} day{((int)d.TotalDays == 1 ? "" : "s")} ago";
 
+        // Both sides of the comparison in the same zone, or "is this the current year" is
+        // being asked of two different calendars.
+        var local = TimeZoneInfo.ConvertTime(when, zone ?? TimeZoneInfo.Utc);
+        var today = TimeZoneInfo.ConvertTime(now, zone ?? TimeZoneInfo.Utc);
+
         // The year, so an old message cannot be mistaken for one from this year.
-        return when.ToString(when.Year == now.Year ? "d MMM" : "d MMM yyyy", CultureInfo.InvariantCulture);
+        return local.ToString(local.Year == today.Year ? "d MMM" : "d MMM yyyy",
+            CultureInfo.InvariantCulture);
     }
 
-    public static string Ago(DateTimeOffset when) => Ago(when, DateTimeOffset.UtcNow);
+    public static string Ago(DateTimeOffset when, TimeZoneInfo? zone = null) =>
+        Ago(when, DateTimeOffset.UtcNow, zone);
+
 }
