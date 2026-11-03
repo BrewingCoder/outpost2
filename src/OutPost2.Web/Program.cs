@@ -89,7 +89,10 @@ builder.Services.AddHttpClient("graph").ConfigureHttpClient(c => c.Timeout = Tim
 builder.Services.AddHttpClient("graph-upload").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromMinutes(10));
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMicrosoftConnectionServiceAccessor>(
     sp => sp.GetRequiredService<IMicrosoftConnectionService>());
-builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailService, OutPost2.Infrastructure.Mail.MailService>();
+// Mail is routed by the connection's provider (OP2-278): each provider registers itself as
+// an IMailProvider, and the tools get the router. Microsoft Graph is the only one so far.
+builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailProvider, OutPost2.Infrastructure.Mail.MailService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailService, OutPost2.Infrastructure.Mail.MailServiceRouter>();
 
 // Scoped like the other Graph services -- it resolves an access token per request, and a
 // singleton holding a scoped accessor is a captive dependency the container refuses. The
@@ -108,8 +111,10 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Files.IUploadTicketService,
     OutPost2.Infrastructure.Files.UploadTicketService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Files.IDownloadTicketService,
     OutPost2.Infrastructure.Files.DownloadTicketService>();
-builder.Services.AddScoped<OutPost2.Infrastructure.Mail.ILargeAttachmentSender,
+builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IAttachmentSenderProvider,
                            OutPost2.Infrastructure.Mail.LargeAttachmentSender>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Mail.ILargeAttachmentSender,
+                           OutPost2.Infrastructure.Mail.LargeAttachmentSenderRouter>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Jobs.IJobService, OutPost2.Infrastructure.Jobs.JobService>();
 
 // Reaching a user who is not looking (OP2-165). Channels are registered as a set and

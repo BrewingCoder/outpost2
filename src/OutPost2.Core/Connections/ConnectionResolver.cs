@@ -76,8 +76,14 @@ public static class ConnectionResolver
         // candidate is not consent: a provider with no default means "always name one",
         // and that has to hold at one connection as well as at five — otherwise adding a
         // second tracker silently changes what the first unlabelled request does.
-        var preferred = capable.FirstOrDefault(c => c.IsDefaultForProvider);
-        if (preferred is null) return ConnectionResolution.Ambiguous(capable);
+        //
+        // A default is per PROVIDER, and since mail has more than one provider (OP2-278) a
+        // user can hold a default Microsoft mailbox and a default Gmail one at once. Then
+        // "check my email" has two nominees, and taking whichever happened to come first
+        // is exactly the guess this method exists not to make — so two defaults ask.
+        var defaults = capable.Where(c => c.IsDefaultForProvider).ToList();
+        if (defaults.Count != 1) return ConnectionResolution.Ambiguous(capable);
+        var preferred = defaults[0];
 
         // A default is a convenience for reading. It is not standing permission to write
         // from an identity the user did not name in the moment, and other people see which

@@ -209,6 +209,7 @@ public sealed partial class MailTools(
             return sb.ToString().TrimEnd();
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
+        catch (MailException ex) { return ex.Message; }
     }
 
     [McpServerTool(Name = "search_mail", ReadOnly = true, OpenWorld = true)]
@@ -1784,6 +1785,12 @@ public sealed partial class MailTools(
         var c = await connections.FindByLabelAsync(UserId, item.ConnectionLabel, ct);
         if (c is null) return new(null, null, $"The {item.ConnectionLabel} connection has gone.");
 
+        // A connection of a kind this build has no mail implementation for (OP2-278). Said
+        // here, once, because every tool that acts on a message comes through this — the
+        // attachment tools included, which have no catch of their own.
+        if (mail is MailServiceRouter router && !router.Supports(c.Provider))
+            return new(null, null, MailProviderNotSupportedException.Describe(c));
+
         // Every capability, not the first one that happens to be present. A threaded reply
         // needs both send AND filing, because Graph builds it as a draft in the mailbox —
         // and a connection with filing switched off would otherwise pass this check and
@@ -1999,6 +2006,11 @@ public sealed partial class MailTools(
     /// </summary>
     private async Task<MailboxZone> ZoneAsync(Connection c, CancellationToken ct)
     {
+        // The zone comes from Microsoft Graph's mailbox settings, so only a Microsoft
+        // connection can be asked (OP2-278). Anything else is "not known" — UTC, labelled
+        // as such — rather than a Graph call made with somebody else's token.
+        if (c.Provider != ProviderKind.Microsoft) return new MailboxZone(TimeZoneInfo.Utc, false);
+
         try { return new MailboxZone(await calendar.TimeZoneAsync(c, ct), true); }
         catch (OperationCanceledException) { throw; }
 

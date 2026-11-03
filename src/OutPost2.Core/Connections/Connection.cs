@@ -145,6 +145,14 @@ public enum ProviderKind
     Microsoft,
     YouTrack,
     GitHub,
+
+    /// <summary>
+    /// Gmail (OP2-80). Mail only: a Google connection declares mail.read, mail.write and
+    /// mail.send and nothing else, so the calendar, people and Teams tools — which are
+    /// Microsoft Graph through and through — can never select one. Stored as its name,
+    /// so adding it changes no column and needs no migration.
+    /// </summary>
+    Google,
 }
 
 public enum AuthKind

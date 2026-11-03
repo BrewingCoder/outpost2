@@ -76,8 +76,11 @@ public sealed class LargeAttachmentSender(
     IMicrosoftConnectionServiceAccessor tokens,
     IStagingService staging,
     IHttpClientFactory httpFactory,
-    ILogger<LargeAttachmentSender> log) : ILargeAttachmentSender
+    ILogger<LargeAttachmentSender> log) : IAttachmentSenderProvider
 {
+    /// <summary>The provider this implementation serves, for <see cref="LargeAttachmentSenderRouter"/> (OP2-278).</summary>
+    public ProviderKind Provider => ProviderKind.Microsoft;
+
     /// <summary>
     /// Graph REQUIRES upload-session chunks to be a multiple of 320 KiB. Not a guideline —
     /// a non-conforming chunk is rejected outright.
