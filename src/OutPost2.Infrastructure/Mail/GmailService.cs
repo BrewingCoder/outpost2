@@ -79,7 +79,10 @@ public sealed partial class GmailService(
         return await resp.Content.ReadFromJsonAsync<T>(Json, ct);
     }
 
-    private async Task EnsureAsync(HttpResponseMessage resp, Connection c, CancellationToken ct)
+    private Task EnsureAsync(HttpResponseMessage resp, Connection c, CancellationToken ct) =>
+        EnsureAsync(resp, c, log, ct);
+
+    internal static async Task EnsureAsync(HttpResponseMessage resp, Connection c, ILogger log, CancellationToken ct)
     {
         if (resp.IsSuccessStatusCode) return;
 
@@ -586,13 +589,209 @@ public sealed partial class GmailService(
 
     // ── not yet: sending (OP2-281) and organising (OP2-282) ──────────────────
 
-    public Task SendAsync(Connection connection, OutgoingMail mail, CancellationToken ct = default) =>
-        throw NotYet(connection, "sending mail");
+    // ── sending (OP2-281) ────────────────────────────────────────────────────
 
-    public Task<ReplySent> SendReplyAsync(Connection connection, string messageId, ReplyKind kind, string markdownBody,
+    private const string UploadSend = "https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=multipart";
+
+    /// <summary>Gmail's limit on the attachments of one message; the whole message may be 35 MB.</summary>
+    public const long AttachmentLimitBytes = 25L * 1024 * 1024;
+
+    public async Task SendAsync(Connection connection, OutgoingMail mail, CancellationToken ct = default)
+    {
+        var html = mail.IsHtml ? MarkdownToHtml.Render(mail.Body) : "<div style=\"white-space:pre-wrap\">"
+            + WebUtility.HtmlEncode(mail.Body) + "</div>";
+
+        var message = GmailMime.Compose(connection.AccountIdentifier,
+            mail.To.Select(MailService.ParseRecipient), mail.Cc.Select(MailService.ParseRecipient),
+            mail.Subject, html, mail.Importance);
+
+        using var http = await ClientAsync(connection, ct);
+        await SendRawAsync(http, connection, message, threadId: null, log, ct);
+
+        log.LogInformation("Sent Gmail from {Label} to {Count} recipient(s).", connection.Label, mail.To.Count);
+    }
+
+    public async Task<ReplySent> SendReplyAsync(Connection connection, string messageId, ReplyKind kind, string markdownBody,
         IReadOnlyList<string>? forwardTo = null, RecipientEdit? edit = null,
-        MailImportance importance = MailImportance.Normal, CancellationToken ct = default) =>
-        throw NotYet(connection, kind == ReplyKind.Forward ? "forwarding" : "replying");
+        MailImportance importance = MailImportance.Normal, CancellationToken ct = default)
+    {
+        using var http = await ClientAsync(connection, ct);
+
+        var m = await GetAsync<GMessage>(http, connection, $"messages/{Uri.EscapeDataString(messageId)}?format=full", ct)
+            ?? throw new MailException("That message no longer exists, so there is nothing to reply to.");
+
+        var original = OriginalOf(m);
+        var describe = kind == ReplyKind.Forward ? "forward" : "reply";
+
+        // The same recipient rules, and the same edit semantics, as the Graph path —
+        // PlanRecipients is the one function that decides who stays on a thread (OP2-187).
+        RecipientPlan plan;
+        if (kind == ReplyKind.Forward)
+        {
+            plan = MailService.PlanRecipients(
+                (forwardTo ?? []).Where(x => !string.IsNullOrWhiteSpace(x)).Select(MailService.ParseRecipient).ToList(),
+                [], edit);
+        }
+        else
+        {
+            var (to, cc) = GmailMime.ReplyRecipients(original, kind, connection.AccountIdentifier);
+            plan = MailService.PlanRecipients(to, cc, edit);
+        }
+
+        if (plan.Unmatched.Count > 0)
+            throw new MailException(
+                $"Nothing was sent: nobody on that {describe} is "
+                + $"\"{string.Join("\" or \"", plan.Unmatched)}\". It would go to "
+                + $"{Join(plan.To)}{(plan.Cc.Count > 0 ? $", copying {Join(plan.Cc)}" : "")}. "
+                + "Name one of those exactly, or leave it off to keep everyone.");
+
+        if (plan.To.Count == 0)
+            throw new MailException(
+                $"Nothing was sent: that would leave the {describe} with no recipients at all."
+                + (kind == ReplyKind.Forward ? "" : " Add someone, or take fewer people off."));
+
+        // A forward carries the original's attachments, as Outlook's does. Collected before
+        // anything is sent, so one that cannot be fetched stops the forward rather than
+        // letting it go out silently without it.
+        var carried = kind == ReplyKind.Forward
+            ? await CarriedAttachmentsAsync(http, connection, m, ct)
+            : [];
+
+        var subject = GmailMime.Subject(kind, original.Subject);
+        var html = GmailMime.WithOriginal(MarkdownToHtml.Render(markdownBody), kind, original);
+
+        var message = GmailMime.Compose(connection.AccountIdentifier, plan.To, plan.Cc, subject, html, importance,
+            carried,
+            // Threading: a forward starts a new conversation on the other end, but stays in
+            // the user's own thread, which is what Gmail itself does.
+            inReplyTo: kind == ReplyKind.Forward ? null : original.MessageId,
+            references: kind == ReplyKind.Forward ? null : original.References);
+
+        await SendRawAsync(http, connection, message, m.ThreadId, log, ct);
+
+        log.LogInformation("Sent a Gmail {Kind} from {Label} to {Count} recipient(s).",
+            describe, connection.Label, plan.To.Count + plan.Cc.Count);
+
+        return new ReplySent { Subject = subject, To = plan.To, Cc = plan.Cc, Dropped = plan.Dropped };
+
+        static string Join(IEnumerable<MailRecipient> rs) => string.Join(", ", rs.Select(r => r.Display));
+    }
+
+    /// <summary>The parts of the original a reply or forward needs, from Gmail's full format.</summary>
+    public static GmailMime.Original OriginalOf(GMessage m)
+    {
+        var h = Headers(m.Payload);
+        var (html, plain) = Bodies(m.Payload);
+        return new GmailMime.Original(
+            Subject: Decode(h.GetValueOrDefault("subject")),
+            MessageId: h.GetValueOrDefault("message-id")?.Trim(),
+            References: h.GetValueOrDefault("references"),
+            From: GmailMime.Recipients(h.GetValueOrDefault("from")),
+            ReplyTo: GmailMime.Recipients(h.GetValueOrDefault("reply-to")),
+            To: GmailMime.Recipients(h.GetValueOrDefault("to")),
+            Cc: GmailMime.Recipients(h.GetValueOrDefault("cc")),
+            Date: h.GetValueOrDefault("date"),
+            Html: html,
+            Plain: plain);
+    }
+
+    private async Task<List<MimeKit.MimeEntity>> CarriedAttachmentsAsync(
+        HttpClient http, Connection c, GMessage m, CancellationToken ct)
+    {
+        var parts = Walk(m.Payload).Where(IsAttachment).ToList();
+        if (parts.Sum(p => p.Body?.Size ?? 0) > AttachmentLimitBytes)
+            throw new MailException(
+                "Nothing was sent: the original's attachments are over Gmail's 25 MB limit, so it can't be forwarded with them.");
+
+        var carried = new List<MimeKit.MimeEntity>();
+        foreach (var p in parts)
+        {
+            var bytes = p.Body?.Data is { } inline
+                ? FromBase64Url(inline)
+                : p.Body?.AttachmentId is { } gid
+                    ? (await GetAsync<GBody>(http, c,
+                          $"messages/{Uri.EscapeDataString(m.Id)}/attachments/{Uri.EscapeDataString(gid)}", ct))?.Data is { } data
+                        ? FromBase64Url(data)
+                        : null
+                    : null;
+
+            if (bytes is null)
+                throw new MailException(
+                    $"Nothing was sent: the original's attachment \"{Decode(p.Filename)}\" couldn't be fetched to forward with it.");
+
+            // An attached message stays a message: RFC 2046 does not allow message/rfc822 to
+            // be base64-encoded, so it is carried as a message part rather than a file.
+            if (string.Equals(p.MimeType, "message/rfc822", StringComparison.OrdinalIgnoreCase))
+            {
+                using var ms = new MemoryStream(bytes);
+                carried.Add(new MimeKit.MessagePart { Message = await MimeKit.MimeMessage.LoadAsync(ms, ct) });
+            }
+            else
+            {
+                carried.Add(GmailMime.Attachment(
+                    Decode(p.Filename) is { Length: > 0 } n ? n : "attachment",
+                    p.MimeType ?? "application/octet-stream", new MemoryStream(bytes)));
+            }
+        }
+
+        return carried;
+    }
+
+    /// <summary>
+    /// Sends a whole message through Gmail's upload endpoint: JSON metadata (the thread)
+    /// and the raw RFC 822 message in one multipart/related request, which is the only
+    /// form that carries both and takes up to Gmail's 35 MB.
+    /// <para>
+    /// The OP2-262 rule applies from the moment the request starts: an answer that is a
+    /// clear refusal (4xx) means it did not go; no answer, or a 5xx after the message was
+    /// handed over, means it MAY have gone, and that is a <see cref="MailMaybeSentException"/>
+    /// — never a failure anyone should retry.
+    /// </para>
+    /// </summary>
+    internal static async Task<string?> SendRawAsync(
+        HttpClient http, Connection c, MimeKit.MimeMessage message, string? threadId, ILogger log, CancellationToken ct)
+    {
+        await using var raw = new MemoryStream();
+        await GmailMime.WriteAsync(message, raw, ct);
+        raw.Position = 0;
+        return await SendRawAsync(http, c, raw, threadId, log, ct);
+    }
+
+    internal static async Task<string?> SendRawAsync(
+        HttpClient http, Connection c, Stream raw, string? threadId, ILogger log, CancellationToken ct)
+    {
+        var metadata = new StringContent(
+            threadId is null ? "{}" : JsonSerializer.Serialize(new { threadId }), Encoding.UTF8, "application/json");
+        var mime = new StreamContent(raw);
+        mime.Headers.ContentType = new MediaTypeHeaderValue("message/rfc822");
+
+        using var body = new MultipartContent("related") { metadata, mime };
+
+        HttpResponseMessage resp;
+        try
+        {
+            resp = await http.PostAsync(UploadSend, body, ct);
+        }
+        catch (Exception ex) when (ex is HttpRequestException || (ex is TaskCanceledException && !ct.IsCancellationRequested))
+        {
+            log.LogError(ex, "Gmail send for {Label} may or may not have gone: no answer.", c.Label);
+            throw new MailMaybeSentException(c.Label);
+        }
+
+        using (resp)
+        {
+            if ((int)resp.StatusCode >= 500)
+            {
+                log.LogError("Gmail send for {Label} answered HTTP {Status} after the message was handed over.",
+                    c.Label, (int)resp.StatusCode);
+                throw new MailMaybeSentException(c.Label);
+            }
+
+            await EnsureAsync(resp, c, log, ct);
+            var sent = await resp.Content.ReadFromJsonAsync<GRef>(Json, ct);
+            return sent?.Id;
+        }
+    }
 
     public Task<ClearPreview> PreviewClearAsync(Connection connection, ClearTarget target, CancellationToken ct = default) =>
         throw NotYet(connection, "clearing mail");

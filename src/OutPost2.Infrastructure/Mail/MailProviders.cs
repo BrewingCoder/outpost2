@@ -39,6 +39,15 @@ public sealed class MailProviderNotSupportedException(Connection connection)
 }
 
 /// <summary>
+/// A send whose request reached the mailbox and got no clear answer — a dropped connection
+/// mid-upload, a timeout, a 5xx (OP2-262, OP2-281). The message may well be in the
+/// recipients' inboxes, so this must never be reported as a plain failure: retrying it is
+/// how a second copy goes out.
+/// </summary>
+public sealed class MailMaybeSentException(string label)
+    : MailException($"{label}: {SendOutcome.MaybeSentMessage}");
+
+/// <summary>
 /// Sends each call to the implementation for the connection's provider (OP2-278).
 /// <para>
 /// Deliberately nothing but dispatch. Anything provider-specific — what a folder is, how a

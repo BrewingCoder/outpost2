@@ -123,6 +123,9 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Files.IDownloadTicketService,
     OutPost2.Infrastructure.Files.DownloadTicketService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IAttachmentSenderProvider,
                            OutPost2.Infrastructure.Mail.LargeAttachmentSender>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IAttachmentSenderProvider,
+                           OutPost2.Infrastructure.Mail.GmailAttachmentSender>();
+builder.Services.AddHttpClient("gmail-upload").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromMinutes(10));
 builder.Services.AddScoped<OutPost2.Infrastructure.Mail.ILargeAttachmentSender,
                            OutPost2.Infrastructure.Mail.LargeAttachmentSenderRouter>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Jobs.IJobService, OutPost2.Infrastructure.Jobs.JobService>();
