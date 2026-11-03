@@ -178,6 +178,7 @@ public sealed class OutPostDbContext(DbContextOptions<OutPostDbContext> options)
             e.HasKey(t => t.TokenHash);
             e.Property(t => t.TokenHash).HasMaxLength(64);
             e.Property(t => t.Name).HasMaxLength(200);
+            e.Property(t => t.FileName).HasMaxLength(300);
             e.Property(t => t.UsedFrom).HasMaxLength(200);
 
             // Counting a user's unspent tickets, and sweeping the expired ones, are the

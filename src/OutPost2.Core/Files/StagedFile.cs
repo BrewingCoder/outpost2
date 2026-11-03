@@ -19,7 +19,11 @@ public sealed class StagedFile
     /// <summary>What the user calls it. Defaulted from the filename, editable, matched loosely by voice.</summary>
     public required string Name { get; set; }
 
-    /// <summary>Original filename, used verbatim as the attachment name.</summary>
+    /// <summary>
+    /// The attachment's filename as recipients see it — distinct from <see cref="Name"/>,
+    /// which is the handle. Given an extension from the bytes when it arrived without one
+    /// (OP2-277).
+    /// </summary>
     public required string FileName { get; init; }
 
     public required string ContentType { get; init; }

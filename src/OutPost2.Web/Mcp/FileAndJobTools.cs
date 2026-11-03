@@ -26,10 +26,11 @@ public sealed class FileAndJobTools(
         ?? throw new InvalidOperationException("No authenticated user on this MCP request.");
 
     [McpServerTool(Name = "stage_file", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
-    [Description("Get a one-use link for putting a file into the user's staging area, so it can be attached to mail. Use this when YOU have a file — one you generated, or one on the machine you are running on. Returns a URL to PUT the bytes to, and the name to pass to send_mail_with_attachments. This server cannot read your filesystem, so you must send the bytes yourself.")]
+    [Description("Get a one-use link for putting a file into the user's staging area, so it can be attached to mail. Use this when YOU have a file — one you generated, or one on the machine you are running on. Returns a URL to PUT the bytes to, and the name to pass to send_mail_with_attachments. This server cannot read your filesystem, so you must send the bytes yourself. Give fileName WITH its extension: it is the attachment's filename as recipients see it.")]
     public async Task<string> StageFile(
-        [Description("What to call it, e.g. 'quarterly report'. This is the name you will pass to send_mail_with_attachments.")] string name,
+        [Description("The handle to attach it by, e.g. 'quarterly report'. This is what you will pass to send_mail_with_attachments. Also used as the filename when fileName is not given.")] string name,
         [Description("How big the file is, in bytes. The link will refuse anything larger.")] long sizeBytes,
+        [Description("The attachment's filename as recipients will see it, including its extension, e.g. 'Q3 report.pdf'. Defaults to name. Without an extension recipients may not be able to open the file.")] string? fileName = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -37,6 +38,8 @@ public sealed class FileAndJobTools(
 
         if (name.Trim().Length > 120)
             return "That name is too long. Something short enough to say out loud.";
+
+        if (FileNameProblem(fileName) is { } badName) return badName;
 
         if (sizeBytes <= 0)
             return "Tell me how many bytes it is, so the link can refuse anything bigger. "
@@ -56,12 +59,14 @@ public sealed class FileAndJobTools(
 
         try
         {
-            var (ticket, token) = await tickets.MintAsync(UserId, name.Trim(), sizeBytes, ct);
+            var (ticket, token) = await tickets.MintAsync(
+                UserId, name.Trim(), sizeBytes, fileName?.Trim(), ct);
 
             // The URL, the method, and the name back — explicitly. Deriving the name from a
             // filename later would make the caller guess at what to pass.
             return $"PUT the bytes to {urls.Base}/files/stage/{token}\n"
                  + $"Then attach it as \"{ticket.Name}\".\n"
+                 + FileNameNote(ticket.FileName ?? ticket.Name)
                  + $"The link is good for one upload of up to {sizeBytes} bytes and expires in "
                  + $"{(int)UploadTicket.Lifetime.TotalMinutes} minutes. For example:\n"
                  + $"  curl -X PUT --data-binary @yourfile {urls.Base}/files/stage/{token}\n"
@@ -72,6 +77,34 @@ public sealed class FileAndJobTools(
             return ex.Message;
         }
     }
+
+    /// <summary>
+    /// Refuses a filename that is not one: a path, or something with control characters in
+    /// it. Recipients see this verbatim, so it has to be a plain name.
+    /// </summary>
+    public static string? FileNameProblem(string? fileName)
+    {
+        if (fileName is null) return null;
+        var f = fileName.Trim();
+        if (f.Length == 0) return "Give the filename, or leave it out to use the name.";
+        if (f.Length > 200) return "That filename is too long.";
+        if (f.Any(char.IsControl) || f.IndexOfAny(['/', '\\']) >= 0)
+            return "Give just the filename, with no folder and no control characters, e.g. 'Q3 report.pdf'.";
+        return null;
+    }
+
+    /// <summary>
+    /// What recipients will see, said before the upload rather than discovered after the
+    /// send (OP2-277). When there is no extension the bytes will usually supply one, and the
+    /// caller is told so, and told what to do when they cannot.
+    /// </summary>
+    public static string FileNameNote(string fileName) =>
+        FileTypes.HasExtension(fileName)
+            ? $"Recipients will see it as \"{fileName}\".\n"
+            : $"\"{fileName}\" has no extension. If the file is {FileTypes.Recognised}, the right "
+              + "one is added when it arrives and the PUT's reply says the filename used; for "
+              + "anything else, ask for a new link with fileName including the extension, or "
+              + "recipients may not be able to open it.\n";
 
     /// <summary>
     /// The largest single upload a ticket will admit.
@@ -92,7 +125,8 @@ public sealed class FileAndJobTools(
                  + "or, if you have the file yourself, call stage_file and push the bytes.";
 
         return "Staged files:\n" + string.Join("\n",
-            files.Select(f => $"- {f.Name} ({f.FileName}, {f.HumanSize})"));
+            files.Select(f => $"- {f.Name} ({f.FileName}, {f.HumanSize})"
+                + (FileTypes.HasExtension(f.FileName) ? "" : " — no file extension, so recipients may not be able to open it")));
     }
 
     [McpServerTool(Name = "send_mail_with_attachments", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
@@ -166,7 +200,8 @@ public sealed class FileAndJobTools(
         return $"Sending from {c.Label} with {found.Count} attachment{(found.Count == 1 ? "" : "s")} ({size}){MailTools.Marked(level)}. " +
                (totalBytes > 8 * 1024 * 1024
                    ? "That'll take a minute — ask me for the queue to check on it."
-                   : "I'll have it in your queue.");
+                   : "I'll have it in your queue.")
+               + NoExtensionNote(found);
     }
 
     [McpServerTool(Name = "check_queue", ReadOnly = true, OpenWorld = true)]
@@ -209,6 +244,21 @@ public sealed class FileAndJobTools(
             ? ""
             : $" It was queued at {queued.Wire()} importance, and that cannot be changed now — "
               + $"it is not going as {asked.Wire()} importance.";
+    }
+
+    /// <summary>
+    /// Said with the send, not swallowed (OP2-277). Not a refusal: a file with no extension
+    /// can be deliberate, and by now one could only have survived staging if its contents
+    /// were not recognisable — but the user should hear it from us, not from a recipient.
+    /// </summary>
+    public static string NoExtensionNote(IEnumerable<Core.Files.StagedFile> files)
+    {
+        var bare = files.Where(f => !FileTypes.HasExtension(f.FileName)).Select(f => $"\"{f.FileName}\"").ToList();
+        return bare.Count == 0
+            ? ""
+            : $" Note: {string.Join(", ", bare)} {(bare.Count == 1 ? "has" : "have")} no file extension, "
+              + "so recipients may not be able to open "
+              + (bare.Count == 1 ? "it." : "them.");
     }
 
     private static List<string> Split(string? csv) =>

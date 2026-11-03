@@ -1,3 +1,4 @@
+using OutPost2.Core.Files;
 using System.Security.Cryptography;
 using OutPost2.Core.Connections;
 using OutPost2.Infrastructure.Connections;
@@ -43,11 +44,16 @@ public static class FileEndpoints
                     // quota's worth of someone else's disk.
                     await using var capped = new CappedStream(ctx.Request.Body, ticket.MaxBytes);
 
+                    // The filename agreed at mint wins, then a header, then the handle
+                    // (OP2-277). The staging service adds an extension from the bytes if
+                    // whichever it is has none.
                     var staged = await staging.UploadAsync(
                         ticket.UserId, ticket.Name,
-                        ctx.Request.Headers["X-File-Name"].ToString() is { Length: > 0 } given
-                            ? Path.GetFileName(given)
-                            : ticket.Name,
+                        ticket.FileName is { Length: > 0 } agreed
+                            ? agreed
+                            : ctx.Request.Headers["X-File-Name"].ToString() is { Length: > 0 } given
+                                ? Path.GetFileName(given)
+                                : ticket.Name,
                         string.IsNullOrWhiteSpace(ctx.Request.ContentType)
                             ? "application/octet-stream"
                             : ctx.Request.ContentType,
@@ -61,11 +67,21 @@ public static class FileEndpoints
 
                     // The name back, explicitly, because that is what the caller passes to
                     // send_mail_with_attachments and it must never have to guess it.
+                    //
+                    // The filename too, because it is what recipients will see and may not
+                    // be what was asked for: an extension can have been added (OP2-277).
                     return Results.Ok(new
                     {
                         name = staged.Name,
+                        fileName = staged.FileName,
+                        contentType = staged.ContentType,
                         bytes = staged.SizeBytes,
                         expiresAt = staged.ExpiresAt,
+                        warning = FileTypes.HasExtension(staged.FileName)
+                            ? null
+                            : $"\"{staged.FileName}\" has no file extension and its contents were not "
+                              + "recognised, so recipients may not be able to open it. Stage it "
+                              + "again with fileName including the extension.",
                     });
                 }
                 catch (BodyTooLargeException)
