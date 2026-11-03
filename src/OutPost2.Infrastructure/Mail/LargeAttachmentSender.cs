@@ -29,7 +29,17 @@ public interface ILargeAttachmentSender
         CancellationToken ct = default);
 }
 
-public sealed record SendOutcome(bool Ok, string? Error, bool Retryable, string? DraftId);
+/// <param name="MaybeSent">
+/// The failure came after the send request had gone to the mailbox, with no answer to say
+/// whether it was acted on (OP2-262). Such a send may have reached its recipients, so it
+/// must never be called retryable or reported as "nothing was sent".
+/// </param>
+public sealed record SendOutcome(bool Ok, string? Error, bool Retryable, string? DraftId, bool MaybeSent = false)
+{
+    public const string MaybeSentMessage =
+        "The mailbox stopped answering after the message was handed to it, so it may have been "
+        + "sent. Check Sent Items before sending it again.";
+}
 
 /// <summary>
 /// Everything a resumed send needs to pick up where the last attempt stopped (OP2-101).
@@ -112,6 +122,12 @@ public sealed class LargeAttachmentSender(
         var state = resume ?? new SendResumeState();
         string? draftId = null;
         var retryable = true;
+
+        // Set immediately before the send request goes out. From then on an exception is
+        // not a failure we understand: the mailbox may have sent the message and we may
+        // simply not have heard (OP2-262).
+        var posted = false;
+        var uncertain = false;
 
         async Task Save(CancellationToken c)
         {
@@ -276,6 +292,7 @@ public sealed class LargeAttachmentSender(
             // ── send ────────────────────────────────────────────────────────
             progress?.Report((95, "sending"));
 
+            posted = true;
             using var sendResp = await http.PostAsync($"me/messages/{draftId}/send", null, ct);
             if (!sendResp.IsSuccessStatusCode)
             {
@@ -300,6 +317,16 @@ public sealed class LargeAttachmentSender(
             // The draft becomes the sent item on success, so there is nothing to clean up.
             return new SendOutcome(true, null, false, null);
         }
+        catch (Exception ex) when (posted)
+        {
+            // A timeout or a dropped connection on the send itself. Not retryable, and the
+            // draft is kept: if it did not go, it is still there to send from Outlook; if it
+            // did, it has already become the sent item.
+            log.LogError(ex, "Send for {Label} may or may not have gone: no answer to the send request.", connection.Label);
+            retryable = false;
+            uncertain = true;
+            return new SendOutcome(false, SendOutcome.MaybeSentMessage, false, draftId, MaybeSent: true);
+        }
         catch (Exception ex)
         {
             log.LogError(ex, "Send failed for {Label}.", connection.Label);
@@ -315,7 +342,7 @@ public sealed class LargeAttachmentSender(
             //
             // CancellationToken.None: the usual reason for being here is that ct was
             // cancelled, and a cleanup that cancels itself never cleans anything up.
-            if (draftId is not null && !retryable)
+            if (draftId is not null && !retryable && !uncertain)
                 await TryDeleteDraftAsync(http, draftId, CancellationToken.None);
         }
 
