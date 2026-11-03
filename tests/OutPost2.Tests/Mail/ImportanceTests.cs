@@ -216,4 +216,21 @@ public sealed class ImportanceTests
         var back = JsonSerializer.Deserialize<SendMailPayload>(JsonSerializer.Serialize(payload))!;
         Assert.Equal(MailImportance.High, back.Importance);
     }
+
+    [Fact]
+    public void Joining_a_queued_send_says_when_the_importance_asked_for_is_not_the_one_it_goes_with()
+    {
+        // Asked again with only the importance changed: it joins the queued job (no second
+        // copy), and says that the importance did not change rather than letting the user
+        // believe it went flagged.
+        var queued = JsonSerializer.Serialize(
+            new SendMailPayload(Guid.NewGuid(), ["a@example.com"], [], "s", "b", [], MailImportance.Normal));
+
+        var said = FileAndJobTools.ImportanceUnchanged(queued, MailImportance.High);
+        Assert.Contains("queued at normal importance", said);
+        Assert.Contains("not going as high importance", said);
+
+        Assert.Equal("", FileAndJobTools.ImportanceUnchanged(queued, MailImportance.Normal));
+        Assert.Equal("", FileAndJobTools.ImportanceUnchanged("not json", MailImportance.High));
+    }
 }

@@ -4,6 +4,7 @@ using System.Text;
 using ModelContextProtocol.Server;
 using OutPost2.Core.Connections;
 using OutPost2.Core.Jobs;
+using OutPost2.Core.Mail;
 using OutPost2.Infrastructure.Connections;
 using OutPost2.Core.Files;
 using OutPost2.Infrastructure.Files;
@@ -153,8 +154,8 @@ public sealed class FileAndJobTools(
             new SendMailPayload(c.Id, recipients, Split(cc), subject, body, found.Select(f => f.Id).ToList(), level),
             key, c.Label, requiresApproval: false, ct);
 
-        if (existed && job.IsTerminal) return job.Spoken();
-        if (existed) return $"Already underway. {job.Spoken()}";
+        if (existed && job.IsTerminal) return job.Spoken() + ImportanceUnchanged(job.Payload, level);
+        if (existed) return $"Already underway. {job.Spoken()}" + ImportanceUnchanged(job.Payload, level);
 
         // Never block on the upload. A 150 MB attachment takes minutes and would blow
         // through any tool timeout long before it finished.
@@ -186,6 +187,28 @@ public sealed class FileAndJobTools(
                           urls.Jobs);
 
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// Said when a request joins a job already queued but asked for a different importance
+    /// (OP2-276). Joining is right — it is what stops a second copy going out — but the
+    /// importance it goes with is the first request's, and the user must not believe it
+    /// went flagged when it did not.
+    /// </summary>
+    public static string ImportanceUnchanged(string payloadJson, Core.Mail.MailImportance asked)
+    {
+        Core.Mail.MailImportance queued;
+        try
+        {
+            queued = System.Text.Json.JsonSerializer.Deserialize<SendMailPayload>(payloadJson)?.Importance
+                     ?? Core.Mail.MailImportance.Normal;
+        }
+        catch (System.Text.Json.JsonException) { return ""; }
+
+        return queued == asked
+            ? ""
+            : $" It was queued at {queued.Wire()} importance, and that cannot be changed now — "
+              + $"it is not going as {asked.Wire()} importance.";
     }
 
     private static List<string> Split(string? csv) =>
