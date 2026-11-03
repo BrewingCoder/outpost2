@@ -32,7 +32,8 @@ organisation, and you may not run it as a service for other people. See
 
 ## What it does
 
-**58 tools across three providers**, all resolved through the same named-connection model.
+**58 tools across four providers** — Microsoft 365, Gmail, YouTrack and GitHub — all
+resolved through the same named-connection model.
 
 | Area | Tools |
 |---|---|
@@ -51,6 +52,21 @@ organisation, and you may not run it as a service for other people. See
 | Code (GitHub) | `github_repositories` `github_repo_names` `github_issues` `github_pull_requests` `github_commits` `github_item` `github_triage` `github_files` `github_file` |
 | Files and jobs | `stage_file` `list_files` `check_queue` + a web approval queue |
 | Feedback | `report_friction` — the agent files its own bug reports mid-task |
+
+**Gmail** serves every *Mail* row above (OP2-80). Calendar, People and Teams are Microsoft
+Graph through and through, so a Gmail connection is never offered for them. Gmail is not
+Outlook, and the tools say what they did in Gmail's own terms rather than pretending:
+
+- **Labels, not folders.** Moving a message to a label adds the label and takes it out of
+  the Inbox; archiving takes it out of the Inbox; categorising adds a label and leaves it
+  where it was. Deleting a label deletes no mail — the messages stay in All Mail.
+- **Trash and Spam**, not Deleted Items and Junk Email. Gmail empties Trash after 30 days,
+  and `recover_mail` brings a sender back out of it.
+- **Flags are stars**, which have no due date. **Importance** goes out as the headers
+  Outlook and most apps show; Gmail itself does not display it.
+- `report_junk` moves a message to Spam but **cannot block the sender** — that needs a
+  Gmail settings permission Outpost does not ask for.
+- Exact times are in UTC: Gmail has no mailbox time zone Outpost can read.
 
 Large attachments stream to Graph in 320 KiB-multiple chunks from object storage and never
 buffer in memory, so sending is a resumable job rather than a tool call that times out.
@@ -111,6 +127,15 @@ Vault's address, auth method and mount path are all configuration, so pointing a
 LAN Vault instead of the dev container needs no code change. In production it authenticates
 with a Kubernetes service-account JWT and stores no secret at all.
 
+**Gmail** is optional. It needs a *Web application* OAuth client in Google Cloud Console
+with the Gmail API enabled and `https://<your host>/signin-google` as an authorised
+redirect URI; put its id and secret in `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. Leave
+them blank and Gmail is simply not offered. Gmail's read, modify and send scopes are
+Google *restricted* scopes: until the app passes Google's verification and security
+assessment (OP2-283) it runs in Testing mode, where only listed test users can connect
+and **every sign-in expires after seven days** — the connection then shows as needing a
+reconnect, which is that limit and not a fault.
+
 Two things are on you and are **not** defaults:
 
 - **Back up Vault.** Credentials are encrypted with per-row data keys wrapped by a Transit
@@ -120,8 +145,9 @@ Two things are on you and are **not** defaults:
 ## Design decisions worth knowing
 
 **A connection is not a mailbox.** It is an authorised link to one instance of one
-provider, with a user-chosen name. Microsoft (OAuth), YouTrack and GitHub (PAT) are three
-providers under one model; the same resolver serves all of them unchanged.
+provider, with a user-chosen name. Microsoft and Google (OAuth), YouTrack and GitHub (PAT)
+are four providers under one model; the same resolver serves all of them unchanged, and
+mail is routed to the right provider's implementation by the connection alone.
 
 **Labels are unique per user, defaults are per provider.** My "work" is not your "work",
 and "check email" and "my open tickets" resolve independently. Both are enforced by
@@ -170,6 +196,17 @@ model change with no migration, is invisible until a deploy against a fresh data
 live credential; that workflow checks out with `fetch-depth: 0`, because against a shallow
 clone a history scan passes by examining one commit.
 
+The `Live*` probes run against real accounts and skip unless the dev Vault, the dev
+database and a stored connection are there; secrets come from `~/.claude/credentials.json`.
+`LiveGmailProbe` needs `outpost2_google_client_id` and `outpost2_google_client_secret` in
+it and a Gmail connection made through the app (`OP2_PROBE_LABEL` picks one by name). It
+reads, then stars, labels and moves a real message and puts everything back. It only
+sends — to the account itself, then trashing its own mail — with `OP2_PROBE_SEND=1`:
+
+```
+OP2_PROBE_SEND=1 dotnet test --filter "FullyQualifiedName~LiveGmailProbe"
+```
+
 ## Stack
 
 .NET 10 / ASP.NET Core · Postgres · Garage (S3) · HashiCorp Vault Transit ·
@@ -177,10 +214,11 @@ official MCP C# SDK v2 · Tamp · Cloudflare tunnel
 
 ## Status
 
-In daily use. **848 tests** — the integration suites run against real Postgres, real
+In daily use. **1,076 tests** — the integration suites run against real Postgres, real
 Garage, real Vault and a real YouTrack server, because the things worth proving here are
-the ones a fake cannot. The three that skip are live Microsoft probes, which need a
-mailbox reconnected since the Teams scopes went in.
+the ones a fake cannot. The ones that skip are the live probes, which need real accounts:
+the Microsoft ones a mailbox reconnected since the Teams scopes went in, `LiveGmailProbe`
+a Gmail connection (and `OP2_PROBE_SEND=1` for its sending half).
 
 | Area | State |
 |---|---|
@@ -197,7 +235,9 @@ mailbox reconnected since the Teams scopes went in.
 | Teams chats: list, read, send | done |
 | Teams channels | deferred — needs admin consent, see above |
 | Telegram notifications (admin approval, job finished) | done; optional |
-| Gmail, Atlassian, Azure DevOps | planned |
+| Gmail: connect, read, search, send, organise | built against the Gmail API documentation; **live verification pending** — `LiveGmailProbe` (OP2-284) |
+| Gmail for users outside a test list | blocked on Google's app verification (OP2-283) |
+| Atlassian, Azure DevOps | planned |
 | Cluster deployment | not started |
 
 ## Gotchas found the hard way
@@ -221,6 +261,11 @@ mailbox reconnected since the Teams scopes went in.
 - Graph rejects `$select` combined with `$expand` on `me/mailFolders` with a 400.
 - A Graph **move reissues the message id**. Anything holding the old one is now pointing
   at nothing.
+- Gmail, per its documentation (not yet hit live — see `LiveGmailProbe`): a refresh token
+  is issued only with `access_type=offline`, and on a *returning* account only with
+  `prompt=consent` as well. An **attachment id changes on every fetch** of a message, so
+  attachments are addressed by MIME part id. A `pageToken` is only valid with the query
+  and labels it came from. `maxResults=0` is rejected outright.
 
 ## Licence
 
