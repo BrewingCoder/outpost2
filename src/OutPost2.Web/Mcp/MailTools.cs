@@ -602,7 +602,7 @@ public sealed partial class MailTools(
     }
 
     [McpServerTool(Name = "move_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
-    [Description("File a message away. Destination can be 'archive', 'trash' (Deleted Items), 'inbox', 'junk', or the name of any folder in the mailbox. This is how you delete or archive something. Pass the handle from the listing.")]
+    [Description("File a message away. Destination can be 'archive', 'trash' (Deleted Items), 'inbox', 'junk', or the name of any folder in the mailbox. This is how you delete or archive something. On Gmail, moving to a label adds the label and takes the message out of the Inbox, and trash is Gmail's Trash. Pass the handle from the listing.")]
     public async Task<string> MoveMail(
         [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
         [Description("Where to put it: 'archive', 'trash', 'inbox', 'junk', or a folder name.")] string destination = "archive",
@@ -618,7 +618,7 @@ public sealed partial class MailTools(
             string spoken;
 
             if (target is not null)
-                spoken = Spoken(destination);
+                spoken = Spoken(destination, c.Provider);
             else
             {
                 // Only list folders when the destination is not one of the standard ones.
@@ -641,7 +641,7 @@ public sealed partial class MailTools(
             // "put it back" acts on an address that no longer resolves.
             index.Retarget(UserId, item.Ref, movedId);
 
-            return $"Moved \"{item.Subject}\" to {spoken} in {c.Label}. Handle is still {item.Ref}.";
+            return $"{Moved(item.Subject, WellKnown(destination), spoken, c.Label, c.Provider)} Handle is still {item.Ref}.";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
@@ -792,6 +792,13 @@ public sealed partial class MailTools(
                     if (problem is not null) return problem;
                     (parentId, parentPath, under) = (match!.Id, match.Path, $" inside {match.Path}");
                 }
+                else if (c.Provider == ProviderKind.Google)
+                {
+                    // A Gmail label cannot sit inside Inbox or Sent; it goes at the top level,
+                    // and the reply says so rather than claiming "inside the Inbox" (OP2-282).
+                    parentId = null;
+                    under = $" at the top level (Gmail labels can't go inside {Spoken(parent, c.Provider)})";
+                }
                 else
                 {
                     parentPath = folders.FirstOrDefault(f => Same(f.WellKnownName, parentId))?.Path;
@@ -806,7 +813,7 @@ public sealed partial class MailTools(
             var clash = folders.FirstOrDefault(f => Same(f.Path, wanted));
 
             if (clash is not null)
-                return $"{c.Label} already has a folder called {Untrusted.Scrub(clash.Path)} "
+                return $"{c.Label} already has a {MailWords.For(c.Provider).Folder} called {Untrusted.Scrub(clash.Path)} "
                      + $"({clash.MessageCount} message{(clash.MessageCount == 1 ? "" : "s")} in it). "
                      + "You can file into it as it is.";
 
@@ -819,7 +826,7 @@ public sealed partial class MailTools(
 
             var made = await mail.CreateFolderAsync(c, name.Trim(), parentId, ct);
 
-            return $"Made a folder called {Untrusted.Scrub(made.Name)}{under} in {c.Label}. "
+            return $"Made a {MailWords.For(c.Provider).Folder} called {Untrusted.Scrub(made.Name)}{under} in {c.Label}. "
                  + (elsewhere.Count > 0
                      ? $"There {(elsewhere.Count == 1 ? "was already one" : $"were already {elsewhere.Count}")} "
                        + $"of that name — {Untrusted.Scrub(string.Join(", ", elsewhere.Take(4)))} — so "
@@ -855,8 +862,8 @@ public sealed partial class MailTools(
             // Graph lets some of these through, and a mailbox whose Inbox is called
             // something else is one the user has to repair in Outlook by hand.
             if (match!.IsWellKnown)
-                return $"{match.Path} is one of Outlook's own folders, so I can't rename it. "
-                     + "Only folders you made yourself.";
+                return $"{match.Path} is {MailWords.For(c.Provider).OwnFolders}, so I can't rename it. "
+                     + $"Only {MailWords.For(c.Provider).Folder}s you made yourself.";
 
             var renamed = await mail.RenameFolderAsync(c, match.Id, name.Trim(), ct);
 
@@ -887,9 +894,21 @@ public sealed partial class MailTools(
             var (match, problem) = Pick(folders, folder, c.Label);
             if (problem is not null) return problem;
 
-            if (Refuse(match!, confirm) is { } stop) return stop;
+            if (Refuse(match!, confirm, c.Provider) is { } stop) return stop;
 
             await mail.DeleteFolderAsync(c, match!.Id, ct);
+
+            // Deleting a Gmail label deletes no mail: the messages lose the label and stay in
+            // All Mail. Saying "with its messages" there would be the frightening half of a
+            // falsehood (OP2-282).
+            if (c.Provider == ProviderKind.Google)
+                return match.MessageCount > 0
+                    ? $"Deleted the label {Untrusted.Scrub(match.Path)} from {c.Label}"
+                      + (match.ChildCount > 0 ? " and the labels inside it" : "")
+                      + $". Its {match.MessageCount} message{(match.MessageCount == 1 ? " is" : "s are")} "
+                      + "still in All Mail — only the label is gone."
+                    : $"Deleted the empty label {Untrusted.Scrub(match.Path)} from {c.Label}"
+                      + (match.ChildCount > 0 ? " and the labels inside it." : ".");
 
             return match.MessageCount > 0
                 ? $"Deleted {Untrusted.Scrub(match.Path)} from {c.Label}, with its "
@@ -961,7 +980,7 @@ public sealed partial class MailTools(
                     return $"Nothing from \"{Untrusted.Scrub(from)}\"{where}{when} in {c.Label}. "
                          + "Nothing to delete.";
 
-                return Proposal(from, c.Label, where, when, preview, folders);
+                return Proposal(from, c.Label, where, when, preview, folders, MailWords.For(c.Provider));
             }
 
             // How many there are decides whether this can be answered in the call at all.
@@ -977,9 +996,10 @@ public sealed partial class MailTools(
             {
                 var done = await mail.ClearAsync(c, target, ct: ct);
 
+                var words = MailWords.For(c.Provider);
                 var said = $"Moved {done.Deleted} message{(done.Deleted == 1 ? "" : "s")} from "
-                         + $"\"{Untrusted.Scrub(from)}\"{where} to Deleted Items in {c.Label}. "
-                         + "They stay there until you empty it, so this is undoable.";
+                         + $"\"{Untrusted.Scrub(from)}\"{where} to {words.Trash} in {c.Label}. "
+                         + words.TrashKeeps;
 
                 // Said before the other notes, because it changes what the listener should
                 // do next: everything else invites another go, this asks them to wait.
@@ -1020,14 +1040,14 @@ public sealed partial class MailTools(
             return $"Started on {expected.Matched} message{(expected.Matched == 1 ? "" : "s")} from "
                  + $"\"{Untrusted.Scrub(from)}\"{where} in {c.Label}. That's too many to do while "
                  + "you wait, so it runs in the background — ask me to check the queue and I'll "
-                 + "tell you how far it has got. Everything goes to Deleted Items.";
+                 + $"tell you how far it has got. Everything goes to {MailWords.For(c.Provider).Trash}.";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
     }
 
     [McpServerTool(Name = "recover_mail", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
-    [Description("Bring a sender's mail back out of Recoverable Items into the Inbox. This is where Outlook keeps messages that were deleted without going through Deleted Items — use it if mail has gone missing after a bulk delete. Call without confirm first to hear how many are there.")]
+    [Description("Bring a sender's mail back out of Recoverable Items into the Inbox. This is where Outlook keeps messages that were deleted without going through Deleted Items — use it if mail has gone missing after a bulk delete. On Gmail it brings mail back out of Trash. Call without confirm first to hear how many are there.")]
     public async Task<string> RecoverMail(
         [Description("Whose mail to bring back: an email address, or part of one.")] string from,
         [Description("Connection name such as 'work'. Omit only if a default mailbox has been set.")] string? connection = null,
@@ -1049,18 +1069,19 @@ public sealed partial class MailTools(
             {
                 var waiting = await mail.RecoverableCountAsync(c, from.Trim(), ct);
 
+                var w = MailWords.For(c.Provider);
                 return waiting == 0
-                    ? $"Nothing from \"{Untrusted.Scrub(from)}\" is in Recoverable Items on {c.Label}. "
-                      + "If it went missing, it may have been there longer than the retention window."
+                    ? $"Nothing from \"{Untrusted.Scrub(from)}\" is in {w.Recoverable} on {c.Label}. "
+                      + w.RecoverableLimit
                     : $"{waiting} message{(waiting == 1 ? "" : "s")} from \"{Untrusted.Scrub(from)}\" "
-                      + $"{(waiting == 1 ? "is" : "are")} in Recoverable Items on {c.Label}. "
+                      + $"{(waiting == 1 ? "is" : "are")} in {w.Recoverable} on {c.Label}. "
                       + "Say go ahead and I'll put them back in the Inbox.";
             }
 
             var done = await mail.RecoverAsync(c, from.Trim(), ct: ct);
 
             if (done.Deleted == 0 && done.Failed == 0)
-                return $"Nothing from \"{Untrusted.Scrub(from)}\" left in Recoverable Items on {c.Label}.";
+                return $"Nothing from \"{Untrusted.Scrub(from)}\" left in {MailWords.For(c.Provider).Recoverable} on {c.Label}.";
 
             var said = $"Put {done.Deleted} message{(done.Deleted == 1 ? "" : "s")} from "
                      + $"\"{Untrusted.Scrub(from)}\" back in the Inbox on {c.Label}.";
@@ -1119,9 +1140,11 @@ public sealed partial class MailTools(
             .Select(f => f.Id)
             .ToList();
 
+        // Gmail has no Clutter, so the Inbox alone is said as the Inbox alone (OP2-282).
+        var hasClutter = folders.Any(f => Same(f.Name, "Clutter") && !f.IsWellKnown);
         return landing.Count == 0
             ? (null, " in the whole mailbox", null)
-            : (landing, " in the Inbox and Clutter", null);
+            : (landing, hasClutter ? " in the Inbox and Clutter" : " in the Inbox", null);
     }
 
     /// <summary>
@@ -1136,8 +1159,9 @@ public sealed partial class MailTools(
     /// </summary>
     public static string Proposal(
         string said, string label, string where, string when, ClearPreview preview,
-        IReadOnlyList<MailFolder> folders)
+        IReadOnlyList<MailFolder> folders, MailWords? words = null)
     {
+        words ??= MailWords.Outlook;
         var sb = new StringBuilder();
 
         if (preview.Matched == 0)
@@ -1201,8 +1225,8 @@ public sealed partial class MailTools(
         }
 
         if (preview.Matched > 0)
-            sb.Append(" Nothing has been moved. Say go ahead and they all go to Deleted Items, "
-                    + "where they stay until you empty it.");
+            sb.Append($" Nothing has been moved. Say go ahead and they all go to {words.Trash}"
+                    + (words.IsGmail ? ", where Gmail keeps them for 30 days." : ", where they stay until you empty it."));
 
         return sb.ToString();
     }
@@ -1342,6 +1366,13 @@ public sealed partial class MailTools(
             var movedId = await mail.MarkAsJunkAsync(c, item.ItemId, ct);
             if (movedId is not null) index.Retarget(UserId, item.Ref, movedId);
 
+            // Gmail's API cannot block a sender, and saying it had would be the one claim the
+            // user would act on and find false (OP2-282).
+            if (c.Provider == ProviderKind.Google)
+                return $"Reported \"{item.Subject}\" as spam in {c.Label}. It's in Spam, and Gmail learns from it. "
+                     + $"Gmail doesn't let Outpost block a sender, so future mail from {item.From} isn't blocked"
+                     + (phishing ? " — and reporting phishing needs Gmail's own \"Report phishing\" menu." : ".");
+
             var said = $"Reported \"{item.Subject}\" as junk in {c.Label}. {item.From} is now blocked " +
                        "and the message is in Junk Email.";
 
@@ -1359,7 +1390,7 @@ public sealed partial class MailTools(
     }
 
     [McpServerTool(Name = "flag_mail", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
-    [Description("Flag a message for follow-up, optionally with a due date, or clear an existing flag. Pass the handle from the listing.")]
+    [Description("Flag a message for follow-up, optionally with a due date, or clear an existing flag. On Gmail this stars it; stars have no due date. Pass the handle from the listing.")]
     public async Task<string> FlagMail(
         [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
         [Description("True to flag, false to clear the flag.")] bool flagged = true,
@@ -1378,6 +1409,14 @@ public sealed partial class MailTools(
         {
             await mail.FlagAsync(c, item.ItemId, flagged, due, ct);
 
+            // Gmail flags are stars, and a star has no due date (OP2-282).
+            if (c.Provider == ProviderKind.Google)
+                return !flagged
+                    ? $"Removed the star from \"{item.Subject}\" in {c.Label}."
+                    : due is null
+                        ? $"Starred \"{item.Subject}\" in {c.Label}."
+                        : $"Starred \"{item.Subject}\" in {c.Label}. Gmail stars have no due date, so {due:d MMM yyyy} wasn't kept.";
+
             if (!flagged) return $"Cleared the flag on \"{item.Subject}\" in {c.Label}.";
 
             return due is null
@@ -1389,7 +1428,7 @@ public sealed partial class MailTools(
     }
 
     [McpServerTool(Name = "list_categories", ReadOnly = true, OpenWorld = true)]
-    [Description("List the Outlook colour categories defined on a mailbox — the names a message may be filed under.")]
+    [Description("List the Outlook colour categories defined on a mailbox — the names a message may be filed under. On Gmail these are your labels.")]
     public async Task<string> ListCategories(
         [Description("Connection name such as 'work'. Omit only if a default mailbox has been set.")] string? connection = null,
         CancellationToken ct = default)
@@ -1404,6 +1443,13 @@ public sealed partial class MailTools(
         {
             var all = await mail.ListCategoriesAsync(c, ct);
             if (all is null) return PaletteUnreadable(c.Label);
+            // Gmail's are labels, and their colours are not Outlook's palette (OP2-282).
+            if (c.Provider == ProviderKind.Google)
+                return all.Count == 0
+                    ? $"No labels of your own on {c.Label} yet."
+                    : $"{all.Count} label{(all.Count == 1 ? "" : "s")} on {c.Label}: "
+                      + Untrusted.Scrub(string.Join(", ", all.Select(x => x.Name))) + ".";
+
             if (all.Count == 0) return $"No categories defined on {c.Label} yet.";
 
             return $"{all.Count} categor{(all.Count == 1 ? "y" : "ies")} on {c.Label}: " +
@@ -1414,7 +1460,7 @@ public sealed partial class MailTools(
     }
 
     [McpServerTool(Name = "categorise_mail", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
-    [Description("Apply or remove Outlook colour categories on a message. Pass the handle from the listing. Categories must already exist on the mailbox unless 'colour' is given, which creates the missing one.")]
+    [Description("Apply or remove Outlook colour categories on a message. Pass the handle from the listing. Categories must already exist on the mailbox unless 'colour' is given, which creates the missing one. On Gmail these are labels, added without taking the message out of the Inbox.")]
     public async Task<string> CategoriseMail(
         [Description("The handle from the listing, e.g. 'a7kq'.")] string message,
         [Description("Category names, comma separated.")] string categories,
@@ -1461,12 +1507,19 @@ public sealed partial class MailTools(
                     // so it happens only when asked for by name — a typo must not quietly
                     // leave "Ugrent" in the palette.
                     if (colour is null)
-                        return $"{c.Label} has no categor{(missing.Count == 1 ? "y" : "ies")} called " +
+                        return c.Provider == ProviderKind.Google
+                            ? $"{c.Label} has no label{(missing.Count == 1 ? "" : "s")} called " +
+                              $"{string.Join(", ", missing)}. It has: " +
+                              string.Join(", ", defined.Select(d => d.Name)) +
+                              ". Say a colour (any) if you want them created — Gmail labels are made without one."
+                            : $"{c.Label} has no categor{(missing.Count == 1 ? "y" : "ies")} called " +
                                $"{string.Join(", ", missing)}. It has: " +
                                string.Join(", ", defined.Select(d => d.Name)) +
                                ". Say which colour to create them with if you want them added.";
 
-                    var preset = CategoryColours.Preset(colour);
+                    // Gmail labels are created without a colour, so any colour said is just
+                    // the go-ahead to create — not a value to validate against Outlook's list.
+                    var preset = c.Provider == ProviderKind.Google ? "none" : CategoryColours.Preset(colour);
                     if (preset is null)
                         return $"\"{colour}\" isn't one of Outlook's category colours. Try: " +
                                string.Join(", ", CategoryColours.All.Take(9)) + ".";
@@ -1756,6 +1809,13 @@ public sealed partial class MailTools(
 
         await mail.SetCategoriesAsync(c, item.ItemId, next, ct);
 
+        // Gmail: labels, which categorising adds without taking the message out of the Inbox
+        // — said, because in Gmail labelling and moving look alike (OP2-282).
+        if (c.Provider == ProviderKind.Google)
+            return next.Count == 0
+                ? $"\"{item.Subject}\" now has none of your labels in {c.Label}."
+                : $"\"{item.Subject}\" is now labelled {string.Join(", ", next)} in {c.Label}, and stays where it was.";
+
         return next.Count == 0
             ? $"\"{item.Subject}\" now has no categories in {c.Label}."
             : $"\"{item.Subject}\" is now categorised {string.Join(", ", next)} in {c.Label}.";
@@ -1835,16 +1895,43 @@ public sealed partial class MailTools(
         _ => null,
     };
 
-    private static string Spoken(string destination) => WellKnown(destination) switch
+    private static string Spoken(string destination) => Spoken(destination, ProviderKind.Microsoft);
+
+    /// <summary>The well-known places, in the provider's own words (OP2-282).</summary>
+    public static string Spoken(string destination, ProviderKind provider)
     {
-        "deleteditems" => "Deleted Items",
-        "junkemail" => "Junk Email",
-        "sentitems" => "Sent Items",
-        "archive" => "Archive",
-        "inbox" => "the Inbox",
-        "drafts" => "Drafts",
-        _ => destination,
-    };
+        var gmail = provider == ProviderKind.Google;
+        return WellKnown(destination) switch
+        {
+            "deleteditems" => gmail ? "Trash" : "Deleted Items",
+            "junkemail" => gmail ? "Spam" : "Junk Email",
+            "sentitems" => gmail ? "Sent" : "Sent Items",
+            "archive" => gmail ? "the archive" : "Archive",
+            "inbox" => "the Inbox",
+            "drafts" => "Drafts",
+            _ => destination,
+        };
+    }
+
+    /// <summary>
+    /// What a move did, said in the provider's terms (OP2-282). In Gmail a message is not
+    /// "moved to" a label, it is labelled and taken out of the Inbox — and a user checking
+    /// on the confirmation needs to know which of those to look for.
+    /// </summary>
+    public static string Moved(string subject, string? wellKnown, string spoken, string label, ProviderKind provider)
+    {
+        if (provider != ProviderKind.Google)
+            return $"Moved \"{subject}\" to {spoken} in {label}.";
+
+        return wellKnown switch
+        {
+            "archive" => $"Archived \"{subject}\" in {label} — it's out of the Inbox and still in All Mail.",
+            "deleteditems" => $"Moved \"{subject}\" to Trash in {label}. Gmail keeps it there for 30 days.",
+            "junkemail" => $"Moved \"{subject}\" to Spam in {label}.",
+            "inbox" => $"Put \"{subject}\" back in the Inbox in {label}.",
+            _ => $"Labelled \"{subject}\" {spoken} and took it out of the Inbox in {label}.",
+        };
+    }
 
     /// <summary>
     /// Why a folder must not be deleted — yet, or at all — or null when it can go (OP2-188).
@@ -1856,13 +1943,32 @@ public sealed partial class MailTools(
     /// second turn, once the user has heard it.
     /// </para>
     /// </summary>
-    public static string? Refuse(MailFolder folder, bool confirm)
+    public static string? Refuse(MailFolder folder, bool confirm) => Refuse(folder, confirm, ProviderKind.Microsoft);
+
+    /// <summary>
+    /// The same gate for every provider — a label with 400 messages on it is asked about
+    /// just as a folder is — but in the provider's terms. In Gmail nothing is deleted except
+    /// labels, and the question has to say so, or the user refuses for the wrong reason.
+    /// </summary>
+    public static string? Refuse(MailFolder folder, bool confirm, ProviderKind provider)
     {
+        var words = MailWords.For(provider);
+
         if (folder.IsWellKnown)
-            return $"{folder.Path} is one of Outlook's own folders, so I can't delete it. "
-                 + "Only folders you made yourself.";
+            return $"{folder.Path} is {words.OwnFolders}, so I can't delete it. "
+                 + $"Only {words.Folder}s you made yourself.";
 
         if (confirm || (folder.MessageCount == 0 && folder.ChildCount == 0)) return null;
+
+        if (words.IsGmail)
+            return $"{folder.Path} isn't empty — it's on "
+                 + $"{folder.MessageCount} message{(folder.MessageCount == 1 ? "" : "s")}"
+                 + (folder.ChildCount > 0
+                     ? $" and has {folder.ChildCount} label{(folder.ChildCount == 1 ? "" : "s")} inside it"
+                     : "")
+                 + ". Deleting it takes the label off those messages — they stay in All Mail — "
+                 + (folder.ChildCount > 0 ? "and deletes the labels inside it. " : "")
+                 + "Nothing has been deleted — ask the user, then say so to go ahead.";
 
         return $"{folder.Path} isn't empty — "
              + $"{folder.MessageCount} message{(folder.MessageCount == 1 ? "" : "s")}"
