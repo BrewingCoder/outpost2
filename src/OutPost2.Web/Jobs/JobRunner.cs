@@ -114,7 +114,7 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
         }
     }
 
-    private static async Task RunSendMailAsync(
+    private async Task RunSendMailAsync(
         IServiceProvider sp, IJobService jobs, Job job, CancellationToken ct)
     {
         var payload = JsonSerializer.Deserialize<SendMailPayload>(job.Payload)
@@ -145,12 +145,13 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
             return;
         }
 
-        var progress = new Progress<(int Percent, string Detail)>(p =>
-            _ = jobs.UpdateProgressAsync(job.Id,
-                p.Percent >= 95 ? JobState.Sending : JobState.Uploading,
-                p.Percent, p.Detail, CancellationToken.None));
-
         await jobs.UpdateProgressAsync(job.Id, JobState.Staging, 0, "preparing", ct);
+
+        // From here every write to the job goes through one gate (OP2-262). They all share
+        // this scope's DbContext, and the fire-and-forget progress writes that used to run
+        // beside the resume and outcome writes are what turned a sent message into
+        // "Failed … Worth trying again".
+        var writes = new JobWrites(jobs, job.Id, log);
 
         // What a previous attempt got as far as. Null on a first run, and unreadable
         // state is treated as none — a resume that cannot be parsed is a send that
@@ -162,30 +163,82 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
             catch (JsonException) { resume = null; }
         }
 
-        var outcome = await sender.SendAsync(connection, new Core.Mail.OutgoingMail
+        SendOutcome outcome;
+        try
         {
-            To = payload.To, Cc = payload.Cc, Subject = payload.Subject, Body = payload.Body, IsHtml = true,
-        }, attachments, resume,
-            (state, c) => jobs.SetResumeStateAsync(job.Id, JsonSerializer.Serialize(state), c),
-            progress, ct);
+            outcome = await sender.SendAsync(connection, new Core.Mail.OutgoingMail
+            {
+                To = payload.To, Cc = payload.Cc, Subject = payload.Subject, Body = payload.Body, IsHtml = true,
+            }, attachments, resume,
+                (state, c) => writes.ResumeAsync(JsonSerializer.Serialize(state), c),
+                writes, ct);
+        }
+        catch (Exception ex)
+        {
+            // The sender handles its own failures, so this is belt and braces — but it
+            // matters which side of the send request it lands on. After it: "may have
+            // gone", never "worth trying again". Before it: an ordinary failure, recorded
+            // through the gate below rather than by RunAsync's catch-all, which would write
+            // on the context while a progress write could still be running on it.
+            log.LogError(ex, "Job {JobId} threw while sending.", job.Id);
+            outcome = writes.MayHaveSent
+                ? new SendOutcome(false, SendOutcome.MaybeSentMessage, false, null, MaybeSent: true)
+                : new SendOutcome(false, ex.Message, true, null);
+        }
 
-        await jobs.CompleteAsync(job.Id, outcome.Ok, outcome.Error, outcome.Retryable, ct);
+        // Shut down before the send request went out: nothing has left the mailbox, and
+        // the job is still Staging or Uploading. Left exactly there, the abandoned-job
+        // sweep resumes it after the restart from its saved state. Recording it as a
+        // failure would turn every deploy during an upload into "Failed: A task was
+        // canceled" for the user to sort out.
+        if (!outcome.Ok && !outcome.MaybeSent && ct.IsCancellationRequested)
+        {
+            await writes.CloseAsync();
+            log.LogInformation("Job {JobId} interrupted by shutdown before sending; left to resume.", job.Id);
+            return;
+        }
+
+        if (!await writes.FinishAsync(outcome.Ok, outcome.Error, outcome.Retryable))
+        {
+            // Nothing else here may record a different outcome in its place — in
+            // particular not the catch-all in RunAsync, which would call it a retryable
+            // failure. The job stays where it was; the user is still told below.
+            log.LogCritical("Job {JobId} {Outcome}, but that could not be recorded.",
+                job.Id, outcome.Ok ? "SENT" : "failed");
+        }
 
         // A send with attachments is a job precisely because it takes long enough that
         // nobody waits for it, and until now there was nowhere to say it had landed
         // (OP2-11 left progress with no destination; OP2-165 gave it one). Failure is
         // worth more than success here: an unsent message the user believes went is the
         // expensive outcome.
-        await sp.GetRequiredService<INotifier>().NotifyAsync(job.UserId, outcome.Ok
-            ? new Notification($"Sent: {job.Description}", Kind: NotificationKind.JobFinished)
-            : new Notification(
-                $"Could not send: {job.Description}",
-                (outcome.Error ?? "No reason given.")
-                + (outcome.Retryable ? " Worth trying again." : "")
-                + " Nothing was sent.",
-                sp.GetRequiredService<PublicUrls>().Jobs,
-                NotificationKind.JobFinished),
-            ct);
+        //
+        // A notification that fails is logged and nothing more. It runs after the outcome
+        // is recorded, and an exception here used to reach the catch-all and overwrite a
+        // Sent job with a retryable failure (OP2-262).
+        try
+        {
+            await sp.GetRequiredService<INotifier>().NotifyAsync(job.UserId, outcome.Ok
+                ? new Notification($"Sent: {job.Description}", Kind: NotificationKind.JobFinished)
+                : outcome.MaybeSent
+                    ? new Notification(
+                        $"May have sent: {job.Description}",
+                        outcome.Error ?? SendOutcome.MaybeSentMessage,
+                        sp.GetRequiredService<PublicUrls>().Jobs,
+                        NotificationKind.JobFinished)
+                    : new Notification(
+                        $"Could not send: {job.Description}",
+                        (outcome.Error ?? "No reason given.")
+                        + (outcome.Retryable ? " Worth trying again." : "")
+                        + " Nothing was sent.",
+                        sp.GetRequiredService<PublicUrls>().Jobs,
+                        NotificationKind.JobFinished),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Job {JobId} finished but its notification could not be delivered.", job.Id);
+        }
     }
 
     /// <summary>

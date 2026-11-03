@@ -171,7 +171,9 @@ public sealed class JobService(OutPostDbContext db, ILogger<JobService> log) : I
 
     public async Task UpdateProgressAsync(
         Guid jobId, JobState state, int percent, string? detail, CancellationToken ct = default) =>
-        await db.Jobs.Where(j => j.Id == jobId)
+        // Never on a finished job. A progress report that lands late must not drag a sent
+        // message back to "Uploading" (OP2-262).
+        await db.Jobs.Where(j => j.Id == jobId && j.CompletedAt == null)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(j => j.State, state)
                 .SetProperty(j => j.PercentComplete, percent)
@@ -183,7 +185,7 @@ public sealed class JobService(OutPostDbContext db, ILogger<JobService> log) : I
                 .SetProperty(j => j.LastProgressAt, DateTimeOffset.UtcNow), ct);
 
     public async Task SetResumeStateAsync(Guid jobId, string? resumeState, CancellationToken ct = default) =>
-        await db.Jobs.Where(j => j.Id == jobId)
+        await db.Jobs.Where(j => j.Id == jobId && j.CompletedAt == null)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(j => j.ResumeState, resumeState)
                 .SetProperty(j => j.LastProgressAt, DateTimeOffset.UtcNow), ct);
@@ -229,7 +231,14 @@ public sealed class JobService(OutPostDbContext db, ILogger<JobService> log) : I
     public async Task CompleteAsync(
         Guid jobId, bool ok, string? error, bool retryable, CancellationToken ct = default)
     {
-        await db.Jobs.Where(j => j.Id == jobId)
+        // The first outcome recorded is final (OP2-262). A send that went and was recorded
+        // as Sent must not be turned into "Failed — worth trying again" by anything that
+        // goes wrong afterwards: that advice, followed, puts a second copy in front of every
+        // recipient. The one exception is a success landing on a job the user cancelled
+        // while it was already sending — what happened matters more than what was asked.
+        var recorded = await db.Jobs
+            .Where(j => j.Id == jobId
+                        && (j.CompletedAt == null || (ok && j.State == JobState.Cancelled)))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(j => j.State, ok ? JobState.Sent : JobState.Failed)
                 .SetProperty(j => j.PercentComplete, ok ? 100 : 0)
@@ -240,6 +249,13 @@ public sealed class JobService(OutPostDbContext db, ILogger<JobService> log) : I
                 // Cleared on success only. A failure keeps it, because that is precisely
                 // the state a retry needs — the draft and the sessions already paid for.
                 .SetProperty(j => j.ResumeState, j => ok ? null : j.ResumeState), ct);
+
+        if (recorded == 0)
+        {
+            log.LogWarning("Job {JobId} had already finished; a later outcome ({Outcome}) was not recorded over it.",
+                jobId, ok ? "sent" : $"failed ({error})");
+            return;
+        }
 
         log.LogInformation("Job {JobId} finished: {Outcome}.", jobId, ok ? "sent" : $"failed ({error})");
     }

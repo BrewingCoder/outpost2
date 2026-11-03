@@ -455,4 +455,78 @@ public class ResumableUploadTests
         Assert.Equal(Session, back.Attachments["a"].UploadUrl);
         Assert.True(back.Attachments["b"].Done);
     }
+
+    // ── after the send request has gone (OP2-262) ───────────────────────────
+
+    [Fact]
+    public async Task No_answer_to_the_send_itself_is_may_have_sent_and_never_retryable()
+    {
+        // The mailbox took the request and the connection died before it answered. The
+        // message may well be in four people's inboxes; "worth trying again" would put a
+        // second copy there.
+        var (sender, wire) = Build((r, _) =>
+        {
+            if (r.RequestUri!.AbsoluteUri.EndsWith("/send"))
+                throw new HttpRequestException("The response ended prematurely.");
+            if (r.RequestUri!.AbsoluteUri.StartsWith(Session))
+                return r.Method == HttpMethod.Get ? Ranges($"0-{FileSize - 1}") : Finished();
+            return Mailbox(r);
+        });
+
+        var outcome = await sender.SendAsync(Conn(), Mail(), [Big()]);
+
+        Assert.False(outcome.Ok);
+        Assert.True(outcome.MaybeSent);
+        Assert.False(outcome.Retryable);
+        Assert.Contains("Check Sent Items", outcome.Error);
+
+        // And the draft is left alone: if it did not go, it is the user's way to send it.
+        Assert.DoesNotContain(wire.Calls, c => c.Method == "DELETE");
+    }
+
+    [Fact]
+    public async Task A_send_the_mailbox_refused_outright_is_a_plain_failure()
+    {
+        // A refusal is an answer: it did not go. That stays an ordinary failure.
+        var (sender, _) = Build((r, _) =>
+        {
+            if (r.RequestUri!.AbsoluteUri.EndsWith("/send"))
+                return Json(HttpStatusCode.BadRequest, """{"error":{"message":"nope"}}""");
+            if (r.RequestUri!.AbsoluteUri.StartsWith(Session))
+                return r.Method == HttpMethod.Get ? Ranges($"0-{FileSize - 1}") : Finished();
+            return Mailbox(r);
+        });
+
+        var outcome = await sender.SendAsync(Conn(), Mail(), [Big()]);
+
+        Assert.False(outcome.Ok);
+        Assert.False(outcome.MaybeSent);
+    }
+
+    [Fact]
+    public async Task Sending_is_reported_before_the_send_request_goes_out()
+    {
+        // JobWrites relies on this ordering to know when "may have gone" begins.
+        var reported = false;
+        var sawSendAfterReport = false;
+
+        var (sender, _) = Build((r, _) =>
+        {
+            if (r.RequestUri!.AbsoluteUri.EndsWith("/send")) sawSendAfterReport = reported;
+            if (r.RequestUri!.AbsoluteUri.StartsWith(Session))
+                return r.Method == HttpMethod.Get ? Ranges($"0-{FileSize - 1}") : Finished();
+            return Mailbox(r);
+        });
+
+        var progress = new SyncProgress(p => { if (p.Percent >= 95) reported = true; });
+        var outcome = await sender.SendAsync(Conn(), Mail(), [Big()], progress: progress);
+
+        Assert.True(outcome.Ok, outcome.Error);
+        Assert.True(sawSendAfterReport);
+    }
+
+    private sealed class SyncProgress(Action<(int Percent, string Detail)> on) : IProgress<(int Percent, string Detail)>
+    {
+        public void Report((int Percent, string Detail) value) => on(value);
+    }
 }

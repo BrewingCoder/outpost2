@@ -189,4 +189,57 @@ public sealed class JobQueueTests : IAsyncLifetime
         // like it had work outstanding.
         Assert.Null((await Reload(sent.Id)).ResumeState);
     }
+
+    // ── the first outcome is final (OP2-262) ────────────────────────────────
+
+    [SkippableFact]
+    public async Task A_sent_job_cannot_be_turned_into_a_retryable_failure_afterwards()
+    {
+        Skip.IfNot(_ready, "Postgres not reachable on localhost:5435");
+
+        // The reported shape: the send went, it was recorded, and then something later
+        // threw and the catch-all recorded "Failed … worth trying again" over it.
+        var job = await Enqueue("final");
+        await _jobs.CompleteAsync(job.Id, true, null, false);
+        await _jobs.CompleteAsync(job.Id, false, "A command is already in progress", true);
+
+        var after = await Reload(job.Id);
+        Assert.Equal(JobState.Sent, after.State);
+        Assert.Null(after.Error);
+        Assert.DoesNotContain("trying again", after.Spoken());
+    }
+
+    [SkippableFact]
+    public async Task A_late_progress_report_does_not_drag_a_finished_job_backwards()
+    {
+        Skip.IfNot(_ready, "Postgres not reachable on localhost:5435");
+
+        var job = await Enqueue("late");
+        await _jobs.CompleteAsync(job.Id, true, null, false);
+        await _jobs.UpdateProgressAsync(job.Id, JobState.Uploading, 40, "uploading report.pdf");
+        await _jobs.SetResumeStateAsync(job.Id, """{"DraftId":"d"}""");
+
+        var after = await Reload(job.Id);
+        Assert.Equal(JobState.Sent, after.State);
+        Assert.Equal(100, after.PercentComplete);
+        Assert.Null(after.ResumeState);
+    }
+
+    [SkippableFact]
+    public async Task A_send_that_went_after_the_user_cancelled_is_recorded_as_sent()
+    {
+        Skip.IfNot(_ready, "Postgres not reachable on localhost:5435");
+
+        // Cancelled while already sending: what happened beats what was asked for.
+        var job = await Enqueue("cancel-then-sent");
+        await _jobs.CancelAsync(_alice, job.Id);
+        await _jobs.CompleteAsync(job.Id, true, null, false);
+        Assert.Equal(JobState.Sent, (await Reload(job.Id)).State);
+
+        // But a failure does not overwrite the cancellation.
+        var other = await Enqueue("cancel-then-failed");
+        await _jobs.CancelAsync(_alice, other.Id);
+        await _jobs.CompleteAsync(other.Id, false, "boom", true);
+        Assert.Equal(JobState.Cancelled, (await Reload(other.Id)).State);
+    }
 }
