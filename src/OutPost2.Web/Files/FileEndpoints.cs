@@ -121,7 +121,15 @@ public static class FileEndpoints
 
                 var c = await connections.GetAsync(ticket.UserId, ticket.ConnectionId, ctx.RequestAborted);
                 var read = c?.Capabilities.FirstOrDefault(x => x.Name == Capabilities.MailRead);
-                if (c is null || c.State != ConnectionState.Consented || read is null || !read.Usable)
+
+                // Active OR Consented, which is what ConnectionResolver means by usable and
+                // what every other read path requires. Demanding Consented alone made this
+                // endpoint refuse every connection on this deployment — all six are Active —
+                // so save_attachment minted links that could never be redeemed. The service
+                // tests passed because they never cross the endpoint.
+                if (c is null
+                    || c.State is not (ConnectionState.Active or ConnectionState.Consented)
+                    || read is null || !read.Usable)
                     return Results.Problem(
                         "The mailbox this link reads from is no longer connected for reading.",
                         statusCode: StatusCodes.Status403Forbidden);
