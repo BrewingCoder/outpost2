@@ -138,8 +138,11 @@ public sealed class MailService(
     IMicrosoftConnectionServiceAccessor tokens,
     IHttpClientFactory httpFactory,
     ILogger<MailService> log,
-    Func<TimeSpan, CancellationToken, Task>? sleep = null) : IMailService
+    Func<TimeSpan, CancellationToken, Task>? sleep = null) : IMailProvider
 {
+    /// <summary>The provider this implementation serves, for <see cref="MailServiceRouter"/> (OP2-278).</summary>
+    public ProviderKind Provider => ProviderKind.Microsoft;
+
     /// <summary>
     /// How a throttle is waited out. Injectable only so the tests for it do not actually
     /// sleep — a unit suite that waits six real seconds to prove a backoff is a suite

@@ -86,6 +86,13 @@ public static class CapabilityCatalog
             [Capabilities.IssuesRead, Capabilities.IssuesWrite, Capabilities.IssuesAdmin],
         ProviderKind.GitHub =>
             [Capabilities.CodeRead, Capabilities.CodeWrite],
+
+        // Mail only, deliberately (OP2-278). Declaring a capability is what makes a tool
+        // able to pick a connection, and every calendar, people and chat tool is written
+        // against Microsoft Graph — a Google connection offered one would be called with
+        // the wrong API entirely.
+        ProviderKind.Google =>
+            [Capabilities.MailRead, Capabilities.MailWrite, Capabilities.MailSend],
         _ => [],
     };
 
@@ -151,7 +158,7 @@ public static class CapabilityCatalog
     /// </summary>
     public static string SpokenExample(ProviderKind provider, string label) => provider switch
     {
-        ProviderKind.Microsoft => $"check {label} email",
+        ProviderKind.Microsoft or ProviderKind.Google => $"check {label} email",
         ProviderKind.YouTrack => $"what's open in {label}",
         ProviderKind.GitHub => $"what pull requests am I blocking on {label}",
         _ => label,
@@ -163,6 +170,7 @@ public static class CapabilityCatalog
         ProviderKind.Microsoft => "Microsoft mail",
         ProviderKind.YouTrack => "YouTrack issue trackers",
         ProviderKind.GitHub => "GitHub pull requests and issues",
+        ProviderKind.Google => "Gmail",
         _ => provider.ToString(),
     };
 

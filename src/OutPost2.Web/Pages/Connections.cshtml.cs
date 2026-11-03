@@ -45,9 +45,14 @@ public class ConnectionsModel(IConnectionStore store) : PageModel
 
         // Every provider is shown, including ones with nothing connected: an empty group
         // is how a user discovers that GitHub is even an option.
+        //
+        // Every provider that can be ADDED, that is — plus any the user already has. A group
+        // for a provider with no way in yet (Gmail, until signing in to Google exists:
+        // OP2-279) would be an empty heading with no button, which reads as broken.
         Groups =
         [
             .. Enum.GetValues<ProviderKind>()
+                .Where(p => Offered.Contains(p) || all.Any(c => c.Provider == p))
                 .Select(p =>
                 {
                     var mine = all.Where(c => c.Provider == p)
@@ -58,6 +63,10 @@ public class ConnectionsModel(IConnectionStore store) : PageModel
                 })
         ];
     }
+
+    /// <summary>The providers a user can add a connection for from this page.</summary>
+    public static readonly IReadOnlySet<ProviderKind> Offered =
+        new HashSet<ProviderKind> { ProviderKind.Microsoft, ProviderKind.YouTrack, ProviderKind.GitHub };
 
     // ── presentation helpers, kept here so the view stays declarative ──────
 
@@ -143,6 +152,7 @@ public class ConnectionsModel(IConnectionStore store) : PageModel
         return c.Provider switch
         {
             ProviderKind.Microsoft => $"{who} · work or school account",
+            ProviderKind.Google => $"{who} · Google account",
             _ => $"{who} on {Host(c.Instance)}",
         };
     }
