@@ -111,6 +111,12 @@ public sealed class StagingService(
         // anyone enumerate or guess at other objects.
         var key = $"{userId:N}/{Convert.ToHexString(RandomNumberGenerator.GetBytes(16))}";
 
+        // The name the recipient sees, completed from the bytes when the caller left the
+        // extension off (OP2-277). Done here, on the buffered copy, so it covers every way
+        // a file gets staged rather than only the ticketed one.
+        fs.Position = 0;
+        (fileName, contentType) = FileTypes.Complete(fileName, contentType, fs);
+
         fs.Position = 0;
         await store.PutAsync(key, fs, contentType, ct);
 

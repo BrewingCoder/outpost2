@@ -13,7 +13,7 @@ public interface IUploadTicketService
     /// Mints a ticket. The plaintext token is returned once and never stored.
     /// </summary>
     Task<(UploadTicket Ticket, string Token)> MintAsync(
-        Guid userId, string name, long maxBytes, CancellationToken ct = default);
+        Guid userId, string name, long maxBytes, string? fileName = null, CancellationToken ct = default);
 
     /// <summary>
     /// Spends a ticket, returning it, or null when the token is unknown, already spent or
@@ -41,7 +41,7 @@ public sealed class UploadTicketService(OutPostDbContext db, ILogger<UploadTicke
     : IUploadTicketService
 {
     public async Task<(UploadTicket Ticket, string Token)> MintAsync(
-        Guid userId, string name, long maxBytes, CancellationToken ct = default)
+        Guid userId, string name, long maxBytes, string? fileName = null, CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow;
 
@@ -68,6 +68,7 @@ public sealed class UploadTicketService(OutPostDbContext db, ILogger<UploadTicke
             TokenHash = Hash(token),
             UserId = userId,
             Name = name.Trim(),
+            FileName = string.IsNullOrWhiteSpace(fileName) ? null : fileName.Trim(),
             MaxBytes = maxBytes,
             ExpiresAt = now.Add(UploadTicket.Lifetime),
         };

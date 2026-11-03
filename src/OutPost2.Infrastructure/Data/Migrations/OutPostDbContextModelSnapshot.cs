@@ -478,6 +478,10 @@ namespace OutPost2.Infrastructure.Data.Migrations
                     b.Property<DateTimeOffset>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("FileName")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
                     b.Property<long>("MaxBytes")
                         .HasColumnType("bigint");
 

@@ -36,6 +36,12 @@ public sealed class UploadTicket
     public required string Name { get; init; }
 
     /// <summary>
+    /// The filename recipients will see, when the caller gave one apart from the handle
+    /// (OP2-277). Null means the handle doubles as the filename, as it always used to.
+    /// </summary>
+    public string? FileName { get; init; }
+
+    /// <summary>
     /// The largest body that may be redeemed against this ticket. Checked while reading, not
     /// from <c>Content-Length</c>, which the sender controls.
     /// </summary>
