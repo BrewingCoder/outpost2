@@ -32,7 +32,7 @@ organisation, and you may not run it as a service for other people. See
 
 ## What it does
 
-**57 tools across three providers**, all resolved through the same named-connection model.
+**58 tools across three providers**, all resolved through the same named-connection model.
 
 | Area | Tools |
 |---|---|
@@ -177,7 +177,7 @@ official MCP C# SDK v2 · Tamp · Cloudflare tunnel
 
 ## Status
 
-In daily use. **771 tests** — the integration suites run against real Postgres, real
+In daily use. **848 tests** — the integration suites run against real Postgres, real
 Garage, real Vault and a real YouTrack server, because the things worth proving here are
 the ones a fake cannot. The three that skip are live Microsoft probes, which need a
 mailbox reconnected since the Teams scopes went in.
