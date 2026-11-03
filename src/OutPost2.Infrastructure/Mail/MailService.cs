@@ -1639,8 +1639,10 @@ public class MailException(string message) : Exception(message);
 /// </summary>
 public sealed class MailThrottledException : MailException
 {
-    public MailThrottledException(string label, TimeSpan? retryAfter, int done = 0, int of = 0)
-        : base(Say(label, retryAfter, done, of))
+    /// <param name="provider">Who is doing the limiting, as the user knows them (OP2-280).</param>
+    public MailThrottledException(string label, TimeSpan? retryAfter, int done = 0, int of = 0,
+        string provider = "Microsoft")
+        : base(Say(label, retryAfter, done, of, provider))
     {
         Label = label;
         RetryAfter = retryAfter;
@@ -1654,7 +1656,7 @@ public sealed class MailThrottledException : MailException
     /// <summary>The seconds to wait, rounded for saying out loud and floored at five.</summary>
     public int Seconds => Math.Max(5, (int)Math.Ceiling((RetryAfter ?? TimeSpan.FromSeconds(30)).TotalSeconds));
 
-    private static string Say(string label, TimeSpan? retryAfter, int done, int of)
+    private static string Say(string label, TimeSpan? retryAfter, int done, int of, string provider)
     {
         var wait = Math.Max(5, (int)Math.Ceiling((retryAfter ?? TimeSpan.FromSeconds(30)).TotalSeconds));
 
@@ -1667,7 +1669,7 @@ public sealed class MailThrottledException : MailException
                 : $"I got through {done} before "
             : "";
 
-        return $"{progress}Microsoft is rate-limiting {label} right now — it is refusing "
+        return $"{progress}{provider} is rate-limiting {label} right now — it is refusing "
              + $"requests because too many have gone through too quickly. Wait about {wait} "
              + "seconds before asking again, and do it in smaller pieces. Retrying straight "
              + "away will only extend the limit.";
