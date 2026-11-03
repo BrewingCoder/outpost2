@@ -197,7 +197,7 @@ public sealed class FileAndJobTools(
             ? $"{totalBytes / 1024} KB"
             : $"{totalBytes / (1024.0 * 1024):0.#} MB";
 
-        return $"Sending from {c.Label} with {found.Count} attachment{(found.Count == 1 ? "" : "s")} ({size}){MailTools.Marked(level)}. " +
+        return $"Sending from {c.Label} with {found.Count} attachment{(found.Count == 1 ? "" : "s")} ({size}){MailTools.Marked(level, c.Provider)}. " +
                (totalBytes > 8 * 1024 * 1024
                    ? "That'll take a minute — ask me for the queue to check on it."
                    : "I'll have it in your queue.")

@@ -493,7 +493,7 @@ public sealed partial class MailTools(
                 Importance = level,
             }, ct);
 
-            return $"Sent from {c.Label} to {string.Join(", ", recipients)}{Marked(level)}.";
+            return $"Sent from {c.Label} to {string.Join(", ", recipients)}{Marked(level, c.Provider)}.";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
@@ -538,13 +538,13 @@ public sealed partial class MailTools(
             // wrong address is off and the right one is on.
             if (!edit.Any)
                 return replyAll
-                    ? $"Replied to everyone on \"{sent.Subject}\" from {c.Label}{Marked(level)}."
-                    : $"Replied to {item.From} on \"{sent.Subject}\" from {c.Label}{Marked(level)}.";
+                    ? $"Replied to everyone on \"{sent.Subject}\" from {c.Label}{Marked(level, c.Provider)}."
+                    : $"Replied to {item.From} on \"{sent.Subject}\" from {c.Label}{Marked(level, c.Provider)}.";
 
             return $"Replied on \"{sent.Subject}\" from {c.Label}. It went to {Who(sent.To)}"
                  + (sent.Cc.Count > 0 ? $", copying {Who(sent.Cc)}" : "")
                  + (sent.Dropped.Count > 0 ? $". Took {Who(sent.Dropped)} off" : "")
-                 + Marked(level) + ".";
+                 + Marked(level, c.Provider) + ".";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
@@ -575,7 +575,7 @@ public sealed partial class MailTools(
             var sent = await mail.SendReplyAsync(
                 c, item.ItemId, ReplyKind.Forward, body ?? "", recipients, null, level, ct);
 
-            return $"Forwarded \"{sent.Subject}\" to {Who(sent.To)} from {c.Label}{Marked(level)}.";
+            return $"Forwarded \"{sent.Subject}\" to {Who(sent.To)} from {c.Label}{Marked(level, c.Provider)}.";
         }
         catch (MailAuthRequiredException ex) { return ex.Message; }
         catch (MailException ex) { return ex.Message; }
@@ -1710,12 +1710,26 @@ public sealed partial class MailTools(
     }
 
     /// <summary>Read back with the confirmation, so "it went out flagged" is something the user was told rather than assumed.</summary>
-    public static string Marked(MailImportance level) => level switch
+    public static string Marked(MailImportance level) => Marked(level, ProviderKind.Microsoft);
+
+    /// <summary>
+    /// The same, per provider. Gmail has no importance flag of its own: Outpost sets the
+    /// Importance and X-Priority headers that Outlook and most clients show, and Gmail's own
+    /// interface does not — so the confirmation says exactly that rather than promising a
+    /// marker the user will not see in Gmail (OP2-281).
+    /// </summary>
+    public static string Marked(MailImportance level, ProviderKind provider)
     {
-        MailImportance.High => ", marked high importance",
-        MailImportance.Low => ", marked low importance",
-        _ => "",
-    };
+        var said = level switch
+        {
+            MailImportance.High => ", marked high importance",
+            MailImportance.Low => ", marked low importance",
+            _ => "",
+        };
+        return said.Length > 0 && provider == ProviderKind.Google
+            ? said + " (shown by Outlook and most mail apps; Gmail itself doesn't display it)"
+            : said;
+    }
 
     /// <summary>For listings: only the exception is said, so a normal line reads as before.</summary>
     public static string Marker(MailImportance level) => level switch
