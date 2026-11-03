@@ -28,6 +28,14 @@
                 <span class="op-pick__how op-pick__how--enf">@Icons.Lock() Enforced by Microsoft</span>
                 <span class="op-field__help">You sign in. Microsoft enforces exactly what you agree to.</span>
             </button>
+            @if (ViewData["GoogleOffered"] is true)
+            {
+                <button class="op-pick" type="button" data-goto-step="gm">
+                    <span class="op-pick__name">Gmail</span>
+                    <span class="op-pick__how op-pick__how--enf">@Icons.Lock() Enforced by Google</span>
+                    <span class="op-field__help">You sign in. Google enforces exactly what you agree to.</span>
+                </button>
+            }
             <button class="op-pick" type="button" data-goto-step="yt">
                 <span class="op-pick__name">YouTrack</span>
                 <span class="op-pick__how op-pick__how--hon">@Icons.Unlock() Honor system</span>
@@ -67,6 +75,32 @@
                 <button class="op-btn op-btn--primary">Continue to Microsoft</button>
             </div>
         </form>
+
+        @* ── step 2: Gmail (OP2-279) ───────────────────────────────── *@
+        @if (ViewData["GoogleOffered"] is true)
+        {
+            <form method="post" action="/connections/google/start" data-step="gm" hidden>
+                @Html.AntiForgeryToken()
+                <div class="op-field">
+                    <label class="op-field__label" for="gm-label">Name it</label>
+                    <input class="op-input op-input--mono" id="gm-label" name="label" required maxlength="60"
+                           autocomplete="off" placeholder="personal" data-callsign data-say="Gmail" />
+                    <span class="op-field__help">You&rsquo;ll say: <span data-say-preview></span></span>
+                    <span data-name-warning hidden></span>
+                </div>
+                <div class="op-note op-note--info" style="margin-top:16px">
+                    @Icons.Lock()
+                    <span>
+                        Google will ask you to agree to reading, managing and sending your Gmail, and lets
+                        you untick any of them. What you untick there, Outpost cannot do.
+                    </span>
+                </div>
+                <div class="op-row op-row--end" style="margin-top:20px">
+                    <button class="op-btn op-btn--secondary" type="button" data-goto-step="1">Back</button>
+                    <button class="op-btn op-btn--primary">Continue to Google</button>
+                </div>
+            </form>
+        }
 
         @* ── step 2: YouTrack ───────────────────────────────────────── *@
         <form method="post" action="/connections/youtrack/add" data-step="yt" hidden>

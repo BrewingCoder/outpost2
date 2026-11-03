@@ -61,6 +61,7 @@ public static class ConnectionEndpoints
             HttpContext ctx,
             IPendingConnectionStore pendings,
             IMicrosoftConnectionService microsoft,
+            IGoogleConnectionService google,
             IConnectionStore connections,
             Guid id) =>
         {
@@ -68,6 +69,19 @@ public static class ConnectionEndpoints
 
             var connection = await connections.GetAsync(userId, id);
             if (connection is null) return Results.NotFound();
+
+            // Gmail (OP2-279). The account's own address pre-selects it on Google's chooser,
+            // and the subject id is what the callback checks the sign-in against.
+            if (connection.Provider == ProviderKind.Google)
+            {
+                if (!google.IsConfigured)
+                    return Results.Redirect("/connections?error=" + Uri.EscapeDataString("Gmail isn't set up on this Outpost server."));
+
+                var again = await pendings.CreateAsync(
+                    userId, ProviderKind.Google, connection.Label, tenantHint: null, connection.HomeAccountId);
+
+                return Results.Redirect(google.BuildAuthorizeUrl(again, connection.AccountIdentifier).ToString());
+            }
 
             if (connection.Provider != ProviderKind.Microsoft)
                 return Results.Redirect("/connections?error=" +
@@ -141,6 +155,10 @@ public static class ConnectionEndpoints
 
             // Consume checks existence, expiry, single-use AND ownership in one step.
             var pending = await pendings.ConsumeAsync(state, ctx.User.UserId());
+
+            // A state minted for another provider's sign-in is not this one's to redeem.
+            if (pending is not null && pending.Provider != ProviderKind.Microsoft) pending = null;
+
             if (pending is null)
             {
                 log.LogWarning("Rejected a Microsoft callback with an unknown, expired, reused or foreign state.");
@@ -165,6 +183,86 @@ public static class ConnectionEndpoints
         }).AllowAnonymous();
 
         // ── add a YouTrack connection (PAT, no redirect) ────────────────────
+        // ── Gmail (OP2-279) ─────────────────────────────────────────────────
+        group.MapPost("/google/start", async (
+            HttpContext ctx,
+            IPendingConnectionStore pendings,
+            IGoogleConnectionService google,
+            IConnectionStore connections,
+            [FromForm] string label) =>
+        {
+            var userId = ctx.User.UserId();
+            label = (label ?? "").Trim();
+
+            if (string.IsNullOrWhiteSpace(label))
+                return Results.BadRequest("A name is required.");
+
+            if (!google.IsConfigured)
+                return Results.Redirect("/connections?error=" + Uri.EscapeDataString("Gmail isn't set up on this Outpost server."));
+
+            // Before Google, as for Microsoft: finding out after consent would waste it.
+            if (await connections.FindByLabelAsync(userId, label) is not null)
+                return Results.Redirect($"/connections?error={Uri.EscapeDataString($"You already have a connection called '{label}'.")}");
+
+            var pending = await pendings.CreateAsync(userId, ProviderKind.Google, label, tenantHint: null);
+            return Results.Redirect(google.BuildAuthorizeUrl(pending).ToString());
+        });
+
+        app.MapGet("/signin-google", async (
+            HttpContext ctx,
+            IPendingConnectionStore pendings,
+            IGoogleConnectionService google,
+            ILoggerFactory logs,
+            string? code,
+            string? state,
+            string? error) =>
+        {
+            var log = logs.CreateLogger("OutPost2.Connections");
+
+            if (!string.IsNullOrEmpty(error))
+            {
+                log.LogWarning("Google returned {Error} on the sign-in callback.", error);
+                return Results.Redirect("/connections?error=" + Uri.EscapeDataString(DescribeGoogle(error)));
+            }
+
+            if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
+                return Results.Redirect("/connections?error=" + Uri.EscapeDataString("Google returned an incomplete response."));
+
+            if (ctx.User.Identity?.IsAuthenticated != true)
+                return Results.Redirect("/signin");
+
+            // Existence, expiry, single use and ownership, then provider: a state minted
+            // for a Microsoft sign-in must not be redeemable here.
+            var pending = await pendings.ConsumeAsync(state, ctx.User.UserId());
+            if (pending is null || pending.Provider != ProviderKind.Google)
+            {
+                log.LogWarning("Rejected a Google callback with an unknown, expired, reused, foreign or mismatched state.");
+                return Results.Redirect("/connections?error=" + Uri.EscapeDataString(
+                    "That sign-in link has expired or was already used. Please try again."));
+            }
+
+            try
+            {
+                var connection = await google.CompleteAsync(pending, code);
+                return Results.Redirect(pending.IsReconnect
+                    ? $"/connections?reconnected={Uri.EscapeDataString(connection.Label)}"
+                    : $"/connections?added={Uri.EscapeDataString(connection.Label)}");
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Our own sentences: what went wrong and what to do.
+                log.LogWarning("Could not complete Google connection '{Label}': {Reason}", pending.Label, ex.Message);
+                return Results.Redirect("/connections?error=" + Uri.EscapeDataString(ex.Message));
+            }
+            catch (Exception ex)
+            {
+                // Logged in full, answered in one line (OP2-259).
+                log.LogError(ex, "Failed to complete Google connection '{Label}'.", pending.Label);
+                return Results.Redirect("/connections?error=" + Uri.EscapeDataString(
+                    "Couldn't reach Google to finish connecting. Please try again in a moment."));
+            }
+        }).AllowAnonymous();
+
         group.MapPost("/youtrack/add", async (
             HttpContext ctx,
             IYouTrackConnectionService youtrack,
@@ -498,4 +596,18 @@ public static class ConnectionEndpoints
         var first = description?.Split('\n').FirstOrDefault()?.Trim();
         return string.IsNullOrWhiteSpace(first) ? $"Microsoft refused the request ({error})." : first;
     }
+
+    /// <summary>
+    /// Google's callback errors, in the user's terms (OP2-279). <c>access_denied</c> is the
+    /// user pressing Cancel, which is a choice rather than a fault and reads like one.
+    /// </summary>
+    public static string DescribeGoogle(string error) => error switch
+    {
+        "access_denied" => "You cancelled at Google, so nothing was connected.",
+        "admin_policy_enforced" =>
+            "Your Google Workspace administrator doesn't allow Outpost to access this account.",
+        "org_internal" =>
+            "This Outpost's Google sign-in is limited to one organisation, and your account isn't in it.",
+        _ => $"Google stopped the sign-in ({error}). Nothing was connected.",
+    };
 }

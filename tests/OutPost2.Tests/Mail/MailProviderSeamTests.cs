@@ -12,6 +12,7 @@ using OutPost2.Infrastructure.Jobs;
 using OutPost2.Infrastructure.Mail;
 using OutPost2.Web;
 using OutPost2.Web.Mcp;
+using OutPost2.Tests;
 
 namespace OutPost2.Tests.Mail;
 
@@ -27,31 +28,6 @@ namespace OutPost2.Tests.Mail;
 public sealed class MailProviderSeamTests
 {
     private static readonly Guid User = Guid.CreateVersion7();
-
-    // ── a stub for the wide interfaces the tools need but these tests do not use ─────
-
-    /// <summary>Implements any interface; members handed a function answer, the rest throw.</summary>
-    public class Stub<T> : DispatchProxy where T : class
-    {
-        private Dictionary<string, Func<object?[], object?>> _impl = [];
-        public List<(string Name, object?[] Args)> Calls { get; } = [];
-
-        public static (T Proxy, Stub<T> Stub) Create(Dictionary<string, Func<object?[], object?>> impl)
-        {
-            var proxy = DispatchProxy.Create<T, Stub<T>>();
-            var stub = (Stub<T>)(object)proxy;
-            stub._impl = impl;
-            return (proxy, stub);
-        }
-
-        protected override object? Invoke(MethodInfo? method, object?[]? args)
-        {
-            Calls.Add((method!.Name, args ?? []));
-            return _impl.TryGetValue(method.Name, out var f)
-                ? f(args ?? [])
-                : throw new NotSupportedException($"{typeof(T).Name}.{method.Name} is not part of this test.");
-        }
-    }
 
     /// <summary>A mail provider that serves a fixed inbox and records what it was asked.</summary>
     private sealed class FakeProvider(ProviderKind kind, string tag) : IMailProvider
