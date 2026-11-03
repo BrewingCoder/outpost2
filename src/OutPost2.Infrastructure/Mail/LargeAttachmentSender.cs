@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using OutPost2.Core.Connections;
 using OutPost2.Core.Files;
+using OutPost2.Core.Mail;
 using OutPost2.Infrastructure.Files;
 
 namespace OutPost2.Infrastructure.Mail;
@@ -194,6 +195,7 @@ public sealed class LargeAttachmentSender(
                     body = new { contentType, content },
                     toRecipients = mail.To.Select(a => new { emailAddress = new { address = a } }).ToArray(),
                     ccRecipients = mail.Cc.Select(a => new { emailAddress = new { address = a } }).ToArray(),
+                    importance = mail.Importance.Wire(),
                 })!.AsObject();
 
                 if (inline.Count > 0)

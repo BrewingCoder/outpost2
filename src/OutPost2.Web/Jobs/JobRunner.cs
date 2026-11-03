@@ -169,6 +169,7 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
             outcome = await sender.SendAsync(connection, new Core.Mail.OutgoingMail
             {
                 To = payload.To, Cc = payload.Cc, Subject = payload.Subject, Body = payload.Body, IsHtml = true,
+                Importance = payload.Importance,
             }, attachments, resume,
                 (state, c) => writes.ResumeAsync(JsonSerializer.Serialize(state), c),
                 writes, ct);

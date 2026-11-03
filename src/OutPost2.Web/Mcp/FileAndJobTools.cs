@@ -103,8 +103,11 @@ public sealed class FileAndJobTools(
         [Description("Names of staged files to attach, comma separated, e.g. 'signed contract'.")] string attachments,
         [Description("Which connection to send from. Required when more than one could send.")] string? connection = null,
         [Description("CC addresses, comma separated.")] string? cc = null,
+        [Description("Importance: 'high' for Outlook's red exclamation mark and High Importance label, 'low', or 'normal' (the default). Only set it when the user asked.")] string? importance = null,
         CancellationToken ct = default)
     {
+        if (MailTools.ImportanceProblem(importance, out var level) is { } bad) return bad;
+
         var resolution = ConnectionResolver.Resolve(
             await connections.ListAsync(UserId, ct), Capabilities.MailSend, connection, isWrite: true);
 
@@ -139,12 +142,15 @@ public sealed class FileAndJobTools(
 
         // Idempotency key derived from the request itself, so a retried tool call after a
         // timeout joins the existing job instead of sending a second copy.
+        // Importance is deliberately NOT part of the key (OP2-276). The same message asked
+        // for again with only its importance changed must join the job already queued,
+        // not put a second copy in front of every recipient.
         var key = Fingerprint(c.Id, recipients, subject, body, found.Select(f => f.Id));
 
         var (job, existed) = await jobs.EnqueueAsync(
             UserId, JobKind.SendMail,
             $"{subject} to {string.Join(", ", recipients)}",
-            new SendMailPayload(c.Id, recipients, Split(cc), subject, body, found.Select(f => f.Id).ToList()),
+            new SendMailPayload(c.Id, recipients, Split(cc), subject, body, found.Select(f => f.Id).ToList(), level),
             key, c.Label, requiresApproval: false, ct);
 
         if (existed && job.IsTerminal) return job.Spoken();
@@ -156,7 +162,7 @@ public sealed class FileAndJobTools(
             ? $"{totalBytes / 1024} KB"
             : $"{totalBytes / (1024.0 * 1024):0.#} MB";
 
-        return $"Sending from {c.Label} with {found.Count} attachment{(found.Count == 1 ? "" : "s")} ({size}). " +
+        return $"Sending from {c.Label} with {found.Count} attachment{(found.Count == 1 ? "" : "s")} ({size}){MailTools.Marked(level)}. " +
                (totalBytes > 8 * 1024 * 1024
                    ? "That'll take a minute — ask me for the queue to check on it."
                    : "I'll have it in your queue.");
