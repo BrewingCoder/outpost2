@@ -127,14 +127,40 @@ Vault's address, auth method and mount path are all configuration, so pointing a
 LAN Vault instead of the dev container needs no code change. In production it authenticates
 with a Kubernetes service-account JWT and stores no secret at all.
 
-**Gmail** is optional. It needs a *Web application* OAuth client in Google Cloud Console
-with the Gmail API enabled and `https://<your host>/signin-google` as an authorised
-redirect URI; put its id and secret in `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. Leave
-them blank and Gmail is simply not offered. Gmail's read, modify and send scopes are
-Google *restricted* scopes: until the app passes Google's verification and security
-assessment (OP2-283) it runs in Testing mode, where only listed test users can connect
-and **every sign-in expires after seven days** — the connection then shows as needing a
-reconnect, which is that limit and not a fault.
+**Gmail** is optional, and set up per deployment — see [Google setup](#google-setup).
+Leave `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` blank and Gmail is simply not offered.
+
+### Google setup
+
+Every OutPost2 deployment uses **its own** Google OAuth client, in its own Google Cloud
+project. There is no shared Outpost app to be approved: whoever runs an instance owns
+the client, and Google's rules apply to that instance alone.
+
+1. In Google Cloud Console, create a project, **enable the Gmail API**, and configure the
+   OAuth consent screen.
+2. Create an OAuth client of type **Web application** with
+   `https://<your host>/signin-google` as an authorised redirect URI.
+3. Put its id and secret in `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
+4. Choose the consent screen's audience — this is the decision that matters:
+
+| Setting | Who can connect | Sign-in lifetime | Google review |
+|---|---|---|---|
+| **External, published to production** — *recommended for personal use* | any Google account, up to 100 in total | lasts until revoked, or six months unused | none for personal use; users click through Google's "unverified app" warning |
+| External, left in **Testing** | only accounts on the test-user list (up to 100) | **expires after seven days**, so every connection needs a weekly reconnect | none |
+| **Internal** (project owned by a Google Workspace organisation) | only that organisation's accounts | lasts until revoked | none, and no warning |
+
+Google exempts an app from verification when it is for personal use — fewer than 100
+users, known to you — or internal to a Workspace organisation. A self-hosted instance
+for yourself, your family or your team is exactly that. The **full** Google review —
+domain and brand verification, a demo video, and an annual independent security
+assessment (CASA) — is only for an app offered to the public, which the licence does not
+allow anyway.
+
+Two practical notes. Outpost's own sign-in is already limited to your allowlisted GitHub
+users, so publishing the Google client to production does not open Gmail to anyone else;
+Google's 100-account cap is an outer bound, not the gate. And the Cloud Console may still
+flag the client as "needs verification" once it asks for Gmail scopes; for personal use
+that can be left alone.
 
 Two things are on you and are **not** defaults:
 
@@ -236,7 +262,7 @@ a Gmail connection (and `OP2_PROBE_SEND=1` for its sending half).
 | Teams channels | deferred — needs admin consent, see above |
 | Telegram notifications (admin approval, job finished) | done; optional |
 | Gmail: connect, read, search, send, organise | built against the Gmail API documentation; **live verification pending** — `LiveGmailProbe` (OP2-284) |
-| Gmail for users outside a test list | blocked on Google's app verification (OP2-283) |
+| Gmail sign-in for your own users | per-deployment Google client; no Google review needed for personal or internal use — see [Google setup](#google-setup) |
 | Atlassian, Azure DevOps | planned |
 | Cluster deployment | not started |
 

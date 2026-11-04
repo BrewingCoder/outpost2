@@ -189,7 +189,9 @@ public class ConnectionsModel(
 
         // Not said for Google, though its sign-in does renew: while the OAuth client is in
         // Google's testing mode it lasts seven days, and saying "renews automatically" over
-        // a connection that will die on Tuesday is exactly the wrong reassurance (OP2-283).
+        // a connection that will die on Tuesday is exactly the wrong reassurance. Whether a
+        // deployment's client is in testing is not something Outpost can see (README,
+        // Google setup), so nothing is claimed either way.
         return c.Provider == ProviderKind.Microsoft ? "Sign-in renews automatically" : null;
     }
 
