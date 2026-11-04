@@ -102,10 +102,10 @@ public sealed class TimestampTests
         // comes from the lookup FAILING, not from the zone being UTC: a mailbox genuinely
         // set to UTC is not an unknown one, and saying so would be a plain lie.
         Assert.Contains("mailbox zone unavailable",
-            MailTools.Unknown(new MailTools.MailboxZone(TimeZoneInfo.Utc, Known: false)));
+            MailTools.Unknown(new OutPost2.Infrastructure.Calendar.MailboxZone(TimeZoneInfo.Utc, Known: false)));
 
-        Assert.Equal("", MailTools.Unknown(new MailTools.MailboxZone(TimeZoneInfo.Utc, Known: true)));
-        Assert.Equal("", MailTools.Unknown(new MailTools.MailboxZone(Eastern, Known: true)));
+        Assert.Equal("", MailTools.Unknown(new OutPost2.Infrastructure.Calendar.MailboxZone(TimeZoneInfo.Utc, Known: true)));
+        Assert.Equal("", MailTools.Unknown(new OutPost2.Infrastructure.Calendar.MailboxZone(Eastern, Known: true)));
     }
 
     [Fact]

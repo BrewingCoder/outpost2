@@ -12,6 +12,7 @@ using OutPost2.Core.Mail;
 using OutPost2.Infrastructure.Connections;
 using OutPost2.Infrastructure.Jobs;
 using OutPost2.Infrastructure.Mail;
+using OutPost2.Infrastructure.Calendar;
 using OutPost2.Web.Connections;
 
 namespace OutPost2.Web.Mcp;
@@ -42,7 +43,7 @@ public sealed partial class MailTools(
     ISearchContinuations pages,
     OutPost2.Infrastructure.Mail.IAttachmentExtractor extractor,
     IJobService jobs,
-    OutPost2.Infrastructure.Calendar.ICalendarService calendar,
+    OutPost2.Infrastructure.Calendar.IMailboxZones mailboxZones,
     OutPost2.Infrastructure.Files.IDownloadTicketService downloads,
     PublicUrls urls)
 {
@@ -2120,28 +2121,12 @@ public sealed partial class MailTools(
         (csv ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     /// <summary>
-    /// The mailbox's own zone, for printing exact times (OP2-264). Never allowed to break a
-    /// read: if the zone cannot be had, UTC is still an exact and unambiguous instant, and
-    /// the offset printed beside it says which one it is.
+    /// The mailbox's own zone, for printing exact times (OP2-264), from the provider that
+    /// owns the account (OP2-285). Never allowed to break a read: if the zone cannot be had,
+    /// UTC is still an exact and unambiguous instant, and the offset printed beside it says
+    /// which one it is — <see cref="IMailboxZones"/> guarantees that, not this method.
     /// </summary>
-    private async Task<MailboxZone> ZoneAsync(Connection c, CancellationToken ct)
-    {
-        // The zone comes from Microsoft Graph's mailbox settings, so only a Microsoft
-        // connection can be asked (OP2-278). Anything else is "not known" — UTC, labelled
-        // as such — rather than a Graph call made with somebody else's token.
-        if (c.Provider != ProviderKind.Microsoft) return new MailboxZone(TimeZoneInfo.Utc, false);
-
-        try { return new MailboxZone(await calendar.TimeZoneAsync(c, ct), true); }
-        catch (OperationCanceledException) { throw; }
-
-        // Known: false, so the surface can say the time is UTC because the zone could not
-        // be had — NOT inferred from the zone being UTC, because a mailbox genuinely set to
-        // UTC is not an unknown one and must not be labelled as one.
-        catch (Exception) { return new MailboxZone(TimeZoneInfo.Utc, false); }
-    }
-
-    /// <summary>A mailbox's zone, and whether it is really the mailbox's.</summary>
-    public readonly record struct MailboxZone(TimeZoneInfo Zone, bool Known);
+    private Task<MailboxZone> ZoneAsync(Connection c, CancellationToken ct) => mailboxZones.ForAsync(c, ct);
 
     /// <summary>
     /// Zones for every mailbox a listing drew from, fetched one after another AFTER the
@@ -2160,7 +2145,7 @@ public sealed partial class MailTools(
     /// <summary>"2 hours ago (2026-11-03 00:44 -05:00)": the phrase, then the value to act on.</summary>
     private static string When(DateTimeOffset at, string label, Dictionary<string, MailboxZone> zones)
     {
-        var z = zones.TryGetValue(label, out var found) ? found : new MailboxZone(TimeZoneInfo.Utc, false);
+        var z = zones.TryGetValue(label, out var found) ? found : MailboxZone.Unavailable;
         return $"{Timestamps.Ago(at, z.Zone)} ({Timestamps.Short(at, z.Zone)}{Unknown(z)})";
     }
 

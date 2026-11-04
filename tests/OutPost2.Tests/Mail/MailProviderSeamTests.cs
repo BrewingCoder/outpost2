@@ -126,7 +126,8 @@ public sealed class MailProviderSeamTests
         public required Stub<ICalendarService> Calendar { get; init; }
     }
 
-    private static World Build(bool googleRegistered = true)
+    private static World Build(bool googleRegistered = true, IMailboxZoneSource? googleZone = null,
+        MailboxZone? graphZone = null)
     {
         var work = Conn("work", ProviderKind.Microsoft);
         var personal = Conn("personal", ProviderKind.Google);
@@ -144,7 +145,11 @@ public sealed class MailProviderSeamTests
         var (calendar, calendarStub) = Stub<ICalendarService>.Create(new()
         {
             ["TimeZoneAsync"] = _ => Task.FromResult(TimeZoneInfo.Utc),
+            ["MailboxZoneAsync"] = _ => Task.FromResult(graphZone ?? new MailboxZone(TimeZoneInfo.Utc, true)),
         });
+        var zones = new MailboxZones(
+            googleZone is null ? [new GraphMailboxZoneSource(calendar)] : [new GraphMailboxZoneSource(calendar), googleZone],
+            NullLogger<MailboxZones>.Instance);
         var (jobs, _) = Stub<IJobService>.Create([]);
         var (downloads, _) = Stub<IDownloadTicketService>.Create([]);
 
@@ -157,7 +162,7 @@ public sealed class MailProviderSeamTests
         };
 
         var tools = new MailTools(http, store, router, new ItemIndex(), new SearchContinuations(),
-            new AttachmentExtractor(NullLogger<AttachmentExtractor>.Instance), jobs, calendar, downloads,
+            new AttachmentExtractor(NullLogger<AttachmentExtractor>.Instance), jobs, zones, downloads,
             new PublicUrls("https://op2.example"));
 
         return new World { Tools = tools, Microsoft = microsoft, Google = google, Calendar = calendarStub };
@@ -205,7 +210,7 @@ public sealed class MailProviderSeamTests
 
         // The exact-timestamp zone is a Microsoft Graph lookup; a Google connection must
         // never be handed to it.
-        Assert.DoesNotContain(w.Calendar.Calls, c => c.Name == "TimeZoneAsync"
+        Assert.DoesNotContain(w.Calendar.Calls, c => c.Name is "TimeZoneAsync" or "MailboxZoneAsync"
             && ((Connection)c.Args[0]!).Provider == ProviderKind.Google);
     }
 
@@ -218,7 +223,7 @@ public sealed class MailProviderSeamTests
         var said = await w.Tools.ReadMail("1");
 
         Assert.Contains("Body from outlook.", said);
-        Assert.Contains(w.Calendar.Calls, c => c.Name == "TimeZoneAsync");
+        Assert.Contains(w.Calendar.Calls, c => c.Name == "MailboxZoneAsync");
     }
 
     [Fact]
@@ -320,5 +325,91 @@ public sealed class MailProviderSeamTests
             [work, Conn("personal", ProviderKind.Google)], Capabilities.MailRead, null, isWrite: false);
         Assert.Equal(ResolutionKind.Single, one.Kind);
         Assert.Equal("work", one.Connection!.Label);
+    }
+
+    // ── whose zone a time prints in (OP2-285) ────────────────────────────────
+
+    private static readonly TimeZoneInfo Eastern =
+        TimeZoneInfo.FindSystemTimeZoneById(OperatingSystem.IsWindows() ? "Eastern Standard Time" : "America/New_York");
+
+    /// <summary>A Google zone source with a fixed answer, recording that it was asked.</summary>
+    private sealed class FixedZone(Func<MailboxZone> answer) : IMailboxZoneSource
+    {
+        public ProviderKind Provider => ProviderKind.Google;
+        public List<string> Asked { get; } = [];
+
+        public Task<MailboxZone> LookupAsync(Connection c, CancellationToken ct = default)
+        {
+            Asked.Add(c.Label);
+            return Task.FromResult(answer());
+        }
+    }
+
+    [Fact]
+    public async Task A_microsoft_mailbox_still_prints_in_its_graph_zone()
+    {
+        var w = Build(graphZone: new MailboxZone(Eastern, true));
+
+        var said = await w.Tools.ListMail("work");
+
+        Assert.Contains("2026-11-03 04:30 -05:00", said);
+        Assert.DoesNotContain("mailbox zone unavailable", said);
+    }
+
+    [Fact]
+    public async Task A_gmail_mailbox_prints_in_its_own_zone_from_its_own_provider()
+    {
+        var google = new FixedZone(() => new MailboxZone(Eastern, true));
+        var w = Build(googleZone: google);
+
+        var listed = await w.Tools.ListMail("personal");
+        var read = await w.Tools.ReadMail("1");
+        var found = await w.Tools.SearchMail("hello", "personal");
+
+        foreach (var said in new[] { listed, read, found })
+        {
+            Assert.Contains("-05:00", said);
+            Assert.DoesNotContain("mailbox zone unavailable", said);
+        }
+        Assert.Contains("personal", google.Asked);
+        Assert.DoesNotContain(w.Calendar.Calls, c => ((Connection)c.Args[0]!).Provider == ProviderKind.Google);
+    }
+
+    [Fact]
+    public async Task A_gmail_zone_lookup_that_throws_still_reads_and_labels_the_utc_instant()
+    {
+        var w = Build(googleZone: new FixedZone(() => throw new HttpRequestException("Google is down")));
+
+        var listed = await w.Tools.ListMail("personal");
+        var read = await w.Tools.ReadMail("1");
+
+        Assert.Contains("Hello from gmail", listed);
+        Assert.Contains("2026-11-03 09:30 +00:00 — UTC, mailbox zone unavailable", listed);
+        Assert.Contains("Body from gmail.", read);
+        Assert.Contains("mailbox zone unavailable", read);
+    }
+
+    [Fact]
+    public async Task A_mailbox_genuinely_set_to_utc_is_not_labelled_unknown()
+    {
+        var w = Build(googleZone: new FixedZone(() => new MailboxZone(TimeZoneInfo.Utc, true)));
+
+        var said = await w.Tools.ListMail("personal");
+
+        Assert.Contains("2026-11-03 09:30 +00:00", said);
+        Assert.DoesNotContain("mailbox zone unavailable", said);
+    }
+
+    [Fact]
+    public async Task Listing_every_mailbox_labels_only_the_one_whose_zone_could_not_be_had()
+    {
+        var w = Build(graphZone: new MailboxZone(Eastern, true),
+            googleZone: new FixedZone(() => MailboxZone.Unavailable));
+
+        var said = await w.Tools.ListMail("all");
+
+        var lines = said.Split('\n');
+        Assert.Contains(lines, l => l.Contains("Hello from outlook") && l.Contains("-05:00") && !l.Contains("unavailable"));
+        Assert.Contains(lines, l => l.Contains("Hello from gmail") && l.Contains("unavailable"));
     }
 }

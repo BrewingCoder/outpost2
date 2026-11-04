@@ -109,6 +109,16 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Mail.IMailService, OutPost2.I
 // per-mailbox timezone it caches therefore lives in IMemoryCache, not in a field.
 builder.Services.AddScoped<OutPost2.Infrastructure.Calendar.ICalendarService,
                            OutPost2.Infrastructure.Calendar.CalendarService>();
+
+// The zone exact mail times print in, asked of the provider that owns the account (OP2-285):
+// Graph mailbox settings for Microsoft, the Calendar time-zone setting for Google. Scoped
+// with the services the sources wrap; each source caches in IMemoryCache.
+builder.Services.AddScoped<OutPost2.Infrastructure.Calendar.IMailboxZoneSource,
+                           OutPost2.Infrastructure.Calendar.GraphMailboxZoneSource>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Calendar.IMailboxZoneSource,
+                           OutPost2.Infrastructure.Calendar.GoogleMailboxZoneSource>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Calendar.IMailboxZones,
+                           OutPost2.Infrastructure.Calendar.MailboxZones>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Teams.ITeamsService,
                            OutPost2.Infrastructure.Teams.TeamsService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.People.IPeopleService,

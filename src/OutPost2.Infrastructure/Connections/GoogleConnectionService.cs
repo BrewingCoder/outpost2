@@ -97,6 +97,13 @@ public sealed class GoogleConnectionService(
     public const string ScopeModify = "https://www.googleapis.com/auth/gmail.modify";
     public const string ScopeSend = "https://www.googleapis.com/auth/gmail.send";
 
+    /// <summary>
+    /// The account's Calendar settings, read-only — no events (OP2-285). Gmail has no zone
+    /// setting of its own; this is where a Google account's time zone lives, so exact mail
+    /// times can print in it. Optional: unticked, mail works and times print as labelled UTC.
+    /// </summary>
+    public const string ScopeCalendarSettings = "https://www.googleapis.com/auth/calendar.settings.readonly";
+
     /// <summary>The full-access scope. Never asked for, but honoured if a token carries it.</summary>
     public const string ScopeFull = "https://mail.google.com/";
 
@@ -105,7 +112,8 @@ public sealed class GoogleConnectionService(
     /// covers reading, so that a user can untick "manage" on Google's screen and still have a
     /// read-only connection rather than none at all.
     /// </summary>
-    public static readonly string[] Scopes = [ScopeOpenId, ScopeEmail, ScopeReadonly, ScopeModify, ScopeSend];
+    public static readonly string[] Scopes =
+        [ScopeOpenId, ScopeEmail, ScopeReadonly, ScopeModify, ScopeSend, ScopeCalendarSettings];
 
     /// <summary>The value stored as the connection's instance. Google has one, so it is a constant.</summary>
     public const string Instance = "google";

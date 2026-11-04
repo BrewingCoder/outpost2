@@ -66,7 +66,10 @@ Outlook, and the tools say what they did in Gmail's own terms rather than preten
   Outlook and most apps show; Gmail itself does not display it.
 - `report_junk` moves a message to Spam but **cannot block the sender** — that needs a
   Gmail settings permission Outpost does not ask for.
-- Exact times are in UTC: Gmail has no mailbox time zone Outpost can read.
+- **Exact times are in the account's own zone**, read from its Google Calendar settings —
+  Gmail has no zone setting of its own. That needs the read-only *Calendar settings*
+  permission (`calendar.settings.readonly`, no events); a connection made without it, or
+  with that box unticked, prints UTC and says so. Reconnect to grant it.
 
 Large attachments stream to Graph in 320 KiB-multiple chunks from object storage and never
 buffer in memory, so sending is a resumable job rather than a tool call that times out.
@@ -136,8 +139,9 @@ Every OutPost2 deployment uses **its own** Google OAuth client, in its own Googl
 project. There is no shared Outpost app to be approved: whoever runs an instance owns
 the client, and Google's rules apply to that instance alone.
 
-1. In Google Cloud Console, create a project, **enable the Gmail API**, and configure the
-   OAuth consent screen.
+1. In Google Cloud Console, create a project, **enable the Gmail API and the Google
+   Calendar API**, and configure the OAuth consent screen. Calendar is only for the
+   account's time-zone setting; without it, Gmail times print as labelled UTC.
 2. Create an OAuth client of type **Web application** with
    `https://<your host>/signin-google` as an authorised redirect URI.
 3. Put its id and secret in `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.

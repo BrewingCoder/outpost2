@@ -48,6 +48,13 @@ public interface ICalendarService
     Task<TimeZoneInfo> TimeZoneAsync(Connection connection, CancellationToken ct = default);
 
     /// <summary>
+    /// The same zone, and whether it really is the mailbox's (OP2-285). <c>Known</c> is false
+    /// when the lookup failed and the zone is the UTC fallback — never inferred from the zone
+    /// being UTC, because a mailbox genuinely set to UTC is not an unknown one.
+    /// </summary>
+    Task<MailboxZone> MailboxZoneAsync(Connection connection, CancellationToken ct = default);
+
+    /// <summary>
     /// Free/busy for a set of addresses over a window (OP2-78). One row per address asked
     /// about, including the ones Exchange could not answer for — a missing row would read
     /// as "free all day", which is the wrong way round for a mistake to fall.
@@ -92,7 +99,7 @@ public sealed class CalendarService(
     private const string Graph = "https://graph.microsoft.com/v1.0";
 
     /// <summary>What Graph asks for and gives back: a Windows zone id such as "GMT Standard Time".</summary>
-    private sealed record ZoneCache(string GraphName, TimeZoneInfo Zone);
+    private sealed record ZoneCache(string GraphName, TimeZoneInfo Zone, bool Known = true);
 
     /// <summary>
     /// The zone lives in the shared memory cache rather than in a field, because this
@@ -128,12 +135,18 @@ public sealed class CalendarService(
     public async Task<TimeZoneInfo> TimeZoneAsync(Connection connection, CancellationToken ct = default) =>
         (await ZoneAsync(connection, ct)).Zone;
 
+    public async Task<MailboxZone> MailboxZoneAsync(Connection connection, CancellationToken ct = default)
+    {
+        var z = await ZoneAsync(connection, ct);
+        return new MailboxZone(z.Zone, z.Known);
+    }
+
     private async Task<ZoneCache> ZoneAsync(Connection connection, CancellationToken ct)
     {
         if (cache.TryGetValue<ZoneCache>(ZoneKey(connection), out var cached) && cached is not null)
             return cached;
 
-        var fallback = new ZoneCache("UTC", TimeZoneInfo.Utc);
+        var fallback = new ZoneCache("UTC", TimeZoneInfo.Utc, Known: false);
 
         try
         {
@@ -155,7 +168,11 @@ public sealed class CalendarService(
             var name = settings?.TimeZone;
             if (string.IsNullOrWhiteSpace(name)) return Remember(connection, fallback);
 
-            return Remember(connection, new ZoneCache(name, Resolve(name)));
+            // A name Graph gave but this host cannot resolve is still the mailbox's zone as far
+            // as Graph is concerned — reads keep asking for it by name — but the instants
+            // printed here are UTC, so they are labelled as not the mailbox's own.
+            var resolved = TryResolve(name);
+            return Remember(connection, new ZoneCache(name, resolved ?? TimeZoneInfo.Utc, Known: resolved is not null));
         }
         catch (MailAuthRequiredException) { throw; }
         catch (Exception ex)
@@ -177,7 +194,7 @@ public sealed class CalendarService(
     /// natively. Trying both covers a Linux container and a Windows workstation without
     /// shipping a mapping table of our own.
     /// </summary>
-    private static TimeZoneInfo Resolve(string name)
+    public static TimeZoneInfo? TryResolve(string name)
     {
         // The empty blocks are the method: each failure means "this host does not know
         // that spelling", and the answer is to try the next one, not to log four times
@@ -197,10 +214,10 @@ public sealed class CalendarService(
         if (TimeZoneInfo.TryConvertIanaIdToWindowsId(name, out var windows))
         {
             try { return TimeZoneInfo.FindSystemTimeZoneById(windows); }
-            catch (TimeZoneNotFoundException) { /* neither spelling resolves; fall back to UTC */ }
+            catch (TimeZoneNotFoundException) { /* neither spelling resolves; the caller falls back to UTC */ }
         }
 
-        return TimeZoneInfo.Utc;
+        return null;
     }
 
     // ── reads ────────────────────────────────────────────────────────────────

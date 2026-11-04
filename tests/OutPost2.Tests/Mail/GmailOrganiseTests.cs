@@ -230,7 +230,7 @@ public sealed class GmailOrganiseTests
             ["ListAsync"] = _ => Task.FromResult(all),
             ["FindByLabelAsync"] = a => Task.FromResult(all.FirstOrDefault(c => c.Label == (string)a[1]!)),
         });
-        var (calendar, _) = Stub<ICalendarService>.Create([]);
+        var zones = new MailboxZones([], NullLogger<MailboxZones>.Instance);
         var (jobs, _) = Stub<IJobService>.Create([]);
         var (downloads, _) = Stub<IDownloadTicketService>.Create([]);
         var http = new HttpContextAccessor
@@ -242,7 +242,7 @@ public sealed class GmailOrganiseTests
         };
 
         var tools = new MailTools(http, store, new MailServiceRouter([gmail]), new ItemIndex(), new SearchContinuations(),
-            new AttachmentExtractor(NullLogger<AttachmentExtractor>.Instance), jobs, calendar, downloads,
+            new AttachmentExtractor(NullLogger<AttachmentExtractor>.Instance), jobs, zones, downloads,
             new PublicUrls("https://op2.example"));
         return (tools, box);
     }
