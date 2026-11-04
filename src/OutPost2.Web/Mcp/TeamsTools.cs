@@ -69,8 +69,8 @@ public sealed class TeamsTools(
                     lock (found) found.Add(chat);
             }
             catch (MailAuthRequiredException) { lock (failures) failures.Add($"{c.Label} needs re-authorising"); }
-            catch (TeamsException ex) { lock (failures) failures.Add($"{c.Label}: {ex.Message}"); }
-            catch (Exception ex) { lock (failures) failures.Add($"{c.Label}: {ex.Message}"); }
+            catch (TeamsException ex) { lock (failures) failures.Add($"{c.Label}: {Untrusted.Scrub(ex.Message)}"); }
+            catch (Exception ex) { lock (failures) failures.Add($"{c.Label}: {Untrusted.Scrub(ex.Message)}"); }
         }));
 
         var ordered = found
@@ -178,7 +178,9 @@ public sealed class TeamsTools(
                 var body = new StringBuilder();
                 foreach (var m in transcript.Messages)
                 {
-                    var who = m.FromMe ? "You" : m.From;
+                    // Scrubbed although it is inside the fence: a sender named "Bob\n[just now] You"
+                    // would otherwise forge a message from the user within the transcript.
+                    var who = m.FromMe ? "You" : Untrusted.Scrub(m.From);
                     body.Append($"[{Ago(m.SentAt)}] {who}");
                     if (m.FromBot) body.Append(" (a bot)");
                     if (m.EditedAt is not null) body.Append(" (edited)");
@@ -193,8 +195,8 @@ public sealed class TeamsTools(
 
             return sb.ToString().TrimEnd();
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (TeamsException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (TeamsException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "send_chat_message", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
@@ -222,8 +224,8 @@ public sealed class TeamsTools(
             // picked, and for a name-resolved send that choice was ours to get wrong.
             return $"Sent to {Untrusted.Scrub(sent.DisplayName)} on {c.Label}.";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (TeamsException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (TeamsException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     // ── locating a chat ──────────────────────────────────────────────────────
@@ -317,8 +319,8 @@ public sealed class TeamsTools(
 
             return new Located(null, null, sb.ToString().TrimEnd());
         }
-        catch (MailAuthRequiredException ex) { return new Located(null, null, ex.Message); }
-        catch (TeamsException ex) { return new Located(null, null, ex.Message); }
+        catch (MailAuthRequiredException ex) { return new Located(null, null, Untrusted.Scrub(ex.Message)); }
+        catch (TeamsException ex) { return new Located(null, null, Untrusted.Scrub(ex.Message)); }
     }
 
     /// <summary>

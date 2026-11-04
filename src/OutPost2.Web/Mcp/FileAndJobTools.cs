@@ -54,7 +54,7 @@ public sealed class FileAndJobTools(
         // thing the name exists to avoid.
         var clash = await staging.FindByNameAsync(UserId, name.Trim(), ct);
         if (clash is not null)
-            return $"There is already a staged file called {clash.Name} ({clash.HumanSize}). "
+            return $"There is already a staged file called {Untrusted.Scrub(clash.Name)} ({clash.HumanSize}). "
                  + "Either attach that one, or pick a different name for this.";
 
         try
@@ -125,7 +125,7 @@ public sealed class FileAndJobTools(
                  + "or, if you have the file yourself, call stage_file and push the bytes.";
 
         return "Staged files:\n" + string.Join("\n",
-            files.Select(f => $"- {f.Name} ({f.FileName}, {f.HumanSize})"
+            files.Select(f => $"- {Untrusted.Scrub(f.Name)} ({Untrusted.Scrub(f.FileName)}, {f.HumanSize})"
                 + (FileTypes.HasExtension(f.FileName) ? "" : " — no file extension, so recipients may not be able to open it")));
     }
 
@@ -170,7 +170,7 @@ public sealed class FileAndJobTools(
             return $"I couldn't find {string.Join(" or ", missing.Select(m => $"\"{m}\""))}. " +
                    (available.Count == 0
                        ? "You have no files staged."
-                       : $"You have: {string.Join(", ", available.Select(f => f.Name))}.");
+                       : $"You have: {string.Join(", ", available.Select(f => Untrusted.Scrub(f.Name)))}.");
         }
 
         var totalBytes = found.Sum(f => f.SizeBytes);
@@ -188,8 +188,8 @@ public sealed class FileAndJobTools(
             new SendMailPayload(c.Id, recipients, Split(cc), subject, body, found.Select(f => f.Id).ToList(), level),
             key, c.Label, requiresApproval: false, ct);
 
-        if (existed && job.IsTerminal) return job.Spoken() + ImportanceUnchanged(job.Payload, level);
-        if (existed) return $"Already underway. {job.Spoken()}" + ImportanceUnchanged(job.Payload, level);
+        if (existed && job.IsTerminal) return Untrusted.Scrub(job.Spoken()) + ImportanceUnchanged(job.Payload, level);
+        if (existed) return $"Already underway. {Untrusted.Scrub(job.Spoken())}" + ImportanceUnchanged(job.Payload, level);
 
         // Never block on the upload. A 150 MB attachment takes minutes and would blow
         // through any tool timeout long before it finished.
@@ -214,7 +214,7 @@ public sealed class FileAndJobTools(
         if (items.Count == 0) return activeOnly ? "Nothing in progress." : "Queue is empty.";
 
         var sb = new StringBuilder();
-        foreach (var j in items.Take(10)) sb.AppendLine("- " + j.Spoken());
+        foreach (var j in items.Take(10)) sb.AppendLine("- " + Untrusted.Scrub(j.Spoken()));
 
         var waiting = items.Count(j => j.State == JobState.AwaitingApproval);
         if (waiting > 0)
@@ -253,7 +253,7 @@ public sealed class FileAndJobTools(
     /// </summary>
     public static string NoExtensionNote(IEnumerable<Core.Files.StagedFile> files)
     {
-        var bare = files.Where(f => !FileTypes.HasExtension(f.FileName)).Select(f => $"\"{f.FileName}\"").ToList();
+        var bare = files.Where(f => !FileTypes.HasExtension(f.FileName)).Select(f => $"\"{Untrusted.Scrub(f.FileName)}\"").ToList();
         return bare.Count == 0
             ? ""
             : $" Note: {string.Join(", ", bare)} {(bare.Count == 1 ? "has" : "have")} no file extension, "

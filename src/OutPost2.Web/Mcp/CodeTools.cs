@@ -64,7 +64,11 @@ public sealed class CodeTools(
         if (string.IsNullOrWhiteSpace(spoken)) return (null, null);
 
         var r = await repos.ResolveAsync(c, spoken, ct);
-        return r.Kind == RepoResolutionKind.Resolved ? (r.FullName, null) : (null, r.Message);
+        // Both are the provider's repository names (OP2-286): the resolved one is printed in
+        // every heading, and a refusal lists the near misses.
+        return r.Kind == RepoResolutionKind.Resolved
+            ? (Untrusted.Scrub(r.FullName), null)
+            : (null, Untrusted.Scrub(r.Message));
     }
 
     [McpServerTool(Name = "github_triage", ReadOnly = true, OpenWorld = true)]
@@ -82,7 +86,7 @@ public sealed class CodeTools(
             return $"Nothing waiting on you in {c.Label}. No reviews requested, no open pull requests " +
                    "of your own, no issues assigned.";
 
-        var sb = new StringBuilder($"In {c.Label}, as {t.Login}:\n");
+        var sb = new StringBuilder($"In {c.Label}, as {Untrusted.Scrub(t.Login)}:\n");
 
         sb.AppendLine(t.AwaitingMyReview switch
         {
@@ -135,7 +139,7 @@ public sealed class CodeTools(
             var items = await github.ListPullRequestsAsync(c, parsed, full, count, ct);
             return Render(items, $"pull requests ({Humanise(scope)})", c.Label, full);
         }
-        catch (GitHubException ex) { return ex.Message; }
+        catch (GitHubException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "github_issues", ReadOnly = true, OpenWorld = true)]
@@ -161,7 +165,7 @@ public sealed class CodeTools(
             var items = await github.ListIssuesAsync(c, parsed, full, count, ct);
             return Render(items, $"issues ({Humanise(scope)})", c.Label, full);
         }
-        catch (GitHubException ex) { return ex.Message; }
+        catch (GitHubException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "github_item", ReadOnly = true, OpenWorld = true)]
@@ -184,17 +188,17 @@ public sealed class CodeTools(
             if (item is null) return $"No {full}#{number} on {c.Label}, or it isn't visible to that token.";
 
             var sb = new StringBuilder();
-            sb.AppendLine($"{(item.IsPullRequest ? "Pull request" : "Issue")} {item.Reference}: {Untrusted.Scrub(item.Title)}");
+            sb.AppendLine($"{(item.IsPullRequest ? "Pull request" : "Issue")} {Untrusted.Scrub(item.Reference)}: {Untrusted.Scrub(item.Title)}");
             sb.AppendLine($"Opened by {Untrusted.Scrub(item.Author)}, updated {Ago(item.UpdatedAt)}.");
             if (item.IsDraft) sb.AppendLine("Still a draft.");
             if (item.Assignees.Count > 0) sb.AppendLine($"Assigned to {string.Join(", ", item.Assignees.Select(Untrusted.Scrub))}.");
             else sb.AppendLine("Nobody is assigned.");
             if (item.Labels.Count > 0) sb.AppendLine($"Labels: {string.Join(", ", item.Labels.Select(Untrusted.Scrub))}.");
             sb.AppendLine($"{item.Comments} comment{(item.Comments == 1 ? "" : "s")}.");
-            if (item.Url is not null) sb.AppendLine(item.Url);
+            if (item.Url is not null) sb.AppendLine(Untrusted.Scrub(item.Url));
             return sb.ToString().TrimEnd();
         }
-        catch (GitHubException ex) { return ex.Message; }
+        catch (GitHubException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "github_repositories", ReadOnly = true, OpenWorld = true)]
@@ -241,7 +245,7 @@ public sealed class CodeTools(
                 var only = new StringBuilder(
                     $"Nothing in the {all.Count} repositories {c.Label} can see matches '{match}', " +
                     "but these names are configured:\n");
-                foreach (var a in namedHits) only.AppendLine($"- \"{a.Alias}\" means {a.FullName}");
+                foreach (var a in namedHits) only.AppendLine($"- \"{Untrusted.Scrub(a.Alias)}\" means {Untrusted.Scrub(a.FullName)}");
                 return only.ToString().TrimEnd();
             }
 
@@ -265,7 +269,7 @@ public sealed class CodeTools(
                         var shapeOf = priv == 0 ? "all public"
                             : priv == g.Count() ? "all private"
                             : $"{priv} private";
-                        return $"{g.Key} {g.Count()} ({shapeOf})";
+                        return $"{Untrusted.Scrub(g.Key)} {g.Count()} ({shapeOf})";
                     });
 
                 sb.AppendLine($"By owner: {string.Join(", ", byOwner)}.");
@@ -274,7 +278,7 @@ public sealed class CodeTools(
 
             foreach (var r in shown)
             {
-                sb.Append($"- {r.FullName}");
+                sb.Append($"- {Untrusted.Scrub(r.FullName)}");
                 if (r.Private) sb.Append(" [private]");
                 if (r.Archived) sb.Append(" [archived]");
                 if (r.Fork) sb.Append(" [fork]");
@@ -286,12 +290,12 @@ public sealed class CodeTools(
             {
                 sb.AppendLine();
                 sb.AppendLine("Names configured for this connection:");
-                foreach (var a in namedHits) sb.AppendLine($"- \"{a.Alias}\" means {a.FullName}");
+                foreach (var a in namedHits) sb.AppendLine($"- \"{Untrusted.Scrub(a.Alias)}\" means {Untrusted.Scrub(a.FullName)}");
             }
 
             return sb.ToString().TrimEnd();
         }
-        catch (GitHubException ex) { return ex.Message; }
+        catch (GitHubException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "github_repo_names", ReadOnly = true, OpenWorld = true)]
@@ -319,7 +323,7 @@ public sealed class CodeTools(
 
         var sb = new StringBuilder(
             $"{names.Count} repository name{(names.Count == 1 ? "" : "s")} configured for {c.Label}:\n");
-        foreach (var a in names) sb.AppendLine($"- \"{a.Alias}\" means {a.FullName}");
+        foreach (var a in names) sb.AppendLine($"- \"{Untrusted.Scrub(a.Alias)}\" means {Untrusted.Scrub(a.FullName)}");
 
         sb.AppendLine();
         sb.AppendLine("These override the search, so saying one of these names always reaches that repository.");
@@ -354,13 +358,13 @@ public sealed class CodeTools(
             {
                 // Subject only. A commit body runs to paragraphs and "the last three
                 // commits" wants three subjects, not three essays.
-                sb.AppendLine($"- {x.ShortSha} {x.Subject} — {x.Author}" +
+                sb.AppendLine($"- {Untrusted.Scrub(x.ShortSha)} {Untrusted.Scrub(x.Subject)} — {Untrusted.Scrub(x.Author)}" +
                               (x.At is { } at ? $", {Ago(at)}" : ""));
             }
 
             return sb.ToString().TrimEnd();
         }
-        catch (GitHubException ex) { return ex.Message; }
+        catch (GitHubException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     private const string RefDoc =
@@ -419,7 +423,7 @@ public sealed class CodeTools(
 
             return sb.ToString().TrimEnd();
         }
-        catch (GitHubException ex) { return ex.Message; }
+        catch (GitHubException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "github_file", ReadOnly = true, OpenWorld = true)]
@@ -447,7 +451,7 @@ public sealed class CodeTools(
             if (file is null)
                 return $"{path} is a folder, not a file. Use github_files to list it.";
 
-            var header = $"{file.Path} in {full}"
+            var header = $"{Untrusted.Scrub(file.Path)} in {full}"
                          + (branch is null ? "" : $" on {branch}")
                          + $" — {ByteSize.Describe(file.Size)}"
                          + (file.Truncated ? $", showing the first {MaxFileChars:N0} characters" : "");
@@ -457,7 +461,7 @@ public sealed class CodeTools(
             // instructions use — the exact case OP2-125 built the fence for.
             return header + "\n" + Untrusted.Fence("file contents", file.Text);
         }
-        catch (GitHubException ex) { return ex.Message; }
+        catch (GitHubException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     private static string Render(IReadOnlyList<CodeItem> items, string what, string label, string? repo)
@@ -468,9 +472,9 @@ public sealed class CodeTools(
         var sb = new StringBuilder($"{items.Count} {what} in {where}:\n");
         foreach (var i in items)
         {
-            sb.Append($"- {i.Reference}: {Untrusted.Scrub(i.Title)}");
+            sb.Append($"- {Untrusted.Scrub(i.Reference)}: {Untrusted.Scrub(i.Title)}");
             if (i.IsDraft) sb.Append(" [draft]");
-            sb.Append($" — by {i.Author}, updated {Ago(i.UpdatedAt)}");
+            sb.Append($" — by {Untrusted.Scrub(i.Author)}, updated {Ago(i.UpdatedAt)}");
             if (i.Comments > 0) sb.Append($", {i.Comments} comment{(i.Comments == 1 ? "" : "s")}");
             sb.AppendLine();
         }

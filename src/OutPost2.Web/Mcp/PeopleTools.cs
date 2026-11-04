@@ -64,8 +64,8 @@ public sealed class PeopleTools(
                     lock (found) found.Add(p);
             }
             catch (MailAuthRequiredException) { lock (failures) failures.Add($"{c.Label} needs re-authorising"); }
-            catch (PeopleException ex) { lock (failures) failures.Add($"{c.Label}: {ex.Message}"); }
-            catch (Exception ex) { lock (failures) failures.Add($"{c.Label}: {ex.Message}"); }
+            catch (PeopleException ex) { lock (failures) failures.Add($"{c.Label}: {Untrusted.Scrub(ex.Message)}"); }
+            catch (Exception ex) { lock (failures) failures.Add($"{c.Label}: {Untrusted.Scrub(ex.Message)}"); }
         }));
 
         var sb = new StringBuilder();
@@ -149,8 +149,8 @@ public sealed class PeopleTools(
                     lock (found) found.Add(x);
             }
             catch (MailAuthRequiredException) { lock (failures) failures.Add($"{c.Label} needs re-authorising"); }
-            catch (PeopleException ex) { lock (failures) failures.Add($"{c.Label}: {ex.Message}"); }
-            catch (Exception ex) { lock (failures) failures.Add($"{c.Label}: {ex.Message}"); }
+            catch (PeopleException ex) { lock (failures) failures.Add($"{c.Label}: {Untrusted.Scrub(ex.Message)}"); }
+            catch (Exception ex) { lock (failures) failures.Add($"{c.Label}: {Untrusted.Scrub(ex.Message)}"); }
         }));
 
         var ordered = found.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
@@ -239,8 +239,8 @@ public sealed class PeopleTools(
                  + (saved.PrimaryAddress is { } a ? $" ({Untrusted.Scrub(a)})" : "")
                  + $" to {c.Label}. Handle {handle.Ref}.";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (PeopleException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (PeopleException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "update_contact", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
@@ -294,8 +294,8 @@ public sealed class PeopleTools(
                  + (saved.PrimaryAddress is { } a ? $" ({Untrusted.Scrub(a)})" : "")
                  + $" on {c.Label}.";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (PeopleException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (PeopleException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     /// <summary>
