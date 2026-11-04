@@ -66,7 +66,7 @@ public interface IGoogleConnectionService : IGoogleTokenAccessor
 /// Signing in to Google for Gmail, and keeping the sign-in alive (OP2-279).
 /// <para>
 /// Written against Google's documented OAuth 2.0 web-server flow and OpenID Connect, not
-/// against a live server (the OAuth client is set up separately, OP2-283). The parts that
+/// against a live server (each deployment brings its own OAuth client; README, Google setup). The parts that
 /// matter and are easy to get wrong:
 /// </para>
 /// <list type="bullet">
