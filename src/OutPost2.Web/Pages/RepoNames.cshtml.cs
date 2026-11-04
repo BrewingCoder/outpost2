@@ -31,7 +31,7 @@ public sealed class RepoNamesModel(
         var userId = User.UserId();
 
         var github = (await connections.ListAsync(userId, ct))
-            .Where(c => c.Provider == ProviderKind.GitHub)
+            .Where(c => c.Provider is ProviderKind.GitHub or ProviderKind.Gitea)
             .ToList();
 
         var all = await db.RepoAliases

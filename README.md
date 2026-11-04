@@ -32,7 +32,7 @@ organisation, and you may not run it as a service for other people. See
 
 ## What it does
 
-**58 tools across four providers** — Microsoft 365, Gmail, YouTrack and GitHub — all
+**58 tools across five providers** — Microsoft 365, Gmail, YouTrack, GitHub and Gitea/Forgejo — all
 resolved through the same named-connection model.
 
 | Area | Tools |
@@ -49,7 +49,7 @@ resolved through the same named-connection model.
 | People | `find_person` `list_contacts` `save_contact` `update_contact` |
 | Teams chats | `list_chats` `read_chat` `send_chat_message` |
 | Issues (YouTrack) | `create_issue` `get_issue` `update_issue` `search_issues` `comment_on_issue` `list_projects` `create_project` |
-| Code (GitHub) | `github_repositories` `github_repo_names` `github_issues` `github_pull_requests` `github_commits` `github_item` `github_triage` `github_files` `github_file` |
+| Code (GitHub, Gitea, Forgejo) | `github_repositories` `github_repo_names` `github_issues` `github_pull_requests` `github_commits` `github_item` `github_triage` `github_files` `github_file` |
 | Files and jobs | `stage_file` `list_files` `check_queue` + a web approval queue |
 | Feedback | `report_friction` — the agent files its own bug reports mid-task |
 
@@ -67,6 +67,13 @@ Outlook, and the tools say what they did in Gmail's own terms rather than preten
 - `report_junk` moves a message to Spam but **cannot block the sender** — that needs a
   Gmail settings permission Outpost does not ask for.
 - Exact times are in UTC: Gmail has no mailbox time zone Outpost can read.
+
+**Gitea and Forgejo** serve every *Code* row (OP2-84) through one connector — Forgejo is a
+Gitea fork with the same `/api/v1`. The tools keep their `github_*` names. Add one with the
+server's address (there's no default host) and an access token with read on *repository*,
+*issue* and *user*. "Awaiting my review" needs Gitea 1.20+ or a Forgejo built on it. Gitea
+search can't be limited to a single repository, so per-repository personal searches go by
+owner and filter by name. Drafts are the `draft` flag or a `WIP:` title.
 
 Large attachments stream to Graph in 320 KiB-multiple chunks from object storage and never
 buffer in memory, so sending is a resumable job rather than a tool call that times out.
@@ -115,7 +122,7 @@ docker compose up -d
 | garage (S3) | http://localhost:3900 | buckets `op2-staging`, `op2-attachments` |
 | vault (dev) | http://localhost:8200 | throwaway; mirrors `op2-transit/op2-kek` |
 
-A **self-hosted** GitHub Enterprise or YouTrack behind a private certificate authority
+A **self-hosted** GitHub Enterprise, Gitea, Forgejo or YouTrack behind a private certificate authority
 needs that CA named: mount the PEM into the container and set
 `OutPost2__TrustedRoots__CaCertPaths__0`. Nothing else changes — with no roots
 configured, the platform's own certificate validation is used untouched, and a root that
@@ -171,9 +178,9 @@ Two things are on you and are **not** defaults:
 ## Design decisions worth knowing
 
 **A connection is not a mailbox.** It is an authorised link to one instance of one
-provider, with a user-chosen name. Microsoft and Google (OAuth), YouTrack and GitHub (PAT)
-are four providers under one model; the same resolver serves all of them unchanged, and
-mail is routed to the right provider's implementation by the connection alone.
+provider, with a user-chosen name. Microsoft and Google (OAuth), YouTrack, GitHub and Gitea (PAT)
+are five providers under one model; the same resolver serves all of them unchanged, and
+mail and code are routed to the right provider's implementation by the connection alone.
 
 **Labels are unique per user, defaults are per provider.** My "work" is not your "work",
 and "check email" and "my open tickets" resolve independently. Both are enforced by
@@ -255,6 +262,7 @@ a Gmail connection (and `OP2_PROBE_SEND=1` for its sending half).
 | Mail: read, search, send, reply, forward, file, flag, categorise | done |
 | Attachments: staging, resumable large send, inbound extraction | done |
 | YouTrack and GitHub providers | done |
+| Gitea / Forgejo (code tools, self-hosted URL) | done against mocked HTTP; not yet run against a live server |
 | OAuth 2.1 server so an MCP client can connect | done |
 | Voice mode reaching the connector | verified in the field |
 | Calendar, contacts, free/busy | done |

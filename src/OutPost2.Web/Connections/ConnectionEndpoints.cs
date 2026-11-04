@@ -317,16 +317,44 @@ public static class ConnectionEndpoints
             }
         });
 
+        // ── add a Gitea or Forgejo connection (PAT, self-hosted: OP2-84) ─────
+        group.MapPost("/gitea/add", async (
+            HttpContext ctx,
+            IGiteaConnectionService gitea,
+            IConnectionStore connections,
+            [FromForm] string label, [FromForm] string baseUrl, [FromForm] string token) =>
+        {
+            var userId = ctx.User.UserId();
+            label = label.Trim();
+
+            // No blank-means-default here: there is no public Gitea to default to.
+            if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(token))
+                return Results.Redirect("/connections?error=Name,+server+and+token+are+all+required.");
+
+            if (await connections.FindByLabelAsync(userId, label) is not null)
+                return Results.Redirect($"/connections?error={Uri.EscapeDataString($"You already have a connection called '{label}'.")}");
+
+            try
+            {
+                var c = await gitea.ConnectAsync(userId, baseUrl, token, label);
+                return Results.Redirect($"/connections?added={Uri.EscapeDataString(c.Label)}");
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Redirect($"/connections?error={Uri.EscapeDataString(ex.Message)}");
+            }
+        });
+
         // ── re-check a connection's health ──────────────────────────────────
         group.MapPost("/{id:guid}/check", async (
-            HttpContext ctx, IConnectionStore s, IYouTrackConnectionService yt, Guid id) =>
+            HttpContext ctx, IConnectionStore s, IYouTrackConnectionService yt, IGiteaConnectionService gitea, Guid id) =>
         {
             var c = await s.GetAsync(ctx.User.UserId(), id);
             if (c is null) return Results.Redirect("/connections");
 
-            if (c.Provider == ProviderKind.YouTrack)
+            if (c.Provider is ProviderKind.YouTrack or ProviderKind.Gitea)
             {
-                var ok = await yt.CheckHealthAsync(c);
+                var ok = c.Provider == ProviderKind.Gitea ? await gitea.CheckHealthAsync(c) : await yt.CheckHealthAsync(c);
                 return Results.Redirect(ok
                     ? "/connections"
                     : $"/connections?error={Uri.EscapeDataString($"{c.Label} is no longer authenticating - the token may have been revoked or expired.")}");
@@ -371,7 +399,7 @@ public static class ConnectionEndpoints
         // so from the user's side the only route was delete and start again.
         group.MapPost("/{id:guid}/replace-token", async (
             HttpContext ctx, IConnectionStore s,
-            IYouTrackConnectionService yt, IGitHubConnectionService gh,
+            IYouTrackConnectionService yt, IGitHubConnectionService gh, IGiteaConnectionService gitea,
             Guid id, [FromForm] string token) =>
         {
             var userId = ctx.User.UserId();
@@ -387,6 +415,7 @@ public static class ConnectionEndpoints
                 {
                     ProviderKind.YouTrack => await yt.ConnectAsync(userId, c.Instance, token, c.Label),
                     ProviderKind.GitHub => await gh.ConnectAsync(userId, c.Instance, token, c.Label),
+                    ProviderKind.Gitea => await gitea.ConnectAsync(userId, c.Instance, token, c.Label),
                     _ => throw new InvalidOperationException(
                         "That connection signs in through its provider. Reconnect it instead."),
                 };

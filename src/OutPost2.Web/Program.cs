@@ -157,6 +157,10 @@ builder.Services.AddHttpClient("youtrack")
 builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30))
     .ConfigurePrimaryHttpMessageHandler(TrustedRootHandler);
+// Gitea and Forgejo are self-hosted by definition (OP2-84), so the private CA applies.
+builder.Services.AddHttpClient("gitea")
+    .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30))
+    .ConfigurePrimaryHttpMessageHandler(TrustedRootHandler);
 
 static HttpMessageHandler TrustedRootHandler(IServiceProvider sp)
 {
@@ -173,8 +177,15 @@ builder.Services.AddScoped<IGitHubConnectionService, GitHubConnectionService>();
 builder.Services.AddMemoryCache();
 builder.Services.AddScoped<OutPost2.Infrastructure.Code.IRepoResolver,
     OutPost2.Infrastructure.Code.RepoResolver>();
-builder.Services.AddScoped<OutPost2.Infrastructure.Code.IGitHubService,
+// Code is routed by the connection's provider (OP2-84), as mail is: each code host
+// registers as an ICodeProvider, and the tools and the repo resolver get the router.
+builder.Services.AddScoped<IGiteaConnectionService, GiteaConnectionService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Code.ICodeProvider,
                            OutPost2.Infrastructure.Code.GitHubService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Code.ICodeProvider,
+                           OutPost2.Infrastructure.Code.GiteaService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Code.IGitHubService,
+                           OutPost2.Infrastructure.Code.CodeServiceRouter>();
 builder.Services.AddScoped<IYouTrackConnectionService, YouTrackConnectionService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Issues.IYouTrackService,
                            OutPost2.Infrastructure.Issues.YouTrackService>();
