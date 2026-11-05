@@ -63,7 +63,8 @@ public sealed class FeedbackTools(
             Kind = Kind(kind),
         }, reporter, ct);
 
-        return outcome.Spoken;
+        // The tracker's reply can quote another user's issue summary, or a raw error body.
+        return Untrusted.Scrub(outcome.Spoken);
     }
 
     /// <summary>

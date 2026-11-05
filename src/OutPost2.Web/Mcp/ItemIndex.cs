@@ -196,8 +196,11 @@ public sealed class ItemIndex : IItemIndex
                     Ref = Mint(id, e.ByHandle),
                     ItemId = id,
                     ConnectionLabel = label,
-                    Subject = subject,
-                    From = from,
+                    // Scrubbed once, here, rather than at the twenty-odd places that print a
+                    // remembered subject or sender back (OP2-286): "Marked "{subject}" read"
+                    // is exactly the shape OP2-265 was.
+                    Subject = Untrusted.Scrub(subject),
+                    From = Untrusted.Scrub(from),
                     Kind = kind,
                 };
 

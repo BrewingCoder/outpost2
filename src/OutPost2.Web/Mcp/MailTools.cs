@@ -104,7 +104,7 @@ public sealed partial class MailTools(
             }
             catch (Exception ex)
             {
-                return (c.Label, Items: (IReadOnlyList<MailSummary>)[], Error: ex.Message);
+                return (c.Label, Items: (IReadOnlyList<MailSummary>)[], Error: Untrusted.Scrub(ex.Message));
             }
         }));
 
@@ -209,8 +209,8 @@ public sealed partial class MailTools(
             sb.AppendLine(Untrusted.Fence("message body", HtmlToText.Clamp(m.Body, 8000)));
             return sb.ToString().TrimEnd();
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "search_mail", ReadOnly = true, OpenWorld = true)]
@@ -346,7 +346,7 @@ public sealed partial class MailTools(
             {
                 return (c.Label, Items: (IReadOnlyList<MailSummary>)[], More: false,
                         Next: (string?)null, Folders: (IReadOnlyList<MailFolder>)[],
-                        Error: ex.Message);
+                        Error: Untrusted.Scrub(ex.Message));
             }
         }));
 
@@ -496,8 +496,8 @@ public sealed partial class MailTools(
 
             return $"Sent from {c.Label} to {string.Join(", ", recipients)}{Marked(level, c.Provider)}.";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "reply_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
@@ -539,16 +539,16 @@ public sealed partial class MailTools(
             // wrong address is off and the right one is on.
             if (!edit.Any)
                 return replyAll
-                    ? $"Replied to everyone on \"{sent.Subject}\" from {c.Label}{Marked(level, c.Provider)}."
-                    : $"Replied to {item.From} on \"{sent.Subject}\" from {c.Label}{Marked(level, c.Provider)}.";
+                    ? $"Replied to everyone on \"{Untrusted.Scrub(sent.Subject)}\" from {c.Label}{Marked(level, c.Provider)}."
+                    : $"Replied to {item.From} on \"{Untrusted.Scrub(sent.Subject)}\" from {c.Label}{Marked(level, c.Provider)}.";
 
-            return $"Replied on \"{sent.Subject}\" from {c.Label}. It went to {Who(sent.To)}"
+            return $"Replied on \"{Untrusted.Scrub(sent.Subject)}\" from {c.Label}. It went to {Who(sent.To)}"
                  + (sent.Cc.Count > 0 ? $", copying {Who(sent.Cc)}" : "")
                  + (sent.Dropped.Count > 0 ? $". Took {Who(sent.Dropped)} off" : "")
                  + Marked(level, c.Provider) + ".";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "forward_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
@@ -576,10 +576,10 @@ public sealed partial class MailTools(
             var sent = await mail.SendReplyAsync(
                 c, item.ItemId, ReplyKind.Forward, body ?? "", recipients, null, level, ct);
 
-            return $"Forwarded \"{sent.Subject}\" to {Who(sent.To)} from {c.Label}{Marked(level, c.Provider)}.";
+            return $"Forwarded \"{Untrusted.Scrub(sent.Subject)}\" to {Who(sent.To)} from {c.Label}{Marked(level, c.Provider)}.";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "mark_mail", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
@@ -598,8 +598,8 @@ public sealed partial class MailTools(
             await mail.MarkReadAsync(c, item.ItemId, read, ct);
             return $"Marked \"{item.Subject}\" {(read ? "read" : "unread")} in {c.Label}.";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "move_mail", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
@@ -633,7 +633,7 @@ public sealed partial class MailTools(
                 if (problem is not null) return problem;
 
                 target = match!.Id;
-                spoken = match.Path;
+                spoken = Untrusted.Scrub(match.Path);
             }
 
             var movedId = await mail.MoveAsync(c, item.ItemId, target, ct);
@@ -644,8 +644,8 @@ public sealed partial class MailTools(
 
             return $"{Moved(item.Subject, WellKnown(destination), spoken, c.Label, c.Provider)} Handle is still {item.Ref}.";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     // ── folders (OP2-188) ────────────────────────────────────────────────────
@@ -683,8 +683,8 @@ public sealed partial class MailTools(
 
             return Listing(all, root, c.Label);
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     /// <summary>
@@ -791,7 +791,7 @@ public sealed partial class MailTools(
                 {
                     var (match, problem) = Pick(folders, parent, c.Label);
                     if (problem is not null) return problem;
-                    (parentId, parentPath, under) = (match!.Id, match.Path, $" inside {match.Path}");
+                    (parentId, parentPath, under) = (match!.Id, match.Path, $" inside {Untrusted.Scrub(match.Path)}");
                 }
                 else if (c.Provider == ProviderKind.Google)
                 {
@@ -832,10 +832,10 @@ public sealed partial class MailTools(
                      ? $"There {(elsewhere.Count == 1 ? "was already one" : $"were already {elsewhere.Count}")} "
                        + $"of that name — {Untrusted.Scrub(string.Join(", ", elsewhere.Take(4)))} — so "
                        + "filing by the name alone will ask you which one from now on."
-                     : $"Say \"file it under {made.Name}\" to move things there.");
+                     : $"Say \"file it under {Untrusted.Scrub(made.Name)}\" to move things there.");
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "rename_folder", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
@@ -863,7 +863,7 @@ public sealed partial class MailTools(
             // Graph lets some of these through, and a mailbox whose Inbox is called
             // something else is one the user has to repair in Outlook by hand.
             if (match!.IsWellKnown)
-                return $"{match.Path} is {MailWords.For(c.Provider).OwnFolders}, so I can't rename it. "
+                return $"{Untrusted.Scrub(match.Path)} is {MailWords.For(c.Provider).OwnFolders}, so I can't rename it. "
                      + $"Only {MailWords.For(c.Provider).Folder}s you made yourself.";
 
             var renamed = await mail.RenameFolderAsync(c, match.Id, name.Trim(), ct);
@@ -871,8 +871,8 @@ public sealed partial class MailTools(
             return $"Renamed {Untrusted.Scrub(match.Path)} to {Untrusted.Scrub(renamed.Name)} in {c.Label}. "
                  + "Everything in it stayed where it was.";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "delete_folder", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
@@ -917,8 +917,8 @@ public sealed partial class MailTools(
                   + "It is in Deleted Items if that was wrong."
                 : $"Deleted the empty folder {Untrusted.Scrub(match.Path)} from {c.Label}.";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     // ── clearing out a sender (OP2-224) ──────────────────────────────────────
@@ -1033,18 +1033,18 @@ public sealed partial class MailTools(
                 key, c.Label, requiresApproval: false, ct);
 
             if (existed && !job.IsTerminal)
-                return "That one is already running — I didn't start a second. " + job.Spoken()
+                return "That one is already running — I didn't start a second. " + Untrusted.Scrub(job.Spoken())
                      + " Ask me to check the queue for how it's getting on.";
 
-            if (existed) return job.Spoken();
+            if (existed) return Untrusted.Scrub(job.Spoken());
 
             return $"Started on {expected.Matched} message{(expected.Matched == 1 ? "" : "s")} from "
                  + $"\"{Untrusted.Scrub(from)}\"{where} in {c.Label}. That's too many to do while "
                  + "you wait, so it runs in the background — ask me to check the queue and I'll "
                  + $"tell you how far it has got. Everything goes to {MailWords.For(c.Provider).Trash}.";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "recover_mail", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
@@ -1097,8 +1097,8 @@ public sealed partial class MailTools(
 
             return said;
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     /// <summary>
@@ -1131,7 +1131,7 @@ public sealed partial class MailTools(
 
             var (match, problem) = Pick(folders, said, label);
             if (problem is not null) return (null, "", problem);
-            return ([match!.Id], $" in {match.Path}", null);
+            return ([match!.Id], $" in {Untrusted.Scrub(match.Path)}", null);
         }
 
         // Clutter is included because it is where mail lands rather than where it is put —
@@ -1386,8 +1386,8 @@ public sealed partial class MailTools(
 
             return said;
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "flag_mail", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
@@ -1424,8 +1424,8 @@ public sealed partial class MailTools(
                 ? $"Flagged \"{item.Subject}\" in {c.Label}."
                 : $"Flagged \"{item.Subject}\" in {c.Label}, due {due:d MMM yyyy}.";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "list_categories", ReadOnly = true, OpenWorld = true)]
@@ -1454,10 +1454,10 @@ public sealed partial class MailTools(
             if (all.Count == 0) return $"No categories defined on {c.Label} yet.";
 
             return $"{all.Count} categor{(all.Count == 1 ? "y" : "ies")} on {c.Label}: " +
-                   string.Join(", ", all.Select(x => $"{x.Name} ({x.Colour})")) + ".";
+                   string.Join(", ", all.Select(x => $"{Untrusted.Scrub(x.Name)} ({Untrusted.Scrub(x.Colour)})")) + ".";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "categorise_mail", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
@@ -1511,11 +1511,11 @@ public sealed partial class MailTools(
                         return c.Provider == ProviderKind.Google
                             ? $"{c.Label} has no label{(missing.Count == 1 ? "" : "s")} called " +
                               $"{string.Join(", ", missing)}. It has: " +
-                              string.Join(", ", defined.Select(d => d.Name)) +
+                              string.Join(", ", defined.Select(d => Untrusted.Scrub(d.Name))) +
                               ". Say a colour (any) if you want them created — Gmail labels are made without one."
                             : $"{c.Label} has no categor{(missing.Count == 1 ? "y" : "ies")} called " +
                                $"{string.Join(", ", missing)}. It has: " +
-                               string.Join(", ", defined.Select(d => d.Name)) +
+                               string.Join(", ", defined.Select(d => Untrusted.Scrub(d.Name))) +
                                ". Say which colour to create them with if you want them added.";
 
                     // Gmail labels are created without a colour, so any colour said is just
@@ -1533,8 +1533,8 @@ public sealed partial class MailTools(
 
             return await ApplyAsync(c, item, wanted, remove, ct);
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (MailException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "list_attachments", ReadOnly = true, OpenWorld = true)]
@@ -1554,7 +1554,7 @@ public sealed partial class MailTools(
         var n = 1;
         foreach (var a in items)
         {
-            sb.Append($"{n++}. {a.Name} ({a.HumanSize})");
+            sb.Append($"{n++}. {Untrusted.Scrub(a.Name)} ({a.HumanSize})");
             if (a.IsLink) sb.Append(" — a cloud link, not a file");
             else if (a.IsEmbeddedItem) sb.Append(" — an embedded message");
             else if (extractor.CanExtract(a.Name, a.ContentType)) sb.Append(" — I can read this");
@@ -1586,14 +1586,14 @@ public sealed partial class MailTools(
         // Saying why is better than failing: a cloud link genuinely has no bytes to read,
         // and the user can act on knowing that.
         if (a.IsLink)
-            return $"\"{a.Name}\" is a cloud link rather than a file, so there is nothing to read directly.";
+            return $"\"{Untrusted.Scrub(a.Name)}\" is a cloud link rather than a file, so there is nothing to read directly.";
         if (a.IsEmbeddedItem)
-            return $"\"{a.Name}\" is an embedded message rather than a document.";
+            return $"\"{Untrusted.Scrub(a.Name)}\" is an embedded message rather than a document.";
         if (!extractor.CanExtract(a.Name, a.ContentType))
-            return $"I can't read {a.Name} ({a.ContentType}). I handle PDF, Word, Excel, PowerPoint and text.";
+            return $"I can't read {Untrusted.Scrub(a.Name)} ({Untrusted.Scrub(a.ContentType)}). I handle PDF, Word, Excel, PowerPoint and text.";
 
         await using var bytes = await mail.OpenAttachmentAsync(c, item.ItemId, a.Id, ct);
-        if (bytes is null) return $"Couldn't download {a.Name}.";
+        if (bytes is null) return $"Couldn't download {Untrusted.Scrub(a.Name)}.";
 
         var text = await extractor.ExtractAsync(a.Name, bytes, ct);
         return $"{Untrusted.Scrub(a.Name)}:{Environment.NewLine}{Environment.NewLine}"
@@ -1655,11 +1655,13 @@ public sealed partial class MailTools(
 
             return SaveInstructions(item.Subject, directory,
                 wanted.Select((w, k) => (w.N, w.A.Name, w.Safe, w.A.HumanSize,
-                    Url: $"{urls.Base}/files/attachment/{minted[k].Token}")).ToList(),
+                    // Escaped although the token is ours: this URL goes into a shell command
+                    // the model is told to run, so nothing in it may be able to end the quote.
+                    Url: $"{urls.Base}/files/attachment/{Uri.EscapeDataString(minted[k].Token)}")).ToList(),
                 skipped);
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (TooManyTicketsException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (TooManyTicketsException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     /// <summary>
@@ -1815,11 +1817,11 @@ public sealed partial class MailTools(
         if (c.Provider == ProviderKind.Google)
             return next.Count == 0
                 ? $"\"{item.Subject}\" now has none of your labels in {c.Label}."
-                : $"\"{item.Subject}\" is now labelled {string.Join(", ", next)} in {c.Label}, and stays where it was.";
+                : $"\"{item.Subject}\" is now labelled {Untrusted.Scrub(string.Join(", ", next))} in {c.Label}, and stays where it was.";
 
         return next.Count == 0
             ? $"\"{item.Subject}\" now has no categories in {c.Label}."
-            : $"\"{item.Subject}\" is now categorised {string.Join(", ", next)} in {c.Label}.";
+            : $"\"{item.Subject}\" is now categorised {Untrusted.Scrub(string.Join(", ", next))} in {c.Label}.";
     }
 
     /// <summary>
@@ -1956,13 +1958,13 @@ public sealed partial class MailTools(
         var words = MailWords.For(provider);
 
         if (folder.IsWellKnown)
-            return $"{folder.Path} is {words.OwnFolders}, so I can't delete it. "
+            return $"{Untrusted.Scrub(folder.Path)} is {words.OwnFolders}, so I can't delete it. "
                  + $"Only {words.Folder}s you made yourself.";
 
         if (confirm || (folder.MessageCount == 0 && folder.ChildCount == 0)) return null;
 
         if (words.IsGmail)
-            return $"{folder.Path} isn't empty — it's on "
+            return $"{Untrusted.Scrub(folder.Path)} isn't empty — it's on "
                  + $"{folder.MessageCount} message{(folder.MessageCount == 1 ? "" : "s")}"
                  + (folder.ChildCount > 0
                      ? $" and has {folder.ChildCount} label{(folder.ChildCount == 1 ? "" : "s")} inside it"
@@ -1971,7 +1973,7 @@ public sealed partial class MailTools(
                  + (folder.ChildCount > 0 ? "and deletes the labels inside it. " : "")
                  + "Nothing has been deleted — ask the user, then say so to go ahead.";
 
-        return $"{folder.Path} isn't empty — "
+        return $"{Untrusted.Scrub(folder.Path)} isn't empty — "
              + $"{folder.MessageCount} message{(folder.MessageCount == 1 ? "" : "s")}"
              + (folder.ChildCount > 0
                  ? $" and {folder.ChildCount} subfolder{(folder.ChildCount == 1 ? "" : "s")}"

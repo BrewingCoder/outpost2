@@ -90,8 +90,8 @@ public sealed class CalendarTools(
                     lock (found) found.Add((c.Label, e));
             }
             catch (MailAuthRequiredException) { lock (failures) failures.Add($"{c.Label} needs re-authorising"); }
-            catch (CalendarException ex) { lock (failures) failures.Add($"{c.Label}: {ex.Message}"); }
-            catch (Exception ex) { lock (failures) failures.Add($"{c.Label}: {ex.Message}"); }
+            catch (CalendarException ex) { lock (failures) failures.Add($"{c.Label}: {Untrusted.Scrub(ex.Message)}"); }
+            catch (Exception ex) { lock (failures) failures.Add($"{c.Label}: {Untrusted.Scrub(ex.Message)}"); }
         }));
 
         // A cancelled occurrence still comes back from calendarView. It is not something
@@ -165,7 +165,7 @@ public sealed class CalendarTools(
             var sb = new StringBuilder();
             sb.AppendLine($"{Untrusted.Scrub(e.Subject)} ({c.Label})");
             sb.AppendLine(When(e.Start, e.End, e.IsAllDay, full: true));
-            if (e.Recurrence is not null) sb.AppendLine($"Repeats {e.Recurrence}.");
+            if (e.Recurrence is not null) sb.AppendLine($"Repeats {Untrusted.Scrub(e.Recurrence)}.");
             if (e.IsCancelled) sb.AppendLine("This event has been CANCELLED.");
 
             sb.AppendLine(e.IOrganised
@@ -173,7 +173,7 @@ public sealed class CalendarTools(
                 : $"Organiser: {Untrusted.Scrub(e.Organiser)}");
 
             if (!string.IsNullOrWhiteSpace(e.Location)) sb.AppendLine($"Location: {Untrusted.Scrub(e.Location)}");
-            if (e.OnlineMeetingUrl is not null) sb.AppendLine($"Online: {e.OnlineMeetingUrl}");
+            if (e.OnlineMeetingUrl is not null) sb.AppendLine($"Online: {Untrusted.Scrub(e.OnlineMeetingUrl)}");
             if (e.ShowAs is not Availability.Busy) sb.AppendLine($"Shows as: {Describe(e.ShowAs)}.");
 
             if (!e.IOrganised)
@@ -217,8 +217,8 @@ public sealed class CalendarTools(
 
             return sb.ToString().TrimEnd();
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (CalendarException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (CalendarException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     // ── writing ──────────────────────────────────────────────────────────────
@@ -299,7 +299,7 @@ public sealed class CalendarTools(
                 [(created.Id, c.Label, created.Subject, created.Organiser)], ItemKind.Event)[0];
 
             var sb = new StringBuilder();
-            sb.Append($"Added \"{created.Subject}\" on {c.Label}, {When(created.Start, created.End, created.IsAllDay, full: true)}");
+            sb.Append($"Added \"{Untrusted.Scrub(created.Subject)}\" on {c.Label}, {When(created.Start, created.End, created.IsAllDay, full: true)}");
 
             // Read back the invitation as a fact, not an intention. Attendees were mailed
             // the moment Graph accepted this, and the user needs to know it has happened.
@@ -312,8 +312,8 @@ public sealed class CalendarTools(
 
             return sb.ToString();
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (CalendarException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (CalendarException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "update_event", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
@@ -370,7 +370,7 @@ public sealed class CalendarTools(
                 Location = location,
             }, ct);
 
-            var sb = new StringBuilder($"Updated \"{after.Subject}\" on {c.Label}");
+            var sb = new StringBuilder($"Updated \"{Untrusted.Scrub(after.Subject)}\" on {c.Label}");
 
             if (newStart is not null || newEnd is not null)
                 sb.Append($" — now {When(after.Start, after.End, after.IsAllDay, full: true)}");
@@ -380,8 +380,8 @@ public sealed class CalendarTools(
 
             return sb.Append('.').ToString();
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (CalendarException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (CalendarException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "cancel_event", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
@@ -399,10 +399,10 @@ public sealed class CalendarTools(
         {
             // The service decides between cancelling and deleting, because that turns on
             // who organised it, and reads back which one it did.
-            return await calendar.CancelAsync(c, item.ItemId, message, ct);
+            return Untrusted.Scrub(await calendar.CancelAsync(c, item.ItemId, message, ct));
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (CalendarException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (CalendarException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "respond_to_invite", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
@@ -435,7 +435,7 @@ public sealed class CalendarTools(
             // Answering your own meeting is not a thing Graph will do, and the refusal is
             // an opaque 400. Say what is actually wrong.
             if (e.IOrganised)
-                return $"You organised \"{e.Subject}\" — there is nothing to reply to. Cancel it instead if you can't make it.";
+                return $"You organised \"{Untrusted.Scrub(e.Subject)}\" — there is nothing to reply to. Cancel it instead if you can't make it.";
 
             await calendar.RespondAsync(c, item.ItemId, what.Value, comment, ct);
 
@@ -446,11 +446,11 @@ public sealed class CalendarTools(
                 _ => "Tentatively accepted",
             };
 
-            return $"{verb} \"{e.Subject}\" ({When(e.Start, e.End, e.IsAllDay, full: true)}). "
+            return $"{verb} \"{Untrusted.Scrub(e.Subject)}\" ({When(e.Start, e.End, e.IsAllDay, full: true)}). "
                  + $"{Untrusted.Scrub(e.Organiser)} has been told.";
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (CalendarException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (CalendarException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     // ── availability (OP2-78) ────────────────────────────────────────────────
@@ -532,8 +532,8 @@ public sealed class CalendarTools(
 
             return sb.ToString().TrimEnd();
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (CalendarException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (CalendarException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "suggest_meeting_times", ReadOnly = true, OpenWorld = true)]
@@ -607,8 +607,8 @@ public sealed class CalendarTools(
 
             return sb.ToString().TrimEnd();
         }
-        catch (MailAuthRequiredException ex) { return ex.Message; }
-        catch (CalendarException ex) { return ex.Message; }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (CalendarException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     /// <summary>

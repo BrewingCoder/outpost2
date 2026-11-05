@@ -60,7 +60,7 @@ public sealed class IssueTools(
         if (projects.Count == 0) return $"No projects on {c.Label}.";
 
         return $"Projects on {c.Label}:\n" +
-               string.Join("\n", projects.Select(p => $"- {p.ShortName} — {p.Name}"));
+               string.Join("\n", projects.Select(p => $"- {Untrusted.Scrub(p.ShortName)} — {Untrusted.Scrub(p.Name)}"));
     }
 
     [McpServerTool(Name = "search_issues", ReadOnly = true, OpenWorld = true)]
@@ -80,9 +80,9 @@ public sealed class IssueTools(
         var sb = new StringBuilder($"{issues.Count} issue{(issues.Count == 1 ? "" : "s")} on {c.Label}:\n");
         foreach (var i in issues)
         {
-            sb.Append($"- {i.Key}: {Untrusted.Scrub(i.Summary)}");
-            if (!string.IsNullOrWhiteSpace(i.State)) sb.Append($" [{i.State}]");
-            if (!string.IsNullOrWhiteSpace(i.Assignee)) sb.Append($" — {i.Assignee}");
+            sb.Append($"- {Untrusted.Scrub(i.Key)}: {Untrusted.Scrub(i.Summary)}");
+            if (!string.IsNullOrWhiteSpace(i.State)) sb.Append($" [{Untrusted.Scrub(i.State)}]");
+            if (!string.IsNullOrWhiteSpace(i.Assignee)) sb.Append($" — {Untrusted.Scrub(i.Assignee)}");
             sb.AppendLine();
         }
         return sb.ToString().TrimEnd();
@@ -119,20 +119,20 @@ public sealed class IssueTools(
     /// </summary>
     public static string DescribeComment(IssueDetail i, int number, int from = 0)
     {
-        if (i.Comments.Count == 0) return $"{i.Key} has no comments.";
+        if (i.Comments.Count == 0) return $"{Untrusted.Scrub(i.Key)} has no comments.";
 
         if (number < 1 || number > i.Comments.Count)
-            return $"{i.Key} has {i.Comments.Count} comment{(i.Comments.Count == 1 ? "" : "s")}, "
+            return $"{Untrusted.Scrub(i.Key)} has {i.Comments.Count} comment{(i.Comments.Count == 1 ? "" : "s")}, "
                  + $"numbered 1 to {i.Comments.Count} from the oldest. There is no comment {number}.";
 
         var cm = i.Comments[number - 1];
         if (from > 0 && from >= cm.Text.Length)
-            return $"Comment {number} on {i.Key} is only {cm.Text.Length:N0} characters long; nothing is left from {from:N0}.";
+            return $"Comment {number} on {Untrusted.Scrub(i.Key)} is only {cm.Text.Length:N0} characters long; nothing is left from {from:N0}.";
 
         var (text, remaining) = Window(cm.Text, from, DescriptionWindow);
 
         var sb = new StringBuilder();
-        sb.AppendLine($"{i.Key}, comment {number} of {i.Comments.Count}, by {Untrusted.Scrub(cm.Author)}"
+        sb.AppendLine($"{Untrusted.Scrub(i.Key)}, comment {number} of {i.Comments.Count}, by {Untrusted.Scrub(cm.Author)}"
                       + (cm.At is { } at ? $" ({When(at)})" : "")
                       + (from > 0 ? $", from character {from:N0}" : "") + ":");
         sb.AppendLine(Untrusted.Fence("issue comment", text));
@@ -199,15 +199,15 @@ public sealed class IssueTools(
         // answer sitting in the response. Anything omitted here is unanswerable out loud
         // and gives no sign that it was omitted.
         var sb = new StringBuilder();
-        sb.AppendLine($"{i.Key}: {Untrusted.Scrub(i.Summary)}");
+        sb.AppendLine($"{Untrusted.Scrub(i.Key)}: {Untrusted.Scrub(i.Summary)}");
 
-        sb.AppendLine($"Project {i.Project}" +
-                      (i.State is null ? "" : $", state {i.State}") +
-                      (i.Assignee is null ? "" : $", assigned to {i.Assignee}"));
+        sb.AppendLine($"Project {Untrusted.Scrub(i.Project)}" +
+                      (i.State is null ? "" : $", state {Untrusted.Scrub(i.State)}") +
+                      (i.Assignee is null ? "" : $", assigned to {Untrusted.Scrub(i.Assignee)}"));
 
         if (i.Reporter is not null)
         {
-            sb.AppendLine($"Reported by {i.Reporter}" +
+            sb.AppendLine($"Reported by {Untrusted.Scrub(i.Reporter)}" +
                           (i.Created is { } cr ? $" on {When(cr)}" : ""));
         }
         else if (i.Created is { } created)
@@ -228,15 +228,15 @@ public sealed class IssueTools(
         if (rest.Count > 0)
         {
             sb.AppendLine();
-            foreach (var f in rest) sb.AppendLine($"{f.Key}: {f.Value}");
+            foreach (var f in rest) sb.AppendLine($"{Untrusted.Scrub(f.Key)}: {Untrusted.Scrub(f.Value)}");
         }
 
-        if (i.Tags.Count > 0) sb.AppendLine($"Tags: {string.Join(", ", i.Tags)}");
+        if (i.Tags.Count > 0) sb.AppendLine($"Tags: {string.Join(", ", i.Tags.Select(Untrusted.Scrub))}");
 
         if (i.Links.Count > 0)
         {
             sb.AppendLine();
-            foreach (var l in i.Links) sb.AppendLine($"{l.Key}: {l.Value}");
+            foreach (var l in i.Links) sb.AppendLine($"{Untrusted.Scrub(l.Key)}: {Untrusted.Scrub(l.Value)}");
         }
 
         if (!string.IsNullOrWhiteSpace(i.Description))
@@ -295,7 +295,7 @@ public sealed class IssueTools(
         if (i.Url is not null)
         {
             sb.AppendLine();
-            sb.AppendLine(i.Url);
+            sb.AppendLine(Untrusted.Scrub(i.Url));
         }
 
         return sb.ToString().TrimEnd();
@@ -324,9 +324,9 @@ public sealed class IssueTools(
         try
         {
             var key = await youtrack.CreateIssueAsync(c, project, summary, description, ct);
-            return $"Created {key} on {c.Label}.";
+            return $"Created {Untrusted.Scrub(key)} on {c.Label}.";
         }
-        catch (InvalidOperationException ex) { return ex.Message; }
+        catch (InvalidOperationException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
     [McpServerTool(Name = "comment_on_issue", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
@@ -377,8 +377,8 @@ public sealed class IssueTools(
         try
         {
             var p = await youtrack.CreateProjectAsync(c, name, shortName, ct);
-            return $"Created project {p.ShortName} ({p.Name}) on {c.Label}.";
+            return $"Created project {Untrusted.Scrub(p.ShortName)} ({Untrusted.Scrub(p.Name)}) on {c.Label}.";
         }
-        catch (InvalidOperationException ex) { return ex.Message; }
+        catch (InvalidOperationException ex) { return Untrusted.Scrub(ex.Message); }
     }
 }
