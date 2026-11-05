@@ -68,6 +68,9 @@ public sealed class CodeServiceRouter(IEnumerable<ICodeProvider> providers) : IG
         Connection c, string repo, string? path, string? gitRef, CancellationToken ct = default) =>
         For(c).ListPathAsync(c, repo, path, gitRef, ct);
 
+    public string? ScopeNote(Connection c, PullRequestScope scope) =>
+        _by.TryGetValue(c.Provider, out var p) ? p.ScopeNote(c, scope) : null;
+
     public Task<RepoFile?> ReadFileAsync(
         Connection c, string repo, string path, string? gitRef, int maxChars, CancellationToken ct = default) =>
         For(c).ReadFileAsync(c, repo, path, gitRef, maxChars, ct);
