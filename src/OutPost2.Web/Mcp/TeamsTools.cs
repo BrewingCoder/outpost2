@@ -12,7 +12,7 @@ using OutPost2.Web.Connections;
 namespace OutPost2.Web.Mcp;
 
 /// <summary>
-/// Teams chats (OP2-79).
+/// Teams chats (OP2-79) and Slack conversations (OP2-86), behind one set of chat tools.
 ///
 /// <para>
 /// Mail is where the day's instructions arrive; Teams is where the day actually happens.
@@ -32,6 +32,12 @@ namespace OutPost2.Web.Mcp;
 /// — all of which makes "ignore your previous instructions" read as more credible there
 /// than in an email from outside.
 /// </para>
+///
+/// <para>
+/// Which service answers is the connection's provider, decided by the router behind
+/// <see cref="ITeamsService"/> (OP2-86) — this class never asks. What it does say is the
+/// service's name, because "nothing unread in Teams" is wrong to a user asking about Slack.
+/// </para>
 /// </summary>
 [McpServerToolType]
 public sealed class TeamsTools(
@@ -45,7 +51,7 @@ public sealed class TeamsTools(
         ?? throw new InvalidOperationException("No authenticated user on this MCP request.");
 
     [McpServerTool(Name = "list_chats", ReadOnly = true, OpenWorld = true)]
-    [Description("The user's recent Teams chats, most recently active first. Each carries a handle in square brackets — pass that to read one or to reply. Use unreadOnly to answer 'has anyone messaged me?'.")]
+    [Description("The user's recent chats — Teams chats and Slack DMs, group DMs and channels — most recently active first. Each carries a handle in square brackets — pass that to read one or to reply. Use unreadOnly to answer 'has anyone messaged me?'.")]
     public async Task<string> ListChats(
         [Description("Only chats with messages arrived since the user last read them.")] bool unreadOnly = false,
         [Description("Connection name such as 'work'. Use 'all' for every connection. Omit only if a default has been set.")] string? connection = null,
@@ -87,9 +93,10 @@ public sealed class TeamsTools(
 
         if (ordered.Count == 0)
         {
+            var where = Service(resolution.Connections);
             sb.AppendLine(unreadOnly
-                ? "Nothing unread in Teams."
-                : "No Teams chats.");
+                ? $"Nothing unread in {where}."
+                : $"No {where} conversations.");
         }
         else
         {
@@ -105,8 +112,7 @@ public sealed class TeamsTools(
                 if (resolution.Connections.Count > 1) sb.Append($"[{chat.ConnectionLabel}] ");
                 sb.Append(Untrusted.Scrub(chat.DisplayName));
 
-                if (chat.Kind is ChatKind.Group or ChatKind.Meeting)
-                    sb.Append(chat.Kind is ChatKind.Meeting ? " (meeting chat)" : " (group)");
+                sb.Append(KindNote(chat.Kind));
 
                 // Only in the full listing. In an unread-only listing every row is unread
                 // by construction, and saying so on each one is noise.
@@ -130,7 +136,7 @@ public sealed class TeamsTools(
     }
 
     [McpServerTool(Name = "read_chat", ReadOnly = true, OpenWorld = true)]
-    [Description("Read a Teams conversation, oldest message first. Pass the handle from the last listing, or a person's name to find the chat with them.")]
+    [Description("Read a Teams or Slack conversation, oldest message first. Slack thread replies are counted, not shown. Pass the handle from the last listing, or a person's name to find the chat with them.")]
     public async Task<string> ReadChat(
         [Description("The handle in square brackets from a listing, or a person's name such as 'Darren'.")] string chat,
         [Description("Connection name. Needed only when resolving a name and more than one connection could answer.")] string? connection = null,
@@ -158,8 +164,8 @@ public sealed class TeamsTools(
                     ItemKind.Chat)[0].Ref;
 
             var sb = new StringBuilder();
-            sb.AppendLine($"Chat with {Untrusted.Scrub(transcript.Chat.DisplayName)} on {c.Label} "
-                        + $"(handle {handle}).");
+            sb.AppendLine((transcript.Chat.Kind is ChatKind.Channel ? "" : "Chat with ")
+                        + $"{Untrusted.Scrub(transcript.Chat.DisplayName)} on {c.Label} (handle {handle}).");
 
             if (transcript.Messages.Count == 0)
             {
@@ -185,12 +191,18 @@ public sealed class TeamsTools(
                     if (m.FromBot) body.Append(" (a bot)");
                     if (m.EditedAt is not null) body.Append(" (edited)");
                     if (m.IsUrgent) body.Append(" (marked urgent)");
+                    if (m.IsThreadReply) body.Append(" (a thread reply, also sent here)");
                     body.AppendLine(":");
                     body.AppendLine(m.Text);
+
+                    // Said, because the replies are not in this transcript: a thread reply
+                    // is not a message in the channel (OP2-86).
+                    if (m.ThreadReplies > 0)
+                        body.AppendLine($"({m.ThreadReplies} repl{(m.ThreadReplies == 1 ? "y" : "ies")} in a thread, not shown)");
                     body.AppendLine();
                 }
 
-                sb.AppendLine(Untrusted.Fence("Teams conversation", body.ToString().TrimEnd()));
+                sb.AppendLine(Untrusted.Fence($"{Service([c])} conversation", body.ToString().TrimEnd()));
             }
 
             return sb.ToString().TrimEnd();
@@ -200,7 +212,7 @@ public sealed class TeamsTools(
     }
 
     [McpServerTool(Name = "send_chat_message", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
-    [Description("Send a Teams message. Identify the chat either by the handle from a listing or by a person's name. The message appears instantly under the user's own name and cannot be unsent.")]
+    [Description("Send a Teams or Slack message. Identify the chat either by the handle from a listing or by a person's name. The message appears instantly under the user's own name and cannot be unsent.")]
     public async Task<string> SendChatMessage(
         [Description("What to say. Sent as plain text, exactly as given.")] string message,
         [Description("The handle in square brackets from a listing, or a person's name such as 'Darren'.")] string chat,
@@ -257,7 +269,7 @@ public sealed class TeamsTools(
                         ItemKind.Contact => "a contact",
                         _ => "an email",
                     }
-                    + $" — {Untrusted.Scrub(item.Subject)}. That isn't a Teams chat.");
+                    + $" — {Untrusted.Scrub(item.Subject)}. That isn't a chat.");
 
             var byHandle = await connections.FindByLabelAsync(UserId, item.ConnectionLabel, ct);
             if (byHandle is null) return new Located(null, null, $"The {item.ConnectionLabel} connection has gone.");
@@ -266,7 +278,7 @@ public sealed class TeamsTools(
             if (cap is null)
                 return new Located(null, null,
                     $"{byHandle.Label} was connected before Outpost asked for permission to "
-                    + (capability == Capabilities.ChatSend ? "send Teams messages" : "read Teams chats")
+                    + (capability == Capabilities.ChatSend ? $"send {Service([byHandle])} messages" : $"read {Service([byHandle])} chats")
                     + $". Reconnecting it at {urls.Connections} fixes that.");
 
             if (!cap.Usable)
@@ -294,7 +306,7 @@ public sealed class TeamsTools(
 
             if (matches.Count == 0)
                 return new Located(null, null,
-                    $"No Teams chat with anyone called \"{Untrusted.Scrub(said)}\" on {c.Label}. "
+                    $"No {Service([c])} conversation with anyone called \"{Untrusted.Scrub(said)}\" on {c.Label}. "
                     + "I can only use conversations that already exist — starting a brand new "
                     + "one isn't something Outpost can do yet.");
 
@@ -315,7 +327,7 @@ public sealed class TeamsTools(
             sb.AppendLine($"More than one chat matches \"{Untrusted.Scrub(said)}\" — which one?");
             for (var n = 0; n < shortlist.Count; n++)
                 sb.AppendLine($"- [{refs[n].Ref}] {Untrusted.Scrub(shortlist[n].DisplayName)}"
-                            + (shortlist[n].Kind is ChatKind.OneOnOne ? "" : " (group)"));
+                            + KindNote(shortlist[n].Kind));
 
             return new Located(null, null, sb.ToString().TrimEnd());
         }
@@ -333,6 +345,12 @@ public sealed class TeamsTools(
         ConnectionResolution resolution, string capability, IReadOnlyList<Connection> all)
     {
         if (resolution.Kind is not ResolutionKind.None) return resolution.SpokenSummary;
+
+        // Everything below is about Microsoft connections predating the chat scopes. A user
+        // who also has a Slack connection declaring this capability is told what the
+        // resolver says about it, not sent to reconnect Microsoft.
+        if (all.Any(c => c.Provider != ProviderKind.Microsoft && c.Capabilities.Any(x => x.Name == capability)))
+            return resolution.SpokenSummary;
 
         var microsoft = all.Count(c => c.Provider == ProviderKind.Microsoft);
         if (microsoft == 0) return resolution.SpokenSummary;
@@ -355,6 +373,26 @@ public sealed class TeamsTools(
              + $"that permission was added after {(microsoft == 1 ? "it was" : "they were")} set up. "
              + $"Reconnecting at {urls.Connections} grants it.";
     }
+
+    /// <summary>The service's own name: "Teams", "Slack", or "chat" when a listing spans both.</summary>
+    private static string Service(IEnumerable<Connection> cs)
+    {
+        var names = cs.Select(c => c.Provider switch
+        {
+            ProviderKind.Microsoft => "Teams",
+            ProviderKind.Slack => "Slack",
+            _ => "chat",
+        }).Distinct().ToList();
+        return names.Count == 1 ? names[0] : "chat";
+    }
+
+    private static string KindNote(ChatKind kind) => kind switch
+    {
+        ChatKind.Group => " (group)",
+        ChatKind.Meeting => " (meeting chat)",
+        ChatKind.Channel => " (channel)",
+        _ => "",
+    };
 
     /// <summary>Relative time. Same reasoning as the mail tools: a timestamp is unspeakable.</summary>
     private static string Ago(DateTimeOffset when)
