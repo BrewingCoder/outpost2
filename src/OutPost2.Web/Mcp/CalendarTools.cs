@@ -472,9 +472,18 @@ public sealed class CalendarTools(
 
         // Free/busy is asked FROM one mailbox ABOUT many people, so fanning out would ask
         // the same question twice and merge two answers that are already the same.
+        //
+        // Which mailbox therefore matters: getSchedule is work or school only, so on a
+        // fan-out a personal account is the last choice rather than the first, exactly as
+        // in suggest_meeting_times (OP2-81). Microsoft's permissions table for
+        // calendar: getSchedule reads "Delegated (personal Microsoft account) | Not
+        // supported.", so this is a documented refusal, not a guess about an untested path.
         var c = resolution.Kind is ResolutionKind.FanOut
-            ? resolution.Connections[0]
+            ? resolution.Connections.FirstOrDefault(x => !PersonalMicrosoftAccount.Is(x)) ?? resolution.Connections[0]
             : resolution.Connection!;
+
+        if (PersonalMicrosoftAccount.Is(c))
+            return PersonalMicrosoftAccount.NotOffered(c, "other people's free/busy times");
 
         var zone = await calendar.TimeZoneAsync(c, ct);
         var (addresses, unresolved, ambiguous) = await ResolveAddressesAsync(c, who, ct);

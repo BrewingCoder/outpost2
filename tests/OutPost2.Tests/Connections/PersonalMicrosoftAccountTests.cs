@@ -1,7 +1,13 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using OutPost2.Core.Connections;
+using OutPost2.Infrastructure.Calendar;
 using OutPost2.Infrastructure.Connections;
+using OutPost2.Infrastructure.People;
+using OutPost2.Web;
+using OutPost2.Web.Mcp;
 
 namespace OutPost2.Tests.Connections;
 
@@ -171,6 +177,69 @@ public class PersonalMicrosoftAccountTests
         Assert.Equal(ResolutionKind.Unavailable, r.Kind);
         Assert.Contains("personal Microsoft account", r.SpokenSummary);
         Assert.DoesNotContain("Reconnect", r.SpokenSummary);
+    }
+
+    // ── free/busy: documented as unsupported, so it must not be attempted ────
+
+    [Fact]
+    public async Task Check_availability_on_a_personal_account_says_why_and_asks_Graph_nothing()
+    {
+        // Microsoft's permissions table for calendar: getSchedule reads
+        // "Delegated (personal Microsoft account) | Not supported.", so this is settled
+        // rather than untested: attempting it would return a Graph error where
+        // suggest_meeting_times, the other half of OP2-78, explains itself.
+        var (tools, calendar, people) = Calendar(
+            Conn(Connection.ConsumerTenantId, isPersonal: true, caps: [(Capabilities.CalendarRead, true)]));
+
+        var said = await tools.CheckAvailability("someone@example.com", connection: "home");
+
+        Assert.Contains("personal Microsoft account", said);
+        Assert.Contains("free/busy", said);
+        Assert.Empty(calendar.Calls);
+        Assert.Empty(people.Calls);
+    }
+
+    [Fact]
+    public async Task Check_availability_on_a_work_account_still_asks_Graph()
+    {
+        var (tools, calendar, _) = Calendar(
+            Conn("72f988bf-86f1-41af-91ab-2d7cd011db47", caps: [(Capabilities.CalendarRead, true)]));
+
+        await tools.CheckAvailability("someone@example.com", connection: "home");
+
+        Assert.Contains(calendar.Calls, x => x.Name == "GetScheduleAsync");
+    }
+
+    /// <summary>CalendarTools over one connection, with every service recorded and inert.</summary>
+    private static (CalendarTools Tools, Stub<ICalendarService> Calendar, Stub<IPeopleService> People)
+        Calendar(Connection c)
+    {
+        var (store, _) = Stub<IConnectionStore>.Create(new()
+        {
+            ["ListAsync"] = _ => Task.FromResult<IReadOnlyList<Connection>>([c]),
+            ["FindByLabelAsync"] = _ => Task.FromResult<Connection?>(c),
+        });
+
+        var (calendar, calendarStub) = Stub<ICalendarService>.Create(new()
+        {
+            ["TimeZoneAsync"] = _ => Task.FromResult(TimeZoneInfo.Utc),
+            ["GetScheduleAsync"] = _ =>
+                Task.FromResult<IReadOnlyList<OutPost2.Core.Calendar.ScheduleInformation>>([]),
+        });
+
+        var (people, peopleStub) = Stub<IPeopleService>.Create([]);
+
+        var http = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(
+                    [new Claim("op2:uid", Guid.Empty.ToString())], "test")),
+            },
+        };
+
+        return (new CalendarTools(http, store, calendar, people, new ItemIndex(),
+            new PublicUrls("https://op2.example")), calendarStub, peopleStub);
     }
 
     [Fact]
