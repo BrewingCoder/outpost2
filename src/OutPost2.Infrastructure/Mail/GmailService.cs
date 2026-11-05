@@ -98,6 +98,23 @@ public sealed partial class GmailService(
         // access can be withdrawn between the two.
         if (resp.StatusCode == HttpStatusCode.Unauthorized) throw new MailAuthRequiredException(c.Label);
 
+        // A DAILY limit before the per-second ones, because both can arrive as a 429 and
+        // only one of them clears in seconds. Google's error guide names two: the project's
+        // daily quota (403 dailyLimitExceeded) and the per-user mail-sending limit, which is
+        // a 429 whose message says "(Mail sending)". Reported as a throttle, either one told
+        // the agent to wait thirty seconds and try again — measured against Graph's
+        // MailboxConcurrency, which does clear that fast; these do not (OP2-294).
+        if (reason is "dailyLimitExceeded" or "quotaExceeded")
+            throw new MailException(
+                $"Google's daily limit for Outpost's Gmail access is used up, so {c.Label} can't be "
+                + "reached until it resets. Retrying now won't help — try again tomorrow.");
+
+        if (resp.StatusCode == HttpStatusCode.TooManyRequests
+            && body.Contains("Mail sending", StringComparison.OrdinalIgnoreCase))
+            throw new MailException(
+                $"Gmail's daily sending limit for {c.Label} has been reached, so nothing more can be "
+                + "sent from it until Google resets it. Retrying now won't help.");
+
         if (resp.StatusCode == HttpStatusCode.TooManyRequests
             || reason is "rateLimitExceeded" or "userRateLimitExceeded")
             throw new MailThrottledException(c.Label, RetryAfter(resp), provider: "Google");

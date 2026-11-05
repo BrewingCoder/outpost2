@@ -367,7 +367,13 @@ public sealed partial class MailTools(
             .Select(r => (r.Label, Error: r.Error!))
             .ToList();
 
-        var scope = folder is null ? "" : $" in {Spoken(folder)}";
+        // In the provider's words when every mailbox searched is the same provider: a Gmail
+        // search "in trash" is in Trash, not in Deleted Items (OP2-294). Mixed providers get
+        // the word the user said, since no one provider's name for it is right for both.
+        var searchedProviders = searching.Select(c => c.Provider).Distinct().ToList();
+        var scope = folder is null
+            ? ""
+            : $" in {(searchedProviders.Count == 1 ? Spoken(folder, searchedProviders[0]) : Untrusted.Scrub(folder.Trim()))}";
 
         if (found.Count == 0)
             return Empty($"Nothing found for \"{query}\"{scope}.", searching.Count, failed);
@@ -629,7 +635,7 @@ public sealed partial class MailTools(
                 // Deliberately not created on the fly. A misheard destination would
                 // otherwise leave a folder named after the mistake and file the message
                 // into it, which is the same failure categorise_mail's colour gate avoids.
-                var (match, problem) = Pick(folders, destination, c.Label);
+                var (match, problem) = Pick(folders, destination, c.Label, MailWords.For(c.Provider));
                 if (problem is not null) return problem;
 
                 target = match!.Id;
@@ -673,15 +679,15 @@ public sealed partial class MailTools(
             {
                 var wk = WellKnown(under);
                 var (match, problem) = wk is null
-                    ? Pick(all, under, c.Label)
+                    ? Pick(all, under, c.Label, MailWords.For(c.Provider))
                     : (all.FirstOrDefault(f => Same(f.WellKnownName, wk)), null);
 
                 if (problem is not null) return problem;
-                if (match is null) return NoFolder(c.Label, under, all);
+                if (match is null) return NoFolder(c.Label, under, all, MailWords.For(c.Provider));
                 root = match;
             }
 
-            return Listing(all, root, c.Label);
+            return Listing(all, root, c.Label, MailWords.For(c.Provider));
         }
         catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
         catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
@@ -698,8 +704,12 @@ public sealed partial class MailTools(
     /// whether to look inside.
     /// </para>
     /// </summary>
-    public static string Listing(IReadOnlyList<MailFolder> all, MailFolder? root, string label)
+    public static string Listing(IReadOnlyList<MailFolder> all, MailFolder? root, string label, MailWords? words = null)
     {
+        // Gmail's system labels are well-known folders too, so the marker has to be the
+        // provider's: "(Outlook's own)" beside Gmail's Spam names a product the user is not
+        // using (OP2-294).
+        words ??= MailWords.Outlook;
         var prefix = root is null ? "" : root.Path + "/";
 
         bool Immediate(MailFolder f) =>
@@ -742,7 +752,7 @@ public sealed partial class MailTools(
                         + (below > 0
                             ? $", {below} folder{(below == 1 ? "" : "s")} inside"
                             : f.ChildCount > 0 ? $", {f.ChildCount} inside I couldn't reach" : "")
-                        + (f.IsWellKnown ? " (Outlook's own)" : ""));
+                        + (f.IsWellKnown ? $" ({words.OwnMarker})" : ""));
         }
 
         var collapsed = ordered.Count(f =>
@@ -789,7 +799,7 @@ public sealed partial class MailTools(
                 parentId = WellKnown(parent);
                 if (parentId is null)
                 {
-                    var (match, problem) = Pick(folders, parent, c.Label);
+                    var (match, problem) = Pick(folders, parent, c.Label, MailWords.For(c.Provider));
                     if (problem is not null) return problem;
                     (parentId, parentPath, under) = (match!.Id, match.Path, $" inside {Untrusted.Scrub(match.Path)}");
                 }
@@ -857,7 +867,7 @@ public sealed partial class MailTools(
         try
         {
             var folders = await mail.ListFoldersAsync(c, ct);
-            var (match, problem) = Pick(folders, folder, c.Label);
+            var (match, problem) = Pick(folders, folder, c.Label, MailWords.For(c.Provider));
             if (problem is not null) return problem;
 
             // Graph lets some of these through, and a mailbox whose Inbox is called
@@ -892,7 +902,7 @@ public sealed partial class MailTools(
         try
         {
             var folders = await mail.ListFoldersAsync(c, ct);
-            var (match, problem) = Pick(folders, folder, c.Label);
+            var (match, problem) = Pick(folders, folder, c.Label, MailWords.For(c.Provider));
             if (problem is not null) return problem;
 
             if (Refuse(match!, confirm, c.Provider) is { } stop) return stop;
@@ -967,7 +977,7 @@ public sealed partial class MailTools(
         {
             var folders = await mail.ListFoldersAsync(c, ct);
 
-            var (scope, where, problem) = Scope(folders, folder, c.Label);
+            var (scope, where, problem) = Scope(folders, folder, c.Label, c.Provider);
             if (problem is not null) return problem;
 
             var target = new ClearTarget { From = from.Trim(), FolderIds = scope, Before = cutoff };
@@ -1004,7 +1014,7 @@ public sealed partial class MailTools(
 
                 // Said before the other notes, because it changes what the listener should
                 // do next: everything else invites another go, this asks them to wait.
-                if (done.Throttled) said += " " + Slow(done.RetryAfter);
+                if (done.Throttled) said += " " + Slow(done.RetryAfter, MailWords.For(c.Provider));
 
                 // Said plainly rather than rounded off. "Moved 400" when 12 are still
                 // sitting there is the failure this tool exists to replace.
@@ -1087,7 +1097,7 @@ public sealed partial class MailTools(
             var said = $"Put {done.Deleted} message{(done.Deleted == 1 ? "" : "s")} from "
                      + $"\"{Untrusted.Scrub(from)}\" back in the Inbox on {c.Label}.";
 
-            if (done.Throttled) said += " " + Slow(done.RetryAfter);
+            if (done.Throttled) said += " " + Slow(done.RetryAfter, MailWords.For(c.Provider));
 
             if (done.Failed > 0)
                 said += $" {done.Failed} wouldn't move — those may be past the retention window.";
@@ -1112,8 +1122,10 @@ public sealed partial class MailTools(
     /// </para>
     /// </summary>
     public static (IReadOnlyList<string>? Scope, string Where, string? Problem) Scope(
-        IReadOnlyList<MailFolder> folders, string? said, string label)
+        IReadOnlyList<MailFolder> folders, string? said, string label,
+        ProviderKind provider = ProviderKind.Microsoft)
     {
+        var words = MailWords.For(provider);
         if (!string.IsNullOrWhiteSpace(said)
             && said.Trim().Equals("all", StringComparison.OrdinalIgnoreCase))
             return (null, " everywhere in the mailbox, including folders you've filed into", null);
@@ -1125,11 +1137,11 @@ public sealed partial class MailTools(
             {
                 var one = folders.FirstOrDefault(f => Same(f.WellKnownName, wk));
                 return one is null
-                    ? (null, "", NoFolder(label, said, folders))
-                    : ((IReadOnlyList<string>)[one.Id], $" in {Spoken(said)}", null);
+                    ? (null, "", NoFolder(label, said, folders, words))
+                    : ((IReadOnlyList<string>)[one.Id], $" in {Spoken(said, provider)}", null);
             }
 
-            var (match, problem) = Pick(folders, said, label);
+            var (match, problem) = Pick(folders, said, label, words);
             if (problem is not null) return (null, "", problem);
             return ([match!.Id], $" in {Untrusted.Scrub(match.Path)}", null);
         }
@@ -1293,11 +1305,14 @@ public sealed partial class MailTools(
     /// limit becomes a five-minute one. So: a number of seconds, and why.
     /// </para>
     /// </summary>
-    public static string Slow(TimeSpan? retryAfter)
+    public static string Slow(TimeSpan? retryAfter, MailWords? words = null)
     {
         var seconds = Math.Max(5, (int)Math.Ceiling((retryAfter ?? TimeSpan.FromSeconds(30)).TotalSeconds));
 
-        return "Microsoft then started rate-limiting the mailbox, so I stopped there rather "
+        // Named by provider. This said "Microsoft" unconditionally, which was right until
+        // Gmail's clear-out learned to stop on a throttle too (OP2-282) — after that a Gmail
+        // user was told Microsoft was limiting a mailbox Microsoft has never seen (OP2-294).
+        return $"{(words ?? MailWords.Outlook).Company} then started rate-limiting the mailbox, so I stopped there rather "
              + "than push. Nothing was lost — what I've said is done is done. Wait about "
              + $"{seconds} seconds before asking for the rest, and don't retry immediately: "
              + "that extends the limit instead of clearing it.";
@@ -1547,7 +1562,13 @@ public sealed partial class MailTools(
         if (found.Problem is not null) return found.Problem;
         var (item, c) = (found.Item!, found.Connection!);
 
-        var items = await mail.ListAttachmentsAsync(c, item.ItemId, ct);
+        // The one pair of mail tools with no catch, so a provider failure — Gmail's 403, a
+        // throttle, Graph's own error sentence — escaped as a raw exception rather than the
+        // plain sentence every other tool gives for the same failure (OP2-294).
+        IReadOnlyList<MailAttachment> items;
+        try { items = await mail.ListAttachmentsAsync(c, item.ItemId, ct); }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
         if (items.Count == 0) return "That message has no attachments.";
 
         var sb = new StringBuilder($"{items.Count} attachment{(items.Count == 1 ? "" : "s")}:\n");
@@ -1574,6 +1595,14 @@ public sealed partial class MailTools(
         if (found.Problem is not null) return found.Problem;
         var (item, c) = (found.Item!, found.Connection!);
 
+        try { return await ReadAttachmentAsync(c, item, attachmentNumber, ct); }
+        catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
+    }
+
+    /// <summary>read_attachment past the handle, so one catch covers both provider calls (OP2-294).</summary>
+    private async Task<string> ReadAttachmentAsync(Connection c, ItemRef item, int attachmentNumber, CancellationToken ct)
+    {
         var items = await mail.ListAttachmentsAsync(c, item.ItemId, ct);
         if (items.Count == 0) return "That message has no attachments.";
 
@@ -1661,6 +1690,7 @@ public sealed partial class MailTools(
                 skipped);
         }
         catch (MailAuthRequiredException ex) { return Untrusted.Scrub(ex.Message); }
+        catch (MailException ex) { return Untrusted.Scrub(ex.Message); }
         catch (TooManyTicketsException ex) { return Untrusted.Scrub(ex.Message); }
     }
 
@@ -1903,13 +1933,16 @@ public sealed partial class MailTools(
     /// <summary>The well-known places, in the provider's own words (OP2-282).</summary>
     public static string Spoken(string destination, ProviderKind provider)
     {
-        var gmail = provider == ProviderKind.Google;
+        // Trash and Junk from the provider's words rather than "Gmail, or else Outlook", so a
+        // provider with no words of its own is described plainly, not in Outlook's (OP2-294).
+        var words = MailWords.For(provider);
+        var outlook = ReferenceEquals(words, MailWords.Outlook);
         return WellKnown(destination) switch
         {
-            "deleteditems" => gmail ? "Trash" : "Deleted Items",
-            "junkemail" => gmail ? "Spam" : "Junk Email",
-            "sentitems" => gmail ? "Sent" : "Sent Items",
-            "archive" => gmail ? "the archive" : "Archive",
+            "deleteditems" => words.Trash,
+            "junkemail" => words.Junk,
+            "sentitems" => outlook ? "Sent Items" : "Sent",
+            "archive" => outlook ? "Archive" : "the archive",
             "inbox" => "the Inbox",
             "drafts" => "Drafts",
             _ => destination,
@@ -2029,15 +2062,16 @@ public sealed partial class MailTools(
     /// Either the folder meant, or what to say instead — not found, or found several times.
     /// </summary>
     public static (MailFolder? Folder, string? Problem) Pick(
-        IReadOnlyList<MailFolder> folders, string? said, string label)
+        IReadOnlyList<MailFolder> folders, string? said, string label, MailWords? words = null)
     {
         var hits = Matches(folders, said);
+        var w = words ?? MailWords.Outlook;
 
         return hits switch
         {
             [var only] => (only, null),
-            [] => (null, NoFolder(label, said, folders)),
-            _ => (null, $"\"{(said ?? "").Trim()}\" is the name of {hits.Count} folders in "
+            [] => (null, NoFolder(label, said, folders, w)),
+            _ => (null, $"\"{(said ?? "").Trim()}\" is the name of {hits.Count} {w.Folder}s in "
                       + $"{label} — {Untrusted.Scrub(string.Join(", ", hits.Select(f => f.Path)))}. "
                       + "Say the full path and I'll use that one."),
         };
@@ -2052,8 +2086,12 @@ public sealed partial class MailTools(
     /// listed every folder it knew, which was tolerable only because it knew so few.
     /// </para>
     /// </summary>
-    public static string NoFolder(string label, string? said, IReadOnlyList<MailFolder> folders)
+    public static string NoFolder(
+        string label, string? said, IReadOnlyList<MailFolder> folders, MailWords? words = null)
     {
+        // In the provider's word: a Gmail user told "no folder called Receipts" goes looking
+        // for a folder, and Gmail has none — it has labels (OP2-294).
+        var w = words ?? MailWords.Outlook;
         var term = (said ?? "").Trim();
 
         var near = folders
@@ -2067,16 +2105,16 @@ public sealed partial class MailTools(
         var instead = near.Count > 0
             ? $"Closest {(near.Count == 1 ? "is" : "are")} "
               + Untrusted.Scrub(string.Join(", ", near)) + "."
-            : $"There {(folders.Count == 1 ? "is" : "are")} {folders.Count} folder"
+            : $"There {(folders.Count == 1 ? "is" : "are")} {folders.Count} {w.Folder}"
               + $"{(folders.Count == 1 ? "" : "s")}, including "
               + Untrusted.Scrub(string.Join(", ", folders.Take(6).Select(f => f.Path))) + ".";
 
-        return $"No folder called \"{term}\" in {label}. {instead} I can make one if you want it"
+        return $"No {w.Folder} called \"{term}\" in {label}. {instead} I can make one if you want it"
             // Not "it doesn't exist" when we can see that we did not finish looking.
             // Offering to create a folder that is really there, five levels down, is how a
             // mailbox ends up with two folders of the same name and mail in both.
             + (Deeper(folders) > 0
-                ? ", though this mailbox has more folders than I was able to walk, so it may "
+                ? $", though this mailbox has more {w.Folder}s than I was able to walk, so it may "
                   + "be there and out of my reach."
                 : "")
             + ".";

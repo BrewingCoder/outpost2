@@ -259,6 +259,16 @@ public sealed class CalendarTools(
 
         var c = resolution.Connection!;
 
+        // Refused BEFORE anything is created, because creating mails the attendees. The
+        // service asks Graph for a teamsForBusiness meeting, and Microsoft's calendar
+        // resource lists that provider beside skypeForConsumer as different things: a
+        // personal account has no Teams for business to put a link on (OP2-294, the OP2-81
+        // case). Without this the event went out with no link and the reply simply did not
+        // mention one — the invitation the user asked for, minus the part they asked for.
+        if (online && PersonalMicrosoftAccount.Is(c))
+            return PersonalMicrosoftAccount.NotOffered(c, "Teams meeting links on calendar events")
+                 + " Nothing was created — say it again without the Teams link and I'll add it as an ordinary event.";
+
         if (!TryParseLocal(start, out var from))
             return $"I couldn't read \"{start}\" as a time. Use yyyy-MM-ddTHH:mm, e.g. 2026-11-03T14:00.";
 
@@ -308,6 +318,10 @@ public sealed class CalendarTools(
                 sb.Append($". Invitations have gone to {invited} {(invited == 1 ? "person" : "people")}");
 
             if (created.OnlineMeetingUrl is not null) sb.Append(". Teams link attached");
+
+            // Asked for and not given is said, not skipped: an invitation that went out
+            // without the link the user asked for is the one they will be asked about.
+            else if (online) sb.Append(". No Teams link came back with it, so attendees have none — add one in Outlook if it's needed");
             sb.Append($". Handle {handle.Ref}.");
 
             return sb.ToString();
