@@ -39,7 +39,12 @@ public interface IYouTrackService
     Task<IReadOnlyList<ProjectSummary>> ListProjectsAsync(Connection c, CancellationToken ct = default);
     Task<IReadOnlyList<IssueSummary>> SearchAsync(Connection c, string query, int top = 20, CancellationToken ct = default);
     Task<IssueDetail?> GetIssueAsync(Connection c, string issueKey, CancellationToken ct = default);
-    Task<string> CreateIssueAsync(Connection c, string projectShortName, string summary, string? description, CancellationToken ct = default);
+    /// <param name="issueType">
+    /// Jira needs one on every issue (Task, Bug, Story…); YouTrack has no such thing at
+    /// creation and ignores it. Null lets the provider choose its own default.
+    /// </param>
+    Task<string> CreateIssueAsync(Connection c, string projectShortName, string summary, string? description,
+        string? issueType = null, CancellationToken ct = default);
     Task CommentAsync(Connection c, string issueKey, string text, CancellationToken ct = default);
     Task ApplyCommandAsync(Connection c, string issueKey, string command, CancellationToken ct = default);
     Task<ProjectSummary> CreateProjectAsync(Connection c, string name, string shortName, CancellationToken ct = default);
@@ -48,8 +53,10 @@ public interface IYouTrackService
 public sealed class YouTrackService(
     IHttpClientFactory httpFactory,
     IConnectionStore connections,
-    ILogger<YouTrackService> log) : IYouTrackService
+    ILogger<YouTrackService> log) : IIssueProvider
 {
+    public ProviderKind Provider => ProviderKind.YouTrack;
+
     private async Task<HttpClient> ClientAsync(Connection c, CancellationToken ct)
     {
         var token = await connections.GetCredentialAsync(c, ct)
@@ -148,7 +155,8 @@ public sealed class YouTrackService(
         ms is null or <= 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(ms.Value);
 
     public async Task<string> CreateIssueAsync(
-        Connection c, string projectShortName, string summary, string? description, CancellationToken ct = default)
+        Connection c, string projectShortName, string summary, string? description,
+        string? issueType = null, CancellationToken ct = default)
     {
         using var http = await ClientAsync(c, ct);
 

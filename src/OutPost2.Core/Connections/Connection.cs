@@ -161,6 +161,15 @@ public enum ProviderKind
     /// like the rest, so adding it needs no migration.
     /// </summary>
     Gitea,
+
+    /// <summary>
+    /// Jira Cloud (OP2-82), reached at <c>https://&lt;site&gt;.atlassian.net</c> with an
+    /// Atlassian account email and API token. Behind the same issue tools as YouTrack, with
+    /// its own implementation: the query language, the status model and the comment format
+    /// are all different. Server and Data Center are not covered. Stored as its name, so
+    /// adding it needs no migration.
+    /// </summary>
+    Jira,
 }
 
 public enum AuthKind
