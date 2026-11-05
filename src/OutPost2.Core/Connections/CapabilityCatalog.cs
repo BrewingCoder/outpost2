@@ -84,7 +84,7 @@ public static class CapabilityCatalog
         ],
         ProviderKind.YouTrack =>
             [Capabilities.IssuesRead, Capabilities.IssuesWrite, Capabilities.IssuesAdmin],
-        ProviderKind.GitHub =>
+        ProviderKind.GitHub or ProviderKind.Gitea =>
             [Capabilities.CodeRead, Capabilities.CodeWrite],
 
         // Mail only, deliberately (OP2-278). Declaring a capability is what makes a tool
@@ -160,7 +160,7 @@ public static class CapabilityCatalog
     {
         ProviderKind.Microsoft or ProviderKind.Google => $"check {label} email",
         ProviderKind.YouTrack => $"what's open in {label}",
-        ProviderKind.GitHub => $"what pull requests am I blocking on {label}",
+        ProviderKind.GitHub or ProviderKind.Gitea => $"what pull requests am I blocking on {label}",
         _ => label,
     };
 
@@ -170,6 +170,7 @@ public static class CapabilityCatalog
         ProviderKind.Microsoft => "Microsoft mail",
         ProviderKind.YouTrack => "YouTrack issue trackers",
         ProviderKind.GitHub => "GitHub pull requests and issues",
+        ProviderKind.Gitea => "Gitea and Forgejo pull requests and issues",
         ProviderKind.Google => "Gmail",
         _ => provider.ToString(),
     };
@@ -183,7 +184,7 @@ public static class CapabilityCatalog
         ProviderKind.YouTrack =>
             "Chosen on purpose. One tracker per client: answering about the wrong client's "
             + "tickets is worse than being asked.",
-        ProviderKind.GitHub =>
+        ProviderKind.GitHub or ProviderKind.Gitea =>
             "Chosen on purpose. With one account Claude still confirms it, so a second "
             + "account added later never gets used by accident.",
         _ =>

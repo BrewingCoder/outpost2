@@ -29,7 +29,7 @@ public sealed class CodeTools(
         // provider-agnostic, so without this a connection for a different provider could
         // win a label match and then be called with an API it does not speak.
         var candidates = (await connections.ListAsync(UserId, ct))
-            .Where(c => c.Provider == ProviderKind.GitHub)
+            .Where(c => c.Provider is ProviderKind.GitHub or ProviderKind.Gitea)
             .ToList();
 
         var r = ConnectionResolver.Resolve(candidates, capability, connection, isWrite);
@@ -44,7 +44,7 @@ public sealed class CodeTools(
     }
 
     private const string ConnectionDoc =
-        "GitHub connection name. Required unless a default has been set.";
+        "Code connection name — GitHub, or a Gitea/Forgejo server. Required unless a default has been set.";
 
     private const string RepoDoc =
         "Repository. A bare name like 'RosettaCore' is resolved against the repositories " +
@@ -72,7 +72,7 @@ public sealed class CodeTools(
     }
 
     [McpServerTool(Name = "github_triage", ReadOnly = true, OpenWorld = true)]
-    [Description("What on GitHub is waiting on me: pull requests to review, my open PRs, issues assigned to me.")]
+    [Description("What on GitHub (or a Gitea/Forgejo server) is waiting on me: pull requests to review, my open PRs, issues assigned to me.")]
     public async Task<string> Triage(
         [Description(ConnectionDoc)] string? connection = null,
         CancellationToken ct = default)
@@ -202,7 +202,7 @@ public sealed class CodeTools(
     }
 
     [McpServerTool(Name = "github_repositories", ReadOnly = true, OpenWorld = true)]
-    [Description("List the repositories this GitHub connection can see, and the names configured for it. Use it to answer whether a repository is reachable at all, to find its owner when only the name is known, or to see what nicknames resolve to what.")]
+    [Description("List the repositories this code connection (GitHub, Gitea or Forgejo) can see, and the names configured for it. Use it to answer whether a repository is reachable at all, to find its owner when only the name is known, or to see what nicknames resolve to what.")]
     public async Task<string> Repositories(
         [Description("Optional filter on name, owner or description.")] string? match = null,
         [Description(ConnectionDoc)] string? connection = null,
@@ -299,7 +299,7 @@ public sealed class CodeTools(
     }
 
     [McpServerTool(Name = "github_repo_names", ReadOnly = true, OpenWorld = true)]
-    [Description("List the repository names (aliases) configured for a GitHub connection — the nicknames that resolve to a specific owner/name. Call this when asked what names, aliases or shortcuts are set up.")]
+    [Description("List the repository names (aliases) configured for a code connection — the nicknames that resolve to a specific owner/name. Call this when asked what names, aliases or shortcuts are set up.")]
     public async Task<string> RepoNames(
         [Description(ConnectionDoc)] string? connection = null,
         CancellationToken ct = default)
@@ -316,7 +316,7 @@ public sealed class CodeTools(
         if (names.Count == 0)
         {
             return $"No repository names are configured for {c.Label}. " +
-                   "None are needed unless a name is ambiguous or is a nickname GitHub does not know — " +
+                   "None are needed unless a name is ambiguous or is a nickname the server does not know — " +
                    "a bare repository name resolves against the repositories this connection can see. " +
                    "They are added on the Repository names page.";
         }

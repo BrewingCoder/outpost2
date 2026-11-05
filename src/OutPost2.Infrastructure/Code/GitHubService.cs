@@ -154,8 +154,10 @@ public interface IGitHubService
 public sealed class GitHubService(
     IHttpClientFactory httpFactory,
     IConnectionStore connections,
-    ILogger<GitHubService> log) : IGitHubService
+    ILogger<GitHubService> log) : ICodeProvider
 {
+    public ProviderKind Provider => ProviderKind.GitHub;
+
     private async Task<HttpClient> ClientAsync(Connection c, CancellationToken ct)
     {
         var token = await connections.GetCredentialAsync(c, ct)
@@ -604,4 +606,9 @@ public sealed class GitHubService(
     }
 }
 
+/// <summary>
+/// A code-host failure, said in one plain sentence. The code tools catch this one type
+/// whichever server is behind the connection — GitHub or Gitea/Forgejo (OP2-84) — so the
+/// name is historical rather than a promise about the provider.
+/// </summary>
 public sealed class GitHubException(string message) : Exception(message);

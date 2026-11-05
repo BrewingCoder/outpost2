@@ -153,6 +153,14 @@ public enum ProviderKind
     /// so adding it changes no column and needs no migration.
     /// </summary>
     Google,
+
+    /// <summary>
+    /// A self-hosted Gitea or Forgejo server (OP2-84). One provider covers both: Forgejo is
+    /// a Gitea fork serving the same <c>/api/v1</c>. GitHub-like but not wire-compatible,
+    /// so it has its own implementation behind the same code tools. Stored as its name,
+    /// like the rest, so adding it needs no migration.
+    /// </summary>
+    Gitea,
 }
 
 public enum AuthKind
