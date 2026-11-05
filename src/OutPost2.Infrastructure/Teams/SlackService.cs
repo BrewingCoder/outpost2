@@ -255,8 +255,19 @@ public sealed class SlackService(
 
         foreach (var mp in all.Where(x => x.IsMpim).Take(20))
         {
-            var chat = await ToChatAsync(http, connection, mp, ct);
-            if (chat.Others.Any(o => o.Contains(needle, StringComparison.OrdinalIgnoreCase))) found.Add(chat);
+            // On every alias, as for a DM: "Darren Jones" finds the group Darren is in.
+            var members = await GetAsync<MembersPage>(http, connection,
+                $"conversations.members?channel={Q(mp.Id)}&limit=20", "read who is in a group DM", ct);
+            var people = new List<Person>();
+            foreach (var id in (members.Members ?? []).Where(m => m != Me(connection)))
+                if (await PersonAsync(http, connection, id, ct) is { } p) people.Add(p);
+
+            if (people.Any(p => p.Matches(needle)))
+                found.Add(new Chat
+                {
+                    Id = mp.Id, ConnectionLabel = connection.Label, Kind = ChatKind.Group,
+                    Others = people.Select(p => p.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                });
         }
 
         // A channel only by its exact name: "Al" must not find #general.
