@@ -29,6 +29,54 @@ public sealed class EntraOptions
     public string Authority { get; set; } = "https://login.microsoftonline.com/organizations";
 
     /// <summary>
+    /// Offer personal Microsoft accounts — outlook.com, hotmail.com, live.com (OP2-81).
+    /// <para>
+    /// Off by default because it needs the app registration's supported account types
+    /// set to "any organizational directory and personal Microsoft accounts"
+    /// (<c>AzureADandPersonalMicrosoftAccount</c>). On a work-only registration every
+    /// personal sign-in fails at Microsoft with an error that reads like a bug in
+    /// OutPost2, so the option is not shown until a deployment says it can serve it.
+    /// </para>
+    /// <para>
+    /// Turning it on does NOT widen the work sign-in to <c>/common</c>; see
+    /// <see cref="ConsumerAuthority"/>.
+    /// </para>
+    /// </summary>
+    public bool PersonalAccounts { get; set; }
+
+    /// <summary>
+    /// The authority for personal accounts: <c>/consumers</c>, a separate path chosen by
+    /// the user up front. <c>/common</c> would put the work and personal accounts for one
+    /// address side by side in the same picker — the wrong-mailbox trap that
+    /// <see cref="Authority"/> exists to avoid — whereas <c>/consumers</c> never offers
+    /// the work account, just as <c>/organizations</c> never offers the personal one.
+    /// </summary>
+    public string ConsumerAuthority { get; set; } = "https://login.microsoftonline.com/consumers";
+
+    /// <summary>
+    /// Optional scopes NOT asked of a personal account, because Graph offers the feature
+    /// behind them to work or school accounts only. Asking anyway is not harmless: the
+    /// consumer endpoint can reject the whole request over one scope it does not support,
+    /// and that would cost the user their mail over a Teams permission.
+    /// <list type="bullet">
+    /// <item>User.ReadBasic.All — the organisation directory. A personal account has none.</item>
+    /// <item>Calendars.Read.Shared — needed only by <c>findMeetingTimes</c>, which is work or school only.</item>
+    /// <item>Chat.Read, ChatMessage.Send — Teams chat, work or school only.</item>
+    /// </list>
+    /// </summary>
+    public string[] PersonalUnsupportedScopes { get; set; } =
+    [
+        "https://graph.microsoft.com/User.ReadBasic.All",
+        "https://graph.microsoft.com/Calendars.Read.Shared",
+        "https://graph.microsoft.com/Chat.Read",
+        "https://graph.microsoft.com/ChatMessage.Send",
+    ];
+
+    /// <summary>What a personal account is asked to consent to: everything it can actually use.</summary>
+    public string[] PersonalConsentScopes =>
+        [.. ConsentScopes.Where(s => !PersonalUnsupportedScopes.Contains(s, StringComparer.OrdinalIgnoreCase))];
+
+    /// <summary>
     /// Must match a redirect URI on the app registration. No default on purpose: a default
     /// pointing at someone else's deployment would send this instance's users there to
     /// consent, and it would fail in a way that looks like a tenant problem.
@@ -199,12 +247,16 @@ public sealed class MicrosoftConnectionService(
     /// </para>
     /// </summary>
     private async Task<(IConfidentialClientApplication App, Func<Task> PersistAsync)>
-        BuildAppAsync(Connection? connection, CancellationToken ct)
+        BuildAppAsync(Connection? connection, bool personal, CancellationToken ct)
     {
+        // The authority has to match the account on every leg — authorize, redeem, AND
+        // each silent refresh. A personal account's refresh token sent to /organizations
+        // is refused as an unknown identity provider, which would surface as "needs
+        // re-authorising" every hour on a perfectly healthy connection.
         var app = ConfidentialClientApplicationBuilder
             .Create(_o.ClientId)
             .WithClientSecret(_o.ClientSecret)
-            .WithAuthority(_o.Authority, validateAuthority: false)
+            .WithAuthority(personal ? _o.ConsumerAuthority : _o.Authority, validateAuthority: false)
             .WithRedirectUri(_o.RedirectUri)
             .Build();
 
@@ -235,9 +287,29 @@ public sealed class MicrosoftConnectionService(
         return (app, PersistAsync);
     }
 
+    /// <summary>Whether this pending sign-in is for a personal account (OP2-81).</summary>
+    private bool IsPersonal(PendingConnection pending)
+    {
+        if (!PersonalMicrosoftAccount.IsHint(pending.TenantHint)) return false;
+
+        // Refused here as well as at the endpoint, so nothing that builds a pending record
+        // by hand can get around the switch. A reconnect is let through: the switch stops
+        // NEW personal connections, and refusing to renew one that already exists would
+        // strand it with no way back except deleting it.
+        if (!_o.PersonalAccounts && !pending.IsReconnect)
+            throw new InvalidOperationException(
+                "Personal Microsoft accounts are not enabled on this server.");
+
+        return true;
+    }
+
+    /// <summary>What to ask consent for, by kind of account.</summary>
+    private string[] ConsentScopesFor(bool personal) => personal ? _o.PersonalConsentScopes : _o.ConsentScopes;
+
     public async Task<Uri> BuildAuthorizeUrlAsync(PendingConnection pending, CancellationToken ct = default)
     {
-        var (app, _) = await BuildAppAsync(null, ct);
+        var personal = IsPersonal(pending);
+        var (app, _) = await BuildAppAsync(null, personal, ct);
 
         // The tuple-valued overload, because the Dictionary<string,string> one is obsolete
         // (OP2-147). includeInCacheKey is false for both of these and that is the whole
@@ -258,10 +330,10 @@ public sealed class MicrosoftConnectionService(
         // which reads like a permissions problem but is really the wrong identity
         // provider. prompt=select_account does not help, because federation engages
         // before any picker is shown.
-        if (!string.IsNullOrWhiteSpace(pending.TenantHint) && pending.TenantHint.Contains('.'))
+        if (!personal && !string.IsNullOrWhiteSpace(pending.TenantHint) && pending.TenantHint.Contains('.'))
             extra["domain_hint"] = (pending.TenantHint.Trim(), false);
 
-        var builder = app.GetAuthorizationRequestUrl(_o.ConsentScopes)
+        var builder = app.GetAuthorizationRequestUrl(ConsentScopesFor(personal))
             .WithExtraQueryParameters(extra)
             // WithPrompt, NOT an extra query parameter: MSAL emits `prompt` itself and
             // throws MsalClientException("Duplicate query parameter 'prompt'") if it is
@@ -277,8 +349,10 @@ public sealed class MicrosoftConnectionService(
         // code redemption fails after the user has already consented.
         pending.CodeVerifier = codeVerifier;
 
-        // A tenant hint sends the user straight to the right directory; /common otherwise.
-        if (!string.IsNullOrWhiteSpace(pending.TenantHint))
+        // A tenant hint sends the user straight to the right directory; /organizations
+        // otherwise. Not for a personal account: the authority is already /consumers, and
+        // that is the only directory a personal account has.
+        if (!personal && !string.IsNullOrWhiteSpace(pending.TenantHint))
             builder = builder.WithTenantId(pending.TenantHint);
 
         return await builder.ExecuteAsync(ct);
@@ -389,9 +463,10 @@ public sealed class MicrosoftConnectionService(
 
     public async Task<Connection> CompleteAsync(PendingConnection pending, string code, CancellationToken ct = default)
     {
-        var (app, _) = await BuildAppAsync(null, ct);
+        var personal = IsPersonal(pending);
+        var (app, _) = await BuildAppAsync(null, personal, ct);
 
-        var result = await app.AcquireTokenByAuthorizationCode(_o.ConsentScopes, code)
+        var result = await app.AcquireTokenByAuthorizationCode(ConsentScopesFor(personal), code)
             .WithPkceCodeVerifier(pending.CodeVerifier)
             .ExecuteAsync(ct);
 
@@ -431,12 +506,23 @@ public sealed class MicrosoftConnectionService(
 
         var capabilities = CapabilitiesFor(granted);
 
-        // Unreachable via /organizations, but a silently-wrong mailbox is bad enough to
-        // be worth a second check that does not depend on the IdP behaving.
-        if (string.Equals(tenantId, Connection.ConsumerTenantId, StringComparison.OrdinalIgnoreCase))
+        // Unreachable via /organizations or /consumers respectively, but a silently-wrong
+        // mailbox is bad enough to be worth a second check that does not depend on the
+        // IdP behaving. Each direction names the way to get the OTHER kind, because the
+        // user plainly has both and meant whichever one this is not.
+        var isConsumer = string.Equals(tenantId, Connection.ConsumerTenantId, StringComparison.OrdinalIgnoreCase);
+
+        if (isConsumer && !personal)
             throw new InvalidOperationException(
-                $"{account.Username} is a personal Microsoft account. OutPost2 connects " +
-                "organisational tenants only — pick the work or school account with the same address.");
+                $"{account.Username} is a personal Microsoft account, and this was a work or school sign-in. " +
+                (_o.PersonalAccounts
+                    ? "Pick the work or school account with the same address, or add it again as a personal account."
+                    : "OutPost2 connects organisational tenants only — pick the work or school account with the same address."));
+
+        if (personal && !isConsumer)
+            throw new InvalidOperationException(
+                $"{account.Username} is a work or school account, and this was a personal sign-in. " +
+                "Add it again as a work or school account.");
 
         log.LogInformation(
             "Completed Microsoft connection for {Username} in tenant {Tenant}; granted {Scopes}.",
@@ -452,7 +538,7 @@ public sealed class MicrosoftConnectionService(
         // them — and a raw GUID tells a human nothing.
         await connections.SetAccountIdentityAsync(created,
             account.Username,
-            isPersonal: string.Equals(tenantId, Connection.ConsumerTenantId, StringComparison.OrdinalIgnoreCase),
+            isPersonal: isConsumer,
             ct);
 
         return created;
@@ -460,7 +546,11 @@ public sealed class MicrosoftConnectionService(
 
     public async Task<string?> GetAccessTokenAsync(Connection connection, CancellationToken ct = default)
     {
-        var (app, persist) = await BuildAppAsync(connection, ct);
+        // Not gated on PersonalAccounts: switching the option off stops NEW personal
+        // connections, it must not quietly break the ones that already exist.
+        var personal = PersonalMicrosoftAccount.Is(connection);
+        var (app, persist) = await BuildAppAsync(connection, personal, ct);
+        var wideScopes = ConsentScopesFor(personal);
 
         // By identifier, which is both the supported call and the cheap one (OP2-147):
         // GetAccountsAsync() deserialises and walks the whole cache, and this server has
@@ -501,7 +591,7 @@ public sealed class MicrosoftConnectionService(
         {
             try
             {
-                var wide = await app.AcquireTokenSilent(_o.ConsentScopes, account).ExecuteAsync(ct);
+                var wide = await app.AcquireTokenSilent(wideScopes, account).ExecuteAsync(ct);
                 await persist();
                 await connections.TouchAsync(connection.Id, ct);
                 return wide.AccessToken;

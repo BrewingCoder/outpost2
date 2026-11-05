@@ -551,9 +551,15 @@ public sealed class CalendarTools(
 
         if (!resolution.IsActionable) return resolution.SpokenSummary;
 
+        // On a fan-out, prefer a calendar that can actually rank times: findMeetingTimes is
+        // work or school only (OP2-81), so picking a personal one first would refuse a
+        // request another connection could have answered.
         var c = resolution.Kind is ResolutionKind.FanOut
-            ? resolution.Connections[0]
+            ? resolution.Connections.FirstOrDefault(x => !PersonalMicrosoftAccount.Is(x)) ?? resolution.Connections[0]
             : resolution.Connection!;
+
+        if (PersonalMicrosoftAccount.Is(c))
+            return PersonalMicrosoftAccount.NotOffered(c, "ranked meeting suggestions");
 
         var zone = await calendar.TimeZoneAsync(c, ct);
         var (addresses, unresolved, ambiguous) = await ResolveAddressesAsync(c, who, ct);

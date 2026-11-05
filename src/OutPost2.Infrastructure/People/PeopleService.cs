@@ -92,7 +92,10 @@ public sealed class PeopleService(
         // the slowest of the three and the least likely to be what was meant: somebody the
         // user has never corresponded with and never saved is rarely who "email Justin"
         // refers to.
-        var directory = relevant.Count + contacts.Count >= 3
+        //
+        // Never for a personal Microsoft account (OP2-81): it has no organisation, so there
+        // is no directory to ask, and the scope for it was never requested.
+        var directory = relevant.Count + contacts.Count >= 3 || PersonalMicrosoftAccount.Is(connection)
             ? []
             : await DirectoryAsync(http, connection, wanted, top, ct);
 

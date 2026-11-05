@@ -26,14 +26,32 @@ public static class ConnectionEndpoints
             IPendingConnectionStore pendings,
             IMicrosoftConnectionService microsoft,
             IConnectionStore connections,
+            Microsoft.Extensions.Options.IOptions<EntraOptions> entra,
             [FromForm] string label,
-            [FromForm] string? tenantHint) =>
+            [FromForm] string? tenantHint,
+            [FromForm] string? accountType) =>
         {
             var userId = ctx.User.UserId();
             label = label.Trim();
 
             if (string.IsNullOrWhiteSpace(label))
                 return Results.BadRequest("A name is required.");
+
+            // Personal accounts (OP2-81) are a choice the user makes HERE, not something
+            // inferred from the address: one address can be both kinds, and guessing is
+            // how the wrong mailbox gets connected. The domain box is ignored for them —
+            // a personal account has no organisation to steer to.
+            //
+            // A hand-typed "consumers" in the domain box counts as asking for personal,
+            // and is refused the same way when the server does not offer it.
+            var personal = string.Equals(accountType, "personal", StringComparison.OrdinalIgnoreCase)
+                           || PersonalMicrosoftAccount.IsHint(tenantHint);
+
+            if (personal && !entra.Value.PersonalAccounts)
+                return Results.Redirect("/connections?error=" + Uri.EscapeDataString(
+                    "This server doesn't connect personal Microsoft accounts. Use a work or school account."));
+
+            if (personal) tenantHint = PersonalMicrosoftAccount.TenantHint;
 
             // Reject a clashing label before sending the user to Microsoft. Finding out
             // after consent would mean they authorised for nothing.

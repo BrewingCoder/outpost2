@@ -63,6 +63,21 @@
                 <span class="op-field__help">You&rsquo;ll say: <span data-say-preview></span></span>
                 <span data-name-warning hidden></span>
             </div>
+            @if (ViewData["MicrosoftPersonalOffered"] is true)
+            {
+                @* Asked, never guessed (OP2-81): one address can be both a work account and a
+                   personal one, and the two look identical in Microsoft's picker. Each choice
+                   goes to a sign-in that only offers that kind. *@
+                <fieldset class="op-field" style="margin-top:16px">
+                    <legend class="op-field__label">Kind of account</legend>
+                    <label><input type="radio" name="accountType" value="work" checked /> Work or school</label>
+                    <label style="margin-left:16px"><input type="radio" name="accountType" value="personal" /> Personal (Outlook.com, Hotmail, Live)</label>
+                    <span class="op-field__help">
+                        Personal accounts get mail, calendar and contacts. Microsoft keeps Teams chats,
+                        the company directory and ranked meeting suggestions to work or school accounts.
+                    </span>
+                </fieldset>
+            }
             <div class="op-field" style="margin-top:16px">
                 <label class="op-field__label" for="ms-tenant">Organisation domain <span class="op-muted">(optional)</span></label>
                 <input class="op-input" id="ms-tenant" name="tenantHint" autocomplete="off" placeholder="contoso.com" />

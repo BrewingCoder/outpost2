@@ -339,6 +339,18 @@ public sealed class TeamsTools(
 
         var what = capability == Capabilities.ChatSend ? "send Teams messages" : "read your Teams chats";
 
+        // Only personal Microsoft accounts (OP2-81): no reconnection will ever grant this,
+        // so saying "reconnecting grants it" would send the user round a loop.
+        var work = all.Where(c => c.Provider == ProviderKind.Microsoft && !PersonalMicrosoftAccount.Is(c)).ToList();
+        if (work.Count == 0)
+        {
+            var personal = all.First(c => c.Provider == ProviderKind.Microsoft);
+            return microsoft == 1
+                ? PersonalMicrosoftAccount.NotOffered(personal, "Teams chats")
+                : "Your Microsoft connections are all personal accounts, and Microsoft only offers "
+                  + "Teams chats to work or school accounts.";
+        }
+
         return $"None of your {(microsoft == 1 ? "connection" : "connections")} can {what} yet — "
              + $"that permission was added after {(microsoft == 1 ? "it was" : "they were")} set up. "
              + $"Reconnecting at {urls.Connections} grants it.";

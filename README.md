@@ -113,6 +113,17 @@ is nothing extra to register. Set `OutPost2__Entra__AdminConsentRedirectUri` onl
 want that trip to land somewhere else — and then register that URI too, or Entra refuses
 it with AADSTS50011.
 
+**Personal Microsoft accounts** (outlook.com, hotmail.com, live.com) are off by default.
+To offer them, set the app registration's supported account types to *accounts in any
+organizational directory and personal Microsoft accounts*
+(`signInAudience: AzureADandPersonalMicrosoftAccount`), then set
+`ENTRA_PERSONAL_ACCOUNTS=true`. The add-connection dialog then asks which kind of
+account you mean. Work or school sign-ins still go through `/organizations` and personal
+ones go through `/consumers`, so Microsoft's picker never shows a work account and a
+personal account with the same address next to each other. Personal accounts get mail,
+calendar and contacts. Teams chats, the company directory and ranked meeting suggestions
+are only available on work or school accounts, and the tools say so instead of failing.
+
 ```bash
 cp .env.example .env     # Entra + GitHub OAuth credentials, tunnel token, public URL
 docker compose up -d
