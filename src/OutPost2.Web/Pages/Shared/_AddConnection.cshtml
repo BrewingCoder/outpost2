@@ -51,6 +51,11 @@
                 <span class="op-pick__how op-pick__how--hon">@Icons.Unlock() Honor system</span>
                 <span class="op-field__help">Your own server. You paste an access token; its scopes are the only real limit.</span>
             </button>
+            <button class="op-pick" type="button" data-goto-step="bb">
+                <span class="op-pick__name">Bitbucket Cloud</span>
+                <span class="op-pick__how op-pick__how--hon">@Icons.Unlock() Honor system</span>
+                <span class="op-field__help">One workspace. You paste an Atlassian API token; its scopes are the only real limit.</span>
+            </button>
         </div>
 
         @* ── step 2: Microsoft ──────────────────────────────────────── *@
@@ -213,6 +218,46 @@
             <div class="op-note op-note--warn" style="margin-top:16px">
                 @Icons.Unlock()
                 <span>Outpost can&rsquo;t shrink a token. To genuinely limit it, choose its scopes on your server.</span>
+            </div>
+            <div class="op-row op-row--end" style="margin-top:20px">
+                <button class="op-btn op-btn--secondary" type="button" data-goto-step="1">Back</button>
+                <button class="op-btn op-btn--primary">Connect</button>
+            </div>
+        </form>
+
+        @* ── step 2: Bitbucket Cloud (OP2-293) ─────────────────────── *@
+        <form method="post" action="/connections/bitbucket/add" data-step="bb" hidden>
+            @Html.AntiForgeryToken()
+            <div class="op-field">
+                <label class="op-field__label" for="bb-label">Name it</label>
+                <input class="op-input op-input--mono" id="bb-label" name="label" required maxlength="60"
+                       autocomplete="off" placeholder="bitbucket" data-callsign data-say="Bitbucket" />
+                <span class="op-field__help">You&rsquo;ll say: <span data-say-preview></span></span>
+                <span data-name-warning hidden></span>
+            </div>
+            <div class="op-field" style="margin-top:16px">
+                <label class="op-field__label" for="bb-workspace">Workspace</label>
+                <input class="op-input" id="bb-workspace" name="workspace" required autocomplete="off"
+                       placeholder="acme" />
+                <span class="op-field__help">The name in bitbucket.org/<em>workspace</em>. One workspace per connection.</span>
+            </div>
+            <div class="op-field" style="margin-top:16px">
+                <label class="op-field__label" for="bb-token">Atlassian API token</label>
+                <input class="op-input op-input--mono" id="bb-token" name="token" type="password" required
+                       autocomplete="off" placeholder="From id.atlassian.com → Security → API tokens" />
+                <span class="op-field__help">
+                    Create it &ldquo;with scopes&rdquo; for Bitbucket: read on <em>user</em>, <em>repository</em>
+                    and <em>pullrequest</em>. App passwords no longer work.
+                </span>
+            </div>
+            <div class="op-field" style="margin-top:16px">
+                <label class="op-field__label" for="bb-email">Atlassian email <span class="op-muted">(optional)</span></label>
+                <input class="op-input" id="bb-email" name="email" type="email" autocomplete="off" />
+                <span class="op-field__help">Only if Bitbucket refuses the token on its own; it is then sent with your email.</span>
+            </div>
+            <div class="op-note op-note--warn" style="margin-top:16px">
+                @Icons.Unlock()
+                <span>Outpost can&rsquo;t shrink a token. To genuinely limit it, choose its scopes when you create it.</span>
             </div>
             <div class="op-row op-row--end" style="margin-top:20px">
                 <button class="op-btn op-btn--secondary" type="button" data-goto-step="1">Back</button>

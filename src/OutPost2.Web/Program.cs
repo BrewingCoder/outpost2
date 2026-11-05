@@ -171,6 +171,9 @@ builder.Services.AddHttpClient("github")
 builder.Services.AddHttpClient("gitea")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30))
     .ConfigurePrimaryHttpMessageHandler(TrustedRootHandler);
+// Bitbucket Cloud (OP2-293) is one public host, so it needs no private CA.
+builder.Services.AddHttpClient("bitbucket")
+    .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
 
 static HttpMessageHandler TrustedRootHandler(IServiceProvider sp)
 {
@@ -194,6 +197,9 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Code.ICodeProvider,
                            OutPost2.Infrastructure.Code.GitHubService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Code.ICodeProvider,
                            OutPost2.Infrastructure.Code.GiteaService>();
+builder.Services.AddScoped<IBitbucketConnectionService, BitbucketConnectionService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Code.ICodeProvider,
+                           OutPost2.Infrastructure.Code.BitbucketService>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Code.IGitHubService,
                            OutPost2.Infrastructure.Code.CodeServiceRouter>();
 builder.Services.AddScoped<IYouTrackConnectionService, YouTrackConnectionService>();

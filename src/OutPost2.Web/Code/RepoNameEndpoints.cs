@@ -40,7 +40,7 @@ public static class RepoNameEndpoints
             // Scoped by user in the WHERE clause, so a guessed connection id belonging to
             // someone else finds nothing rather than attaching an alias to their account.
             var owns = await db.Connections.AnyAsync(c =>
-                c.Id == connectionId && c.UserId == userId && (c.Provider == ProviderKind.GitHub || c.Provider == ProviderKind.Gitea));
+                c.Id == connectionId && c.UserId == userId && (c.Provider == ProviderKind.GitHub || c.Provider == ProviderKind.Gitea || c.Provider == ProviderKind.Bitbucket));
 
             if (!owns) return Results.Redirect("/repo-names?error=" + Uri.EscapeDataString("Unknown connection."));
 

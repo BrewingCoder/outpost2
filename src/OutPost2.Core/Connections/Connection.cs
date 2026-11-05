@@ -161,6 +161,13 @@ public enum ProviderKind
     /// like the rest, so adding it needs no migration.
     /// </summary>
     Gitea,
+
+    /// <summary>
+    /// Bitbucket Cloud (OP2-293), one workspace per connection, behind the same code tools
+    /// as GitHub and Gitea. Stored as its name, like the rest, so adding it needs no
+    /// migration.
+    /// </summary>
+    Bitbucket,
 }
 
 public enum AuthKind

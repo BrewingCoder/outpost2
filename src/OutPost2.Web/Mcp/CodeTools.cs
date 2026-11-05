@@ -29,7 +29,7 @@ public sealed class CodeTools(
         // provider-agnostic, so without this a connection for a different provider could
         // win a label match and then be called with an API it does not speak.
         var candidates = (await connections.ListAsync(UserId, ct))
-            .Where(c => c.Provider is ProviderKind.GitHub or ProviderKind.Gitea)
+            .Where(c => c.Provider is ProviderKind.GitHub or ProviderKind.Gitea or ProviderKind.Bitbucket)
             .ToList();
 
         var r = ConnectionResolver.Resolve(candidates, capability, connection, isWrite);
@@ -44,7 +44,7 @@ public sealed class CodeTools(
     }
 
     private const string ConnectionDoc =
-        "Code connection name — GitHub, or a Gitea/Forgejo server. Required unless a default has been set.";
+        "Code connection name — GitHub, a Gitea/Forgejo server, or a Bitbucket Cloud workspace. Required unless a default has been set.";
 
     private const string RepoDoc =
         "Repository. A bare name like 'RosettaCore' is resolved against the repositories " +
@@ -72,7 +72,7 @@ public sealed class CodeTools(
     }
 
     [McpServerTool(Name = "github_triage", ReadOnly = true, OpenWorld = true)]
-    [Description("What on GitHub (or a Gitea/Forgejo server) is waiting on me: pull requests to review, my open PRs, issues assigned to me.")]
+    [Description("What on GitHub (or a Gitea/Forgejo server, or a Bitbucket workspace) is waiting on me: pull requests to review, my open PRs, issues assigned to me.")]
     public async Task<string> Triage(
         [Description(ConnectionDoc)] string? connection = null,
         CancellationToken ct = default)
@@ -80,11 +80,22 @@ public sealed class CodeTools(
         var (c, msg) = await ResolveAsync(connection, Capabilities.CodeRead, false, ct);
         if (c is null) return msg!;
 
-        var t = await github.TriageAsync(c, ct);
+        CodeTriage t;
+        try { t = await github.TriageAsync(c, ct); }
+        catch (GitHubException ex) { return Untrusted.Scrub(ex.Message); }
+
+        // Said with the counts, not instead of them: where a provider answers by a mapping
+        // or covers part of the account (Bitbucket, OP2-293), the numbers mean that.
+        var notes = t.Notes.Count == 0
+            ? ""
+            : "\n" + string.Join("\n", t.Notes.Select(n => $"Note: {Untrusted.Scrub(n)}"));
 
         if (t.AwaitingMyReview == 0 && t.MyOpenPullRequests == 0 && t.IssuesAssignedToMe == 0)
-            return $"Nothing waiting on you in {c.Label}. No reviews requested, no open pull requests " +
-                   "of your own, no issues assigned.";
+            return (t.CountsIssues
+                ? $"Nothing waiting on you in {c.Label}. No reviews requested, no open pull requests " +
+                  "of your own, no issues assigned."
+                : $"Nothing waiting on you in {c.Label}. No reviews requested and no open pull requests " +
+                  "of your own.") + notes;
 
         var sb = new StringBuilder($"In {c.Label}, as {Untrusted.Scrub(t.Login)}:\n");
 
@@ -103,17 +114,18 @@ public sealed class CodeTools(
             _ => $"- You have {t.MyOpenPullRequests} open pull requests{drafts}.",
         });
 
-        sb.AppendLine(t.IssuesAssignedToMe switch
-        {
-            0 => "- No issues are assigned to you.",
-            1 => "- 1 issue is assigned to you.",
-            _ => $"- {t.IssuesAssignedToMe} issues are assigned to you.",
-        });
+        if (t.CountsIssues)
+            sb.AppendLine(t.IssuesAssignedToMe switch
+            {
+                0 => "- No issues are assigned to you.",
+                1 => "- 1 issue is assigned to you.",
+                _ => $"- {t.IssuesAssignedToMe} issues are assigned to you.",
+            });
 
         if (t.MentioningMe > 0)
             sb.AppendLine($"- {t.MentioningMe} open item{(t.MentioningMe == 1 ? "" : "s")} mention you.");
 
-        return sb.ToString().TrimEnd();
+        return sb.ToString().TrimEnd() + notes;
     }
 
     [McpServerTool(Name = "github_pull_requests", ReadOnly = true, OpenWorld = true)]
@@ -137,7 +149,12 @@ public sealed class CodeTools(
         try
         {
             var items = await github.ListPullRequestsAsync(c, parsed, full, count, ct);
-            return Render(items, $"pull requests ({Humanise(scope)})", c.Label, full);
+            var said = Render(items, $"pull requests ({Humanise(scope)})", c.Label, full);
+
+            // A provider that answers this scope by a mapping says which (OP2-293).
+            return github.ScopeNote(c, parsed) is { Length: > 0 } note
+                ? said + "\n" + Untrusted.Scrub(note)
+                : said;
         }
         catch (GitHubException ex) { return Untrusted.Scrub(ex.Message); }
     }
@@ -202,7 +219,7 @@ public sealed class CodeTools(
     }
 
     [McpServerTool(Name = "github_repositories", ReadOnly = true, OpenWorld = true)]
-    [Description("List the repositories this code connection (GitHub, Gitea or Forgejo) can see, and the names configured for it. Use it to answer whether a repository is reachable at all, to find its owner when only the name is known, or to see what nicknames resolve to what.")]
+    [Description("List the repositories this code connection (GitHub, Gitea, Forgejo or a Bitbucket workspace) can see, and the names configured for it. Use it to answer whether a repository is reachable at all, to find its owner when only the name is known, or to see what nicknames resolve to what.")]
     public async Task<string> Repositories(
         [Description("Optional filter on name, owner or description.")] string? match = null,
         [Description(ConnectionDoc)] string? connection = null,

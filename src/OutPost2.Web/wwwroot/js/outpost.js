@@ -72,7 +72,8 @@
     Microsoft: function (n) { return 'check ' + n + ' email'; },
     YouTrack: function (n) { return "what's open in " + n; },
     GitHub: function (n) { return 'what pull requests am I blocking on ' + n; },
-    Gitea: function (n) { return 'what pull requests am I blocking on ' + n; }
+    Gitea: function (n) { return 'what pull requests am I blocking on ' + n; },
+    Bitbucket: function (n) { return 'what pull requests am I blocking on ' + n; }
   };
 
   function updateSay(input) {
