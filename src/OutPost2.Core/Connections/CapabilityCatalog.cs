@@ -47,12 +47,12 @@ public static class CapabilityCatalog
         [Capabilities.PeopleRead]    = new("Look people up and read your contacts", CapabilityRisk.None),
         [Capabilities.ContactsWrite] = new("Add and change your contacts", CapabilityRisk.Writes),
 
-        [Capabilities.ChatRead]      = new("Read your Teams chats", CapabilityRisk.None),
+        [Capabilities.ChatRead]      = new("Read your chats", CapabilityRisk.None),
 
         // ActsAsYou. A Teams message is the most immediate thing this product can do in
         // somebody else's name — it lands on a phone, it is attributed to the user, and
         // unlike mail there is no delay and nothing to recall it with.
-        [Capabilities.ChatSend]      = new("Send Teams messages as you", CapabilityRisk.ActsAsYou),
+        [Capabilities.ChatSend]      = new("Send chat messages as you", CapabilityRisk.ActsAsYou),
 
         [Capabilities.IssuesRead]  = new("Read issues", CapabilityRisk.None),
         [Capabilities.IssuesWrite] = new("Create and update issues", CapabilityRisk.Writes),
@@ -93,6 +93,12 @@ public static class CapabilityCatalog
         // the wrong API entirely.
         ProviderKind.Google =>
             [Capabilities.MailRead, Capabilities.MailWrite, Capabilities.MailSend],
+
+        // Chat only (OP2-86). The same two capabilities Teams declares, because the chat
+        // tools route by provider; a Slack connection offered mail or calendar would be
+        // called with the wrong API entirely.
+        ProviderKind.Slack =>
+            [Capabilities.ChatRead, Capabilities.ChatSend],
         _ => [],
     };
 
@@ -161,6 +167,7 @@ public static class CapabilityCatalog
         ProviderKind.Microsoft or ProviderKind.Google => $"check {label} email",
         ProviderKind.YouTrack => $"what's open in {label}",
         ProviderKind.GitHub or ProviderKind.Gitea => $"what pull requests am I blocking on {label}",
+        ProviderKind.Slack => $"any messages on {label}",
         _ => label,
     };
 
@@ -172,6 +179,7 @@ public static class CapabilityCatalog
         ProviderKind.GitHub => "GitHub pull requests and issues",
         ProviderKind.Gitea => "Gitea and Forgejo pull requests and issues",
         ProviderKind.Google => "Gmail",
+        ProviderKind.Slack => "Slack workspaces",
         _ => provider.ToString(),
     };
 

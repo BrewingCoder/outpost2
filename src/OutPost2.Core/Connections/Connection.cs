@@ -161,6 +161,13 @@ public enum ProviderKind
     /// like the rest, so adding it needs no migration.
     /// </summary>
     Gitea,
+
+    /// <summary>
+    /// A Slack workspace, through a pasted user token (OP2-86). Chat only: DMs, group DMs and
+    /// the channels the user is in, behind the same chat tools as Teams. Stored as its
+    /// name, like the rest, so adding it needs no migration.
+    /// </summary>
+    Slack,
 }
 
 public enum AuthKind

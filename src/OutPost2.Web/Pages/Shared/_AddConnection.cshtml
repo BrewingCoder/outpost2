@@ -51,6 +51,11 @@
                 <span class="op-pick__how op-pick__how--hon">@Icons.Unlock() Honor system</span>
                 <span class="op-field__help">Your own server. You paste an access token; its scopes are the only real limit.</span>
             </button>
+            <button class="op-pick" type="button" data-goto-step="sl">
+                <span class="op-pick__name">Slack</span>
+                <span class="op-pick__how op-pick__how--hon">@Icons.Unlock() Honor system</span>
+                <span class="op-field__help">You paste a user token. Its scopes are the only real limit.</span>
+            </button>
         </div>
 
         @* ── step 2: Microsoft ──────────────────────────────────────── *@
@@ -213,6 +218,37 @@
             <div class="op-note op-note--warn" style="margin-top:16px">
                 @Icons.Unlock()
                 <span>Outpost can&rsquo;t shrink a token. To genuinely limit it, choose its scopes on your server.</span>
+            </div>
+            <div class="op-row op-row--end" style="margin-top:20px">
+                <button class="op-btn op-btn--secondary" type="button" data-goto-step="1">Back</button>
+                <button class="op-btn op-btn--primary">Connect</button>
+            </div>
+        </form>
+
+        @* ── step 2: Slack (OP2-86) ─────────────────────────────────── *@
+        <form method="post" action="/connections/slack/add" data-step="sl" hidden>
+            @Html.AntiForgeryToken()
+            <div class="op-field">
+                <label class="op-field__label" for="sl-label">Name it</label>
+                <input class="op-input op-input--mono" id="sl-label" name="label" required maxlength="60"
+                       autocomplete="off" placeholder="slack" data-callsign data-say="Slack" />
+                <span class="op-field__help">You&rsquo;ll say: <span data-say-preview></span></span>
+                <span data-name-warning hidden></span>
+            </div>
+            <div class="op-field" style="margin-top:16px">
+                <label class="op-field__label" for="sl-token">User OAuth Token</label>
+                <input class="op-input op-input--mono" id="sl-token" name="token" type="password" required
+                       autocomplete="off" placeholder="xoxp-..." />
+                <span class="op-field__help">
+                    From a Slack app installed in your workspace, under OAuth &amp; Permissions. A user
+                    token, not a bot token. User Token Scopes: <code>channels</code>, <code>groups</code>,
+                    <code>im</code> and <code>mpim</code>, each <code>:read</code> and <code>:history</code>,
+                    plus <code>users:read</code>; add <code>chat:write</code> to send.
+                </span>
+            </div>
+            <div class="op-note op-note--warn" style="margin-top:16px">
+                @Icons.Unlock()
+                <span>Outpost can&rsquo;t shrink a token. To genuinely limit it, choose its scopes in the Slack app.</span>
             </div>
             <div class="op-row op-row--end" style="margin-top:20px">
                 <button class="op-btn op-btn--secondary" type="button" data-goto-step="1">Back</button>
