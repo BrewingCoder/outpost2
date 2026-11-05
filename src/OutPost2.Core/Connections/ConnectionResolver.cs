@@ -213,6 +213,17 @@ public sealed record ConnectionResolution
 
         var cap = c.Capabilities.FirstOrDefault(x => x.Name == capability);
         if (cap is null) return $"{c.Label} can't do that.";
+
+        // Before the consent sentence, which would tell the user to reconnect and approve
+        // something Microsoft will never offer a personal account (OP2-81) — a loop with
+        // no exit, exactly like telling them to reconnect past an admin refusal.
+        if (!cap.Granted && PersonalMicrosoftAccount.CannotEver(c, capability))
+        {
+            var what = char.ToLowerInvariant(CapabilityCatalog.Verb(cap.Name)[0])
+                       + CapabilityCatalog.Verb(cap.Name)[1..];
+            return PersonalMicrosoftAccount.NotOffered(c, $"\"{what}\"");
+        }
+
         if (!cap.Granted) return NotConsented(c, cap);
         if (!cap.Enabled) return $"That's switched off for {c.Label}. You can turn it on in settings.";
         return $"{c.Label} can't do that right now.";

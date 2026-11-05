@@ -9,7 +9,8 @@ namespace OutPost2.Web.Pages;
 [Authorize]
 public class ConnectionsModel(
     IConnectionStore store,
-    Microsoft.Extensions.Options.IOptions<OutPost2.Infrastructure.Connections.GoogleOptions> google) : PageModel
+    Microsoft.Extensions.Options.IOptions<OutPost2.Infrastructure.Connections.GoogleOptions> google,
+    Microsoft.Extensions.Options.IOptions<EntraOptions> entra) : PageModel
 {
     /// <summary>
     /// One provider's worth of the page. Grouping happens here rather than in the view so
@@ -78,6 +79,25 @@ public class ConnectionsModel(
     };
 
     public bool GoogleOffered => Offered(ProviderKind.Google);
+
+    /// <summary>
+    /// Whether the Microsoft step offers a personal account (OP2-81). Only when the
+    /// deployment says its app registration accepts them: on a work-only registration
+    /// the choice could only fail, at Microsoft, in words that blame nobody useful.
+    /// </summary>
+    public bool MicrosoftPersonalOffered => entra.Value.PersonalAccounts;
+
+    /// <summary>
+    /// What to say beside a capability that is not granted. A personal Microsoft account
+    /// gets its own words for what Microsoft never offers it (OP2-81): "not granted"
+    /// would invite a reconnect that can never grant it.
+    /// </summary>
+    public static string NotGrantedReason(Connection c, Capability cap) =>
+        PersonalMicrosoftAccount.CannotEver(c, cap.Name)
+            ? "Not available on personal Microsoft accounts"
+            : cap.NeverRequested
+                ? "Never requested — reconnect to grant"
+                : "Not granted by this token";
 
     // ── presentation helpers, kept here so the view stays declarative ──────
 
