@@ -68,8 +68,16 @@ public sealed class GiteaConnectionService(
         // (https://example.com/git). Cut anything from /api on, then put /api/v1 back,
         // so the site URL and the API URL both land in the same place.
         var path = parsed.AbsolutePath.TrimEnd('/');
-        var api = path.IndexOf("/api", StringComparison.OrdinalIgnoreCase);
-        if (api >= 0) path = path[..api];
+
+        // The SEGMENT "/api", not the first place those four characters appear: a server
+        // under a sub-path of its own such as https://example.com/api-git keeps it, and
+        // only a real /api/... is cut.
+        for (var at = path.IndexOf("/api", StringComparison.OrdinalIgnoreCase); at >= 0;
+             at = path.IndexOf("/api", at + 1, StringComparison.OrdinalIgnoreCase))
+        {
+            var after = at + 4;
+            if (after == path.Length || path[after] == '/') { path = path[..at]; break; }
+        }
 
         return $"{parsed.Scheme}://{parsed.Authority}{path}/api/v1/";
     }

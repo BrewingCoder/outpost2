@@ -454,6 +454,27 @@ public sealed class GoogleConnectionTests
         Assert.Contains(expected, OutPost2.Web.Connections.ConnectionEndpoints.DescribeGoogle(error));
     }
 
+    // ── reconnecting is what grants the zone scope, so it must take effect ───
+
+    [Fact]
+    public async Task Reconnecting_forgets_that_the_account_had_no_readable_time_zone()
+    {
+        // A mail-only connection answers 403 for the Calendar time-zone setting, and that
+        // answer is remembered for an hour so every listing does not make a doomed call
+        // (OP2-285). Reconnecting to grant the scope is the fix the README tells people to
+        // do; if the remembered answer survived it, mail would keep printing UTC and the
+        // reconnect would look like it had done nothing.
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var w = Build(_ => CodeReply(), cache: cache);
+        var key = OutPost2.Infrastructure.Calendar.GoogleMailboxZoneSource.CacheKey(w.Connection.Id);
+
+        cache.Set(key, OutPost2.Infrastructure.Calendar.MailboxZone.Unavailable, TimeSpan.FromHours(1));
+
+        await w.Google.CompleteAsync(Pending(), "code");
+
+        Assert.False(cache.TryGetValue(key, out _));
+    }
+
     // ── and the connection is a Gmail one ────────────────────────────────────
 
     [Fact]

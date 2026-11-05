@@ -209,6 +209,12 @@ public sealed class GoogleConnectionService(
         // refreshing straight away on the first tool call.
         Remember(created.Id, reply.AccessToken, reply.ExpiresIn);
 
+        // A connection without the Calendar settings scope has its "no zone" answer
+        // remembered for an hour, so that every listing does not make a doomed call
+        // (OP2-285). This IS the reconnect the README tells people to do to grant it, so the
+        // remembered answer goes now — otherwise the fix appears to have done nothing.
+        cache.Remove(OutPost2.Infrastructure.Calendar.GoogleMailboxZoneSource.CacheKey(created.Id));
+
         return created;
     }
 

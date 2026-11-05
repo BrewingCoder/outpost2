@@ -123,7 +123,13 @@ public sealed class GoogleMailboxZoneSource(
     /// </summary>
     private static readonly TimeSpan FailureLifetime = TimeSpan.FromHours(1);
 
-    private static string Key(Connection c) => $"op2:gzone:{c.Id}";
+    /// <summary>
+    /// Addressable, because a reconnect has to clear it: the whole point of granting the
+    /// scope is that the next read prints the real zone, not that it does an hour later.
+    /// </summary>
+    public static string CacheKey(Guid connectionId) => $"op2:gzone:{connectionId}";
+
+    private static string Key(Connection c) => CacheKey(c.Id);
 
     public ProviderKind Provider => ProviderKind.Google;
 

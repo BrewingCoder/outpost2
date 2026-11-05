@@ -93,6 +93,11 @@ public sealed class GiteaTests
     [InlineData("https://example.com/git", "https://example.com/git/api/v1/")]
     [InlineData("http://192.168.1.5:3000", "http://192.168.1.5:3000/api/v1/")]
     [InlineData("  codeberg.org  ", "https://codeberg.org/api/v1/")]
+    // A sub-path of its own that merely STARTS with those four letters is not the API
+    // path, and cutting on the substring sent every call to the wrong server root.
+    [InlineData("https://example.com/api-git", "https://example.com/api-git/api/v1/")]
+    [InlineData("https://example.com/apiary/git", "https://example.com/apiary/git/api/v1/")]
+    [InlineData("https://example.com/api-git/api/v1", "https://example.com/api-git/api/v1/")]
     public void The_server_is_taken_as_a_person_types_it(string typed, string api)
     {
         Assert.Equal(api, GiteaConnectionService.Normalise(typed));
