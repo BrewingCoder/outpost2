@@ -50,7 +50,7 @@ public static class ConnectionResolver
             if (AllTokens.Contains(label.Trim()))
             {
                 return capable.Count == 0
-                    ? ConnectionResolution.None(capability, unusable)
+                    ? ConnectionResolution.None(capability, unusable, candidates)
                     : ConnectionResolution.FanOut(capable, unusable);
             }
 
@@ -65,12 +65,22 @@ public static class ConnectionResolver
             var blocked = unusable.FirstOrDefault(
                 c => string.Equals(c.Label, label.Trim(), StringComparison.OrdinalIgnoreCase));
 
-            return blocked is not null
-                ? ConnectionResolution.Unavailable(blocked, capability)
+            if (blocked is not null) return ConnectionResolution.Unavailable(blocked, capability);
+
+            // Named something real whose provider does not offer this at all — "check my
+            // gmail calendar" with a Google connection, which declares mail and nothing else.
+            // Before OP2-294 this fell through to "No connection called gmail. You have
+            // gmail.", a sentence that contradicts itself and names no reason, so the agent
+            // reading it concludes the lookup is broken (the OP2-166 shape, a provider later).
+            var other = candidates.FirstOrDefault(
+                c => string.Equals(c.Label, label.Trim(), StringComparison.OrdinalIgnoreCase));
+
+            return other is not null
+                ? ConnectionResolution.NotOffered(other, capability)
                 : ConnectionResolution.UnknownLabel(label.Trim(), candidates);
         }
 
-        if (capable.Count == 0) return ConnectionResolution.None(capability, unusable);
+        if (capable.Count == 0) return ConnectionResolution.None(capability, unusable, candidates);
 
         // Nothing is chosen on the user's behalf unless they nominated it. Being the only
         // candidate is not consent: a provider with no default means "always name one",
@@ -171,7 +181,14 @@ public sealed record ConnectionResolution
             : $"Which one — {Names(cs)}?",
     };
 
-    public static ConnectionResolution None(string capability, IReadOnlyList<Connection>? degraded = null) => new()
+    /// <param name="all">
+    /// Every connection the user has. Only used when none of them even declares the
+    /// capability, to say which providers they are on (OP2-294): "no connection set up for
+    /// that" is true and useless to somebody whose only mailbox is Gmail and who asked for
+    /// their calendar — the reason is the provider, and the sentence has to say so.
+    /// </param>
+    public static ConnectionResolution None(
+        string capability, IReadOnlyList<Connection>? degraded = null, IReadOnlyList<Connection>? all = null) => new()
     {
         Kind = ResolutionKind.None,
         Degraded = degraded ?? [],
@@ -181,12 +198,45 @@ public sealed record ConnectionResolution
         // says WHY — which, for a missing consent, is the part that gets it fixed.
         SpokenSummary = (degraded ?? []) switch
         {
-            [] => "No connection set up for that yet.",
+            [] => "No connection set up for that yet." + OfferedNowhere(all ?? [], capability),
             [var only] => Explain(only, capability),
             var many => $"{Names(many)} could do that, but none of them has permission for it yet. "
                         + "Name one and I'll tell you what it needs.",
         },
     };
+
+    /// <summary>
+    /// " Outpost can't read your calendar on Gmail (gmail) or GitHub (gh)." — the providers
+    /// the user does have, and that none of them offers this. Empty when they have nothing.
+    /// </summary>
+    private static string OfferedNowhere(IReadOnlyList<Connection> all, string capability)
+    {
+        if (all.Count == 0) return "";
+
+        var byProvider = all
+            .GroupBy(ProviderNames.Of)
+            .Select(g => $"{g.Key} ({Names(g)})")
+            .ToList();
+
+        return $" Outpost can't {Lower(CapabilityCatalog.Verb(capability))} on "
+               + string.Join(" or ", byProvider) + ".";
+    }
+
+    /// <summary>
+    /// The named connection's provider does not offer this capability in this build at all
+    /// (OP2-294). Not "can't do that right now", which invites a retry, and not "no
+    /// connection called", which is false: it is a deliberate gap, named by provider.
+    /// </summary>
+    public static ConnectionResolution NotOffered(Connection c, string capability) => new()
+    {
+        Kind = ResolutionKind.Unavailable,
+        Connection = c,
+        SpokenSummary = $"{c.Label} is a {ProviderNames.Of(c)} connection, and Outpost can't "
+                        + $"{Lower(CapabilityCatalog.Verb(capability))} on {ProviderNames.Of(c)}.",
+    };
+
+    private static string Lower(string phrase) =>
+        phrase.Length == 0 ? phrase : char.ToLowerInvariant(phrase[0]) + phrase[1..];
 
     public static ConnectionResolution Unavailable(Connection c, string capability) => new()
     {
@@ -261,7 +311,10 @@ public sealed record ConnectionResolution
                    + $"Reconnect {c.Label} on the connections page to grant it. "
                    + $"The missing capability is {cap.Name}.";
 
-        var admin = c.Provider == ProviderKind.Microsoft
+        // Work or school only. A personal Microsoft account has no tenant and no
+        // administrator, so the sentence would send the user to find somebody who does not
+        // exist (OP2-294, the OP2-81 case).
+        var admin = c.Provider == ProviderKind.Microsoft && !PersonalMicrosoftAccount.Is(c)
             ? " If the sign-in doesn't offer it, your tenant administrator has to approve it first."
             : "";
 
