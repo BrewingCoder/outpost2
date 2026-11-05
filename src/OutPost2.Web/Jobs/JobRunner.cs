@@ -307,8 +307,7 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
                     job.Id, wait.TotalSeconds);
 
                 await jobs.UpdateProgressAsync(job.Id, JobState.Sending, Percent(cleared, payload.Expected),
-                    $"{cleared} moved so far, paused for {(int)wait.TotalSeconds}s because {MailWords.For(connection.Provider).Company} is "
-                    + "rate-limiting the mailbox", ct);
+                    Paused(cleared, wait, connection), ct);
 
                 await Task.Delay(wait, ct);
                 continue;
@@ -338,13 +337,7 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
             }
         }
 
-        var summary = $"{cleared} message{(cleared == 1 ? "" : "s")} from \"{payload.From}\" "
-                    + $"moved to {TrashName(connection)} in {connection.Label}"
-                    + (failed > 0 ? $", {failed} refused" : "")
-                    // The provider's own promise about the bin. "They stay there until you
-                    // empty it" is Outlook's; Gmail empties Trash itself after 30 days, and a
-                    // user who believed otherwise would leave the rescue too late (OP2-294).
-                    + ". " + MailWords.For(connection.Provider).TrashKeeps;
+        var summary = ClearSummary(cleared, failed, payload.From, connection);
 
         await jobs.UpdateProgressAsync(job.Id, JobState.Sending, 100, summary, ct);
         await jobs.CompleteAsync(job.Id, true, null, false, ct);
@@ -352,6 +345,26 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
         log.LogInformation("Clear job {JobId} finished: {Cleared} moved, {Failed} refused.",
             job.Id, cleared, failed);
     }
+
+    /// <summary>
+    /// What a finished clear-out job says, in the provider's words. Public so the wording
+    /// can be pinned per provider without running the worker.
+    /// <para>
+    /// The promise about the bin is the provider's own. "They stay there until you empty
+    /// it" is Outlook's; Gmail empties Trash itself after 30 days, and a user who believed
+    /// otherwise would leave the rescue too late (OP2-294).
+    /// </para>
+    /// </summary>
+    public static string ClearSummary(int cleared, int failed, string from, Connection connection) =>
+        $"{cleared} message{(cleared == 1 ? "" : "s")} from \"{from}\" "
+        + $"moved to {TrashName(connection)} in {connection.Label}"
+        + (failed > 0 ? $", {failed} refused" : "")
+        + ". " + MailWords.For(connection.Provider).TrashKeeps;
+
+    /// <summary>The progress line while a clear-out waits out a throttle, naming who is throttling.</summary>
+    public static string Paused(int cleared, TimeSpan wait, Connection connection) =>
+        $"{cleared} moved so far, paused for {(int)wait.TotalSeconds}s because "
+        + $"{MailWords.For(connection.Provider).Company} is rate-limiting the mailbox";
 
     private static int Percent(int done, int expected) =>
         expected <= 0 ? 0 : Math.Clamp((int)(100.0 * done / expected), 0, 99);
