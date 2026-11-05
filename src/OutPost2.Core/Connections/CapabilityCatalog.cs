@@ -86,6 +86,8 @@ public static class CapabilityCatalog
             [Capabilities.IssuesRead, Capabilities.IssuesWrite, Capabilities.IssuesAdmin],
         ProviderKind.GitHub or ProviderKind.Gitea =>
             [Capabilities.CodeRead, Capabilities.CodeWrite],
+        ProviderKind.Bitbucket =>
+            [Capabilities.CodeRead, Capabilities.CodeWrite],
 
         // Mail only, deliberately (OP2-278). Declaring a capability is what makes a tool
         // able to pick a connection, and every calendar, people and chat tool is written
@@ -161,6 +163,7 @@ public static class CapabilityCatalog
         ProviderKind.Microsoft or ProviderKind.Google => $"check {label} email",
         ProviderKind.YouTrack => $"what's open in {label}",
         ProviderKind.GitHub or ProviderKind.Gitea => $"what pull requests am I blocking on {label}",
+        ProviderKind.Bitbucket => $"what pull requests am I blocking on {label}",
         _ => label,
     };
 
@@ -171,6 +174,7 @@ public static class CapabilityCatalog
         ProviderKind.YouTrack => "YouTrack issue trackers",
         ProviderKind.GitHub => "GitHub pull requests and issues",
         ProviderKind.Gitea => "Gitea and Forgejo pull requests and issues",
+        ProviderKind.Bitbucket => "Bitbucket Cloud pull requests",
         ProviderKind.Google => "Gmail",
         _ => provider.ToString(),
     };
@@ -187,6 +191,9 @@ public static class CapabilityCatalog
         ProviderKind.GitHub or ProviderKind.Gitea =>
             "Chosen on purpose. With one account Claude still confirms it, so a second "
             + "account added later never gets used by accident.",
+        ProviderKind.Bitbucket =>
+            "Chosen on purpose. With one workspace Claude still confirms it, so a second "
+            + "workspace added later never gets used by accident.",
         _ =>
             "Claude will ask which connection to use until you nominate one.",
     };

@@ -36,6 +36,19 @@ public sealed record CodeTriage
     public required int IssuesAssignedToMe { get; init; }
     public required int MentioningMe { get; init; }
     public required string Login { get; init; }
+
+    /// <summary>
+    /// False where the provider has no issues to count (Bitbucket, OP2-293), so the answer
+    /// leaves the issue line out rather than saying "no issues are assigned to you" — true
+    /// of a server with no tracker, and the wrong thing to hear.
+    /// </summary>
+    public bool CountsIssues { get; init; } = true;
+
+    /// <summary>
+    /// What these counts mean where the provider answers them by a different rule than
+    /// the names say, or covers less than all of the account. Said with the counts.
+    /// </summary>
+    public IReadOnlyList<string> Notes { get; init; } = [];
 }
 
 /// <summary>A repository this token can see, named the way a person would say it.</summary>
@@ -149,6 +162,13 @@ public interface IGitHubService
     /// <returns>The file, or null when the path is a directory rather than a file.</returns>
     Task<RepoFile?> ReadFileAsync(
         Connection c, string repo, string path, string? gitRef, int maxChars, CancellationToken ct = default);
+
+    /// <summary>
+    /// A sentence to say with a list of this scope when the provider answers it by a
+    /// different rule than its name (OP2-293: Bitbucket has no "review requested", so
+    /// "awaiting my review" is a mapping that has to be stated). Null for most.
+    /// </summary>
+    string? ScopeNote(Connection c, PullRequestScope scope) => null;
 }
 
 public sealed class GitHubService(
@@ -608,7 +628,7 @@ public sealed class GitHubService(
 
 /// <summary>
 /// A code-host failure, said in one plain sentence. The code tools catch this one type
-/// whichever server is behind the connection — GitHub or Gitea/Forgejo (OP2-84) — so the
-/// name is historical rather than a promise about the provider.
+/// whichever server is behind the connection — GitHub, Gitea/Forgejo (OP2-84) or Bitbucket
+/// (OP2-293) — so the name is historical rather than a promise about the provider.
 /// </summary>
 public sealed class GitHubException(string message) : Exception(message);

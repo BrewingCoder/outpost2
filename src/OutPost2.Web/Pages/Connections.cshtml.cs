@@ -184,6 +184,7 @@ public class ConnectionsModel(
         {
             ProviderKind.Microsoft => $"{who} · work or school account",
             ProviderKind.Google => $"{who} · Google account",
+            ProviderKind.Bitbucket => $"{who} · {c.Instance.Replace("https://", "")} workspace",
             _ => $"{who} on {Host(c.Instance)}",
         };
     }
