@@ -93,6 +93,11 @@ public static class CapabilityCatalog
         // the wrong API entirely.
         ProviderKind.Google =>
             [Capabilities.MailRead, Capabilities.MailWrite, Capabilities.MailSend],
+
+        // No issues.admin (OP2-82): create_project has no sensible Jira meaning, and a
+        // switch that can only ever refuse is worse than no switch.
+        ProviderKind.Jira =>
+            [Capabilities.IssuesRead, Capabilities.IssuesWrite],
         _ => [],
     };
 
@@ -161,6 +166,7 @@ public static class CapabilityCatalog
         ProviderKind.Microsoft or ProviderKind.Google => $"check {label} email",
         ProviderKind.YouTrack => $"what's open in {label}",
         ProviderKind.GitHub or ProviderKind.Gitea => $"what pull requests am I blocking on {label}",
+        ProviderKind.Jira => $"what's open in {label}",
         _ => label,
     };
 
@@ -172,6 +178,7 @@ public static class CapabilityCatalog
         ProviderKind.GitHub => "GitHub pull requests and issues",
         ProviderKind.Gitea => "Gitea and Forgejo pull requests and issues",
         ProviderKind.Google => "Gmail",
+        ProviderKind.Jira => "Jira Cloud issue trackers",
         _ => provider.ToString(),
     };
 
@@ -187,6 +194,9 @@ public static class CapabilityCatalog
         ProviderKind.GitHub or ProviderKind.Gitea =>
             "Chosen on purpose. With one account Claude still confirms it, so a second "
             + "account added later never gets used by accident.",
+        ProviderKind.Jira =>
+            "Chosen on purpose. One tracker per client: answering about the wrong client's "
+            + "tickets is worse than being asked.",
         _ =>
             "Claude will ask which connection to use until you nominate one.",
     };
