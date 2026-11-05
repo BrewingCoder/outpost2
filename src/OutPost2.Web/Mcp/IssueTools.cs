@@ -9,8 +9,11 @@ using OutPost2.Web.Connections;
 namespace OutPost2.Web.Mcp;
 
 /// <summary>
-/// YouTrack tools. Same resolver, same capability model as mail — which is the point:
-/// a second provider plugs in without re-solving tenancy, naming or consent (D4).
+/// Issue tracker tools: YouTrack, and Jira Cloud (OP2-82). Same resolver, same capability
+/// model as mail — which is the point: a second provider plugs in without re-solving
+/// tenancy, naming or consent (D4). The service is the issue router, so each call goes to
+/// the connection's own tracker; the tool names are unchanged, because renaming them
+/// breaks every configured client.
 /// </summary>
 [McpServerToolType]
 public sealed class IssueTools(
@@ -21,15 +24,28 @@ public sealed class IssueTools(
     private Guid UserId => http.HttpContext?.User.UserId()
         ?? throw new InvalidOperationException("No authenticated user on this MCP request.");
 
+    private const string ConnectionDoc =
+        "Connection name, e.g. 'lab' — a YouTrack or Jira tracker. Required unless a default tracker has been set.";
+
+    /// <summary>
+    /// Filtered to the trackers before resolving. Capability names are meant to be
+    /// provider-agnostic, so without this a connection for a different provider could
+    /// win a label match and then be called with an API it does not speak.
+    /// </summary>
+    private async Task<List<Connection>> TrackersAsync(CancellationToken ct) =>
+        (await connections.ListAsync(UserId, ct))
+            .Where(c => c.Provider is ProviderKind.YouTrack or ProviderKind.Jira)
+            .ToList();
+
+    /// <summary>"YouTrack; search_issues there takes …" — our own words, never the tracker's.</summary>
+    private static string Speaks(Connection c) =>
+        $"{(c.Provider == ProviderKind.Jira ? "Jira" : "YouTrack")}; search_issues there takes {IssueQueryLanguage.Name(c.Provider)}, "
+        + $"e.g. {IssueQueryLanguage.Example(c.Provider)}";
+
     private async Task<(Connection? Conn, string? Message)> ResolveAsync(
         string? connection, string capability, bool isWrite, CancellationToken ct)
     {
-        // Filtered to this provider before resolving. Capability names are meant to be
-        // provider-agnostic, so without this a connection for a different provider could
-        // win a label match and then be called with an API it does not speak.
-        var candidates = (await connections.ListAsync(UserId, ct))
-            .Where(c => c.Provider == ProviderKind.YouTrack)
-            .ToList();
+        var candidates = await TrackersAsync(ct);
 
         var r = ConnectionResolver.Resolve(candidates, capability, connection, isWrite);
 
@@ -48,36 +64,45 @@ public sealed class IssueTools(
     }
 
     [McpServerTool(Name = "list_projects", ReadOnly = true, OpenWorld = true)]
-    [Description("List projects on a YouTrack connection.")]
+    [Description("List projects on an issue tracker connection (YouTrack or Jira). Also says which query language that connection's search_issues takes.")]
     public async Task<string> ListProjects(
-        [Description("Connection name, e.g. 'lab'. Required unless a default tracker has been set.")] string? connection = null,
+        [Description(ConnectionDoc)] string? connection = null,
         CancellationToken ct = default)
     {
         var (c, msg) = await ResolveAsync(connection, Capabilities.IssuesRead, false, ct);
         if (c is null) return msg!;
 
-        var projects = await youtrack.ListProjectsAsync(c, ct);
-        if (projects.Count == 0) return $"No projects on {c.Label}.";
+        IReadOnlyList<ProjectSummary> projects;
+        try { projects = await youtrack.ListProjectsAsync(c, ct); }
+        catch (InvalidOperationException ex) { return Untrusted.Scrub(ex.Message); }
+        if (projects.Count == 0) return $"No projects on {c.Label} ({Speaks(c)}).";
 
-        return $"Projects on {c.Label}:\n" +
+        return $"Projects on {c.Label} ({Speaks(c)}):\n" +
                string.Join("\n", projects.Select(p => $"- {Untrusted.Scrub(p.ShortName)} — {Untrusted.Scrub(p.Name)}"));
     }
 
     [McpServerTool(Name = "search_issues", ReadOnly = true, OpenWorld = true)]
-    [Description("Search issues using YouTrack query syntax, e.g. 'project: OP2 State: Open' or 'for: me'.")]
+    [Description("Search issues. The query is in the connection's OWN language, and the two are not interchangeable: "
+        + "on a YouTrack connection, YouTrack query syntax ('project: OP2 #Unresolved', 'for: me'); "
+        + "on a Jira connection, JQL ('project = OPS AND statusCategory != Done', 'assignee = currentUser()'). "
+        + "If unsure which a connection is, list_projects says. Every reply names the language the query was read as.")]
     public async Task<string> SearchIssues(
-        [Description("YouTrack query, e.g. 'project: OP2 #Unresolved'.")] string query,
-        [Description("Connection name, e.g. 'lab'. Required unless a default tracker has been set.")] string? connection = null,
+        [Description("The query, in the connection's language: YouTrack query syntax or JQL.")] string query,
+        [Description(ConnectionDoc)] string? connection = null,
         [Description("How many to return.")] int count = 20,
         CancellationToken ct = default)
     {
         var (c, msg) = await ResolveAsync(connection, Capabilities.IssuesRead, false, ct);
         if (c is null) return msg!;
 
-        var issues = await youtrack.SearchAsync(c, query, count, ct);
-        if (issues.Count == 0) return $"No issues match \"{query}\" on {c.Label}.";
+        var language = IssueQueryLanguage.Name(c.Provider);
 
-        var sb = new StringBuilder($"{issues.Count} issue{(issues.Count == 1 ? "" : "s")} on {c.Label}:\n");
+        IReadOnlyList<IssueSummary> issues;
+        try { issues = await youtrack.SearchAsync(c, query, count, ct); }
+        catch (InvalidOperationException ex) { return Untrusted.Scrub(ex.Message); }
+        if (issues.Count == 0) return $"No issues match \"{query}\" on {c.Label}, read as {language}.";
+
+        var sb = new StringBuilder($"{issues.Count} issue{(issues.Count == 1 ? "" : "s")} on {c.Label} (query read as {language}):\n");
         foreach (var i in issues)
         {
             sb.Append($"- {Untrusted.Scrub(i.Key)}: {Untrusted.Scrub(i.Summary)}");
@@ -92,7 +117,7 @@ public sealed class IssueTools(
     [Description("Read one issue in full: reporter, dates, every field, links, comments and the full description. Issue keys like OP2-14 are speakable, so they are used directly. A very long description is returned in parts; if the reply says it continues, call again with descriptionFrom before answering any question about its later sections. Comments are numbered; a long one is shortened in the overview, and passing its number as 'comment' returns that comment in full (in parts, with commentFrom, if it is very long).")]
     public async Task<string> GetIssue(
         [Description("Issue key, e.g. OP2-14.")] string issueKey,
-        [Description("Connection name, e.g. 'lab'. Required unless a default tracker has been set.")] string? connection = null,
+        [Description(ConnectionDoc)] string? connection = null,
         [Description("Character offset to resume the description from. Only needed when a previous call said the description continues; pass the offset it gave you.")] int descriptionFrom = 0,
         [Description("Read just this comment, in full, by the number shown beside it (#1 is the oldest). Omit for the whole issue.")] int? comment = null,
         [Description("Character offset to resume that comment from. Only needed when a previous call said the comment continues; pass the offset it gave you.")] int commentFrom = 0,
@@ -101,7 +126,9 @@ public sealed class IssueTools(
         var (c, msg) = await ResolveAsync(connection, Capabilities.IssuesRead, false, ct);
         if (c is null) return msg!;
 
-        var i = await youtrack.GetIssueAsync(c, issueKey, ct);
+        IssueDetail? i;
+        try { i = await youtrack.GetIssueAsync(c, issueKey, ct); }
+        catch (InvalidOperationException ex) { return Untrusted.Scrub(ex.Message); }
         if (i is null) return $"No issue {issueKey} on {c.Label}.";
 
         // 0 is "not asked", not "comment zero": a client that fills in defaults sends it,
@@ -311,10 +338,11 @@ public sealed class IssueTools(
     [McpServerTool(Name = "create_issue", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
     [Description("Create an issue. Always name the connection and project.")]
     public async Task<string> CreateIssue(
-        [Description("Project short name, e.g. OP2.")] string project,
+        [Description("Project short name or key, e.g. OP2.")] string project,
         [Description("Issue summary.")] string summary,
         [Description("Longer description. Optional.")] string? description = null,
-        [Description("Connection name, e.g. 'lab'. Required unless a default tracker has been set.")] string? connection = null,
+        [Description(ConnectionDoc)] string? connection = null,
+        [Description("Jira only: the issue type, e.g. Bug or Story. Defaults to Task, or the project's first type. YouTrack has no type at creation; set one afterwards with update_issue.")] string? issueType = null,
         CancellationToken ct = default)
     {
         // isWrite: creating in the wrong tracker is visible to a whole team.
@@ -323,8 +351,13 @@ public sealed class IssueTools(
 
         try
         {
-            var key = await youtrack.CreateIssueAsync(c, project, summary, description, ct);
-            return $"Created {Untrusted.Scrub(key)} on {c.Label}.";
+            var key = await youtrack.CreateIssueAsync(c, project, summary, description, issueType, ct);
+
+            // Said rather than dropped: a type asked for and silently not applied reads as applied.
+            var note = c.Provider == ProviderKind.YouTrack && !string.IsNullOrWhiteSpace(issueType)
+                ? $" YouTrack takes no type at creation; set it with update_issue, e.g. 'Type {issueType.Trim()}'."
+                : "";
+            return $"Created {Untrusted.Scrub(key)} on {c.Label}.{note}";
         }
         catch (InvalidOperationException ex) { return Untrusted.Scrub(ex.Message); }
     }
@@ -334,39 +367,54 @@ public sealed class IssueTools(
     public async Task<string> CommentOnIssue(
         [Description("Issue key, e.g. OP2-14.")] string issueKey,
         [Description("Comment text.")] string text,
-        [Description("Connection name, e.g. 'lab'. Required unless a default tracker has been set.")] string? connection = null,
+        [Description(ConnectionDoc)] string? connection = null,
         CancellationToken ct = default)
     {
         var (c, msg) = await ResolveAsync(connection, Capabilities.IssuesWrite, true, ct);
         if (c is null) return msg!;
 
-        await youtrack.CommentAsync(c, issueKey, text, ct);
+        try { await youtrack.CommentAsync(c, issueKey, text, ct); }
+        catch (InvalidOperationException ex) { return Untrusted.Scrub(ex.Message); }
         return $"Commented on {issueKey}.";
     }
 
     [McpServerTool(Name = "update_issue", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = true)]
-    [Description("Apply a YouTrack command to an issue, e.g. 'State Fixed', 'Priority Critical', 'for me'.")]
+    [Description("Change an issue. On YouTrack, any YouTrack command: 'State Fixed', 'Priority Critical', 'for me'. "
+        + "On Jira, one change per call: a transition or status name ('In Progress', 'Done', 'status Done'), "
+        + "'for me', 'assignee <name>', 'unassign', 'priority <name>', 'label <name>' or 'remove label <name>'. "
+        + "If a Jira status isn't reachable from where the issue is, the reply lists the transitions that are.")]
     public async Task<string> UpdateIssue(
         [Description("Issue key, e.g. OP2-14.")] string issueKey,
-        [Description("YouTrack command, e.g. 'State Fixed'.")] string command,
-        [Description("Connection name, e.g. 'lab'. Required unless a default tracker has been set.")] string? connection = null,
+        [Description("The change, e.g. 'State Fixed' on YouTrack or 'Done' on Jira.")] string command,
+        [Description(ConnectionDoc)] string? connection = null,
         CancellationToken ct = default)
     {
         var (c, msg) = await ResolveAsync(connection, Capabilities.IssuesWrite, true, ct);
         if (c is null) return msg!;
 
-        await youtrack.ApplyCommandAsync(c, issueKey, command, ct);
+        try { await youtrack.ApplyCommandAsync(c, issueKey, command, ct); }
+        catch (InvalidOperationException ex) { return Untrusted.Scrub(ex.Message); }
         return $"Applied \"{command}\" to {issueKey}.";
     }
 
     [McpServerTool(Name = "create_project", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true)]
-    [Description("Create a new YouTrack project. Requires the admin capability, which is switched off by default.")]
+    [Description("Create a new YouTrack project. Requires the admin capability, which is switched off by default. Not available on Jira connections.")]
     public async Task<string> CreateProject(
         [Description("Project name, e.g. 'OutPost2'.")] string name,
         [Description("Short key, e.g. 'OP2'.")] string shortName,
-        [Description("Connection name, e.g. 'lab'. Required unless a default tracker has been set.")] string? connection = null,
+        [Description(ConnectionDoc)] string? connection = null,
         CancellationToken ct = default)
     {
+        // Jira declares no admin capability, so the resolver below would call a named Jira
+        // connection unknown — true of the capability, false of the connection. Say what
+        // is actually the case before it gets the chance.
+        var trackers = await TrackersAsync(ct);
+        var jira = string.IsNullOrWhiteSpace(connection)
+            ? trackers.Count > 0 && trackers.All(t => t.Provider == ProviderKind.Jira) ? trackers[0] : null
+            : trackers.FirstOrDefault(t => t.Provider == ProviderKind.Jira
+                && string.Equals(t.Label, connection.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (jira is not null) return JiraService.NoProjectCreation(jira.Label);
+
         // A separate capability from write, and off unless deliberately enabled — creating
         // a project is visible to everyone on the server and awkward to undo, so it must
         // not ride on the same switch as "read my tickets" when a voice turn can trigger

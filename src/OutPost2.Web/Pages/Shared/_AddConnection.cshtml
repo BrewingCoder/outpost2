@@ -51,6 +51,11 @@
                 <span class="op-pick__how op-pick__how--hon">@Icons.Unlock() Honor system</span>
                 <span class="op-field__help">Your own server. You paste an access token; its scopes are the only real limit.</span>
             </button>
+            <button class="op-pick" type="button" data-goto-step="jr">
+                <span class="op-pick__name">Jira Cloud</span>
+                <span class="op-pick__how op-pick__how--hon">@Icons.Unlock() Honor system</span>
+                <span class="op-field__help">Your Atlassian email and an API token. It can do whatever your account can.</span>
+            </button>
         </div>
 
         @* ── step 2: Microsoft ──────────────────────────────────────── *@
@@ -213,6 +218,45 @@
             <div class="op-note op-note--warn" style="margin-top:16px">
                 @Icons.Unlock()
                 <span>Outpost can&rsquo;t shrink a token. To genuinely limit it, choose its scopes on your server.</span>
+            </div>
+            <div class="op-row op-row--end" style="margin-top:20px">
+                <button class="op-btn op-btn--secondary" type="button" data-goto-step="1">Back</button>
+                <button class="op-btn op-btn--primary">Connect</button>
+            </div>
+        </form>
+
+        @* ── step 2: Jira Cloud (OP2-82) ────────────────────────────── *@
+        <form method="post" action="/connections/jira/add" data-step="jr" hidden>
+            @Html.AntiForgeryToken()
+            <div class="op-field">
+                <label class="op-field__label" for="jr-label">Name it</label>
+                <input class="op-input op-input--mono" id="jr-label" name="label" required maxlength="60"
+                       autocomplete="off" placeholder="jira" data-callsign data-say="Jira" />
+                <span class="op-field__help">You&rsquo;ll say: <span data-say-preview></span></span>
+                <span data-name-warning hidden></span>
+            </div>
+            <div class="op-field" style="margin-top:16px">
+                <label class="op-field__label" for="jr-site">Site</label>
+                <input class="op-input" id="jr-site" name="site" required autocomplete="off"
+                       placeholder="acme.atlassian.net" />
+                <span class="op-field__help">Jira Cloud only. Jira Server and Data Center aren&rsquo;t supported.</span>
+            </div>
+            <div class="op-field" style="margin-top:16px">
+                <label class="op-field__label" for="jr-email">Atlassian email</label>
+                <input class="op-input" id="jr-email" name="email" type="email" required autocomplete="off"
+                       placeholder="you@example.com" />
+            </div>
+            <div class="op-field" style="margin-top:16px">
+                <label class="op-field__label" for="jr-token">API token</label>
+                <input class="op-input op-input--mono" id="jr-token" name="token" type="password" required
+                       autocomplete="off" placeholder="From id.atlassian.com &rarr; Security &rarr; API tokens" />
+                <span class="op-field__help">
+                    A classic API token, not one with scopes, which Jira refuses at the site address. Not your password.
+                </span>
+            </div>
+            <div class="op-note op-note--warn" style="margin-top:16px">
+                @Icons.Unlock()
+                <span>Outpost can&rsquo;t shrink an API token. It can do whatever your Atlassian account can; the switches afterwards are Outpost&rsquo;s own restraint.</span>
             </div>
             <div class="op-row op-row--end" style="margin-top:20px">
                 <button class="op-btn op-btn--secondary" type="button" data-goto-step="1">Back</button>

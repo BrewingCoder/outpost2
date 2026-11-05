@@ -197,8 +197,17 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Code.ICodeProvider,
 builder.Services.AddScoped<OutPost2.Infrastructure.Code.IGitHubService,
                            OutPost2.Infrastructure.Code.CodeServiceRouter>();
 builder.Services.AddScoped<IYouTrackConnectionService, YouTrackConnectionService>();
-builder.Services.AddScoped<OutPost2.Infrastructure.Issues.IYouTrackService,
+// Issues are routed by the connection's provider (OP2-82), as code is: each tracker
+// registers as an IIssueProvider, and the issue tools get the router.
+builder.Services.AddScoped<OutPost2.Infrastructure.Issues.IIssueProvider,
                            OutPost2.Infrastructure.Issues.YouTrackService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Issues.IYouTrackService,
+                           OutPost2.Infrastructure.Issues.IssueServiceRouter>();
+// Jira Cloud (OP2-82). Atlassian-hosted, so no private CA.
+builder.Services.AddHttpClient("jira").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddScoped<IJiraConnectionService, JiraConnectionService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Issues.IIssueProvider,
+                           OutPost2.Infrastructure.Issues.JiraService>();
 
 // Friction reports go to OutPost2's OWN tracker under the server's credential, not to a
 // user connection — the coworkers this exists for have no connection to it (OP2-74).
