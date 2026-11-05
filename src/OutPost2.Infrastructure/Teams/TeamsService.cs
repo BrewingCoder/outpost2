@@ -73,8 +73,10 @@ public interface ITeamsService
 public sealed class TeamsService(
     IMicrosoftConnectionServiceAccessor tokens,
     IHttpClientFactory httpFactory,
-    ILogger<TeamsService> log) : ITeamsService
+    ILogger<TeamsService> log) : IChatProvider
 {
+    public ProviderKind Provider => ProviderKind.Microsoft;
+
     private const string Graph = "https://graph.microsoft.com/v1.0";
 
     /// <summary>Graph's hard ceiling on both chats and messages. Asking for more is a 400.</summary>
@@ -483,4 +485,5 @@ public sealed class TeamsService(
         [property: JsonPropertyName("contentType")] string? ContentType);
 }
 
-public sealed class TeamsException(string message) : Exception(message);
+/// <summary>A chat failure, already in a sentence. Not sealed: Slack's refusals derive from it (OP2-86).</summary>
+public class TeamsException(string message) : Exception(message);

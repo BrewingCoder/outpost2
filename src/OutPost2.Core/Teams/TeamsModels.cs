@@ -1,8 +1,10 @@
 namespace OutPost2.Core.Teams;
 
 /// <summary>
-/// A Teams conversation the user is part of (OP2-79). Chats only — channels are
-/// deliberately out of scope, see <c>TeamsService</c> for why.
+/// A conversation the user is part of: a Teams chat (OP2-79) or a Slack conversation
+/// (OP2-86). Teams contributes chats only — its channels are deliberately out of scope,
+/// see <c>TeamsService</c> for why. Slack contributes DMs, group DMs and the channels the
+/// user is a member of, see <c>SlackService</c>.
 /// </summary>
 public sealed record Chat
 {
@@ -73,6 +75,12 @@ public enum ChatKind
 
     /// <summary>Anything Graph reports that this version does not know about.</summary>
     Other,
+
+    /// <summary>
+    /// A Slack channel, public or private (OP2-86). Named, with a membership too large to
+    /// describe it by. Teams never produces one: Teams channels are not read.
+    /// </summary>
+    Channel,
 }
 
 /// <summary>One message in a chat, already reduced to something worth reading aloud.</summary>
@@ -106,6 +114,22 @@ public sealed record ChatMessage
 
     /// <summary>Names of files attached to the message. The files themselves are not fetched.</summary>
     public IReadOnlyList<string> Attachments { get; init; } = [];
+
+    /// <summary>
+    /// How many replies hang off this message in a thread (Slack, OP2-86). The replies are
+    /// NOT in the transcript: a thread reply is not a message in the channel, and the
+    /// transcript is the channel. Saying they exist is what stops a quiet-looking message
+    /// from hiding a forty-reply argument underneath it. Zero for Teams, which has no
+    /// threads in chats.
+    /// </summary>
+    public int ThreadReplies { get; init; }
+
+    /// <summary>
+    /// A thread reply the sender ALSO posted to the channel ("also send to #channel"),
+    /// which is the only way a reply appears at the top level. Worth saying, because it
+    /// answers a message that may not be in view.
+    /// </summary>
+    public bool IsThreadReply { get; init; }
 }
 
 /// <summary>

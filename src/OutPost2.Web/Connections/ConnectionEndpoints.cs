@@ -363,12 +363,47 @@ public static class ConnectionEndpoints
             }
         });
 
+        // ── add a Slack workspace (pasted user token: OP2-86) ────────────────
+        group.MapPost("/slack/add", async (
+            HttpContext ctx,
+            ISlackConnectionService slack,
+            IConnectionStore connections,
+            [FromForm] string label, [FromForm] string token) =>
+        {
+            var userId = ctx.User.UserId();
+            label = label.Trim();
+
+            if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(token))
+                return Results.Redirect("/connections?error=Name+and+token+are+both+required.");
+
+            if (await connections.FindByLabelAsync(userId, label) is not null)
+                return Results.Redirect($"/connections?error={Uri.EscapeDataString($"You already have a connection called '{label}'.")}");
+
+            try
+            {
+                var c = await slack.ConnectAsync(userId, token, label);
+                return Results.Redirect($"/connections?added={Uri.EscapeDataString(c.Label)}");
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Redirect($"/connections?error={Uri.EscapeDataString(ex.Message)}");
+            }
+        });
+
         // ── re-check a connection's health ──────────────────────────────────
         group.MapPost("/{id:guid}/check", async (
-            HttpContext ctx, IConnectionStore s, IYouTrackConnectionService yt, IGiteaConnectionService gitea, Guid id) =>
+            HttpContext ctx, IConnectionStore s, IYouTrackConnectionService yt, IGiteaConnectionService gitea,
+            ISlackConnectionService slack, Guid id) =>
         {
             var c = await s.GetAsync(ctx.User.UserId(), id);
             if (c is null) return Results.Redirect("/connections");
+
+            if (c.Provider is ProviderKind.Slack)
+            {
+                return Results.Redirect(await slack.CheckHealthAsync(c)
+                    ? "/connections"
+                    : $"/connections?error={Uri.EscapeDataString($"{c.Label} is no longer authenticating - the Slack token may have been revoked.")}");
+            }
 
             if (c.Provider is ProviderKind.YouTrack or ProviderKind.Gitea)
             {
@@ -418,6 +453,7 @@ public static class ConnectionEndpoints
         group.MapPost("/{id:guid}/replace-token", async (
             HttpContext ctx, IConnectionStore s,
             IYouTrackConnectionService yt, IGitHubConnectionService gh, IGiteaConnectionService gitea,
+            ISlackConnectionService slack,
             Guid id, [FromForm] string token) =>
         {
             var userId = ctx.User.UserId();
@@ -434,6 +470,7 @@ public static class ConnectionEndpoints
                     ProviderKind.YouTrack => await yt.ConnectAsync(userId, c.Instance, token, c.Label),
                     ProviderKind.GitHub => await gh.ConnectAsync(userId, c.Instance, token, c.Label),
                     ProviderKind.Gitea => await gitea.ConnectAsync(userId, c.Instance, token, c.Label),
+                    ProviderKind.Slack => await slack.ConnectAsync(userId, token, c.Label),
                     _ => throw new InvalidOperationException(
                         "That connection signs in through its provider. Reconnect it instead."),
                 };

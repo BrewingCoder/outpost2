@@ -119,8 +119,17 @@ builder.Services.AddScoped<OutPost2.Infrastructure.Calendar.IMailboxZoneSource,
                            OutPost2.Infrastructure.Calendar.GoogleMailboxZoneSource>();
 builder.Services.AddScoped<OutPost2.Infrastructure.Calendar.IMailboxZones,
                            OutPost2.Infrastructure.Calendar.MailboxZones>();
-builder.Services.AddScoped<OutPost2.Infrastructure.Teams.ITeamsService,
+// Chat is routed by the connection's provider (OP2-86), as code and mail are: each chat
+// service registers as an IChatProvider, and the chat tools get the router.
+builder.Services.AddScoped<OutPost2.Infrastructure.Teams.IChatProvider,
                            OutPost2.Infrastructure.Teams.TeamsService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Teams.IChatProvider,
+                           OutPost2.Infrastructure.Teams.SlackService>();
+builder.Services.AddScoped<OutPost2.Infrastructure.Teams.ITeamsService,
+                           OutPost2.Infrastructure.Teams.ChatServiceRouter>();
+builder.Services.AddScoped<ISlackConnectionService, SlackConnectionService>();
+// Slack's public API (OP2-86): no private CA, for the same reason Graph has none.
+builder.Services.AddHttpClient("slack").ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<OutPost2.Infrastructure.People.IPeopleService,
                            OutPost2.Infrastructure.People.PeopleService>();
 builder.Services.AddSingleton<OutPost2.Infrastructure.Mail.IAttachmentExtractor,
