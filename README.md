@@ -251,7 +251,7 @@ official MCP C# SDK v2 · Tamp · Cloudflare tunnel
 
 ## Status
 
-In daily use. **1,076 tests** — the integration suites run against real Postgres, real
+In daily use. **1,204 tests** — the integration suites run against real Postgres, real
 Garage, real Vault and a real YouTrack server, because the things worth proving here are
 the ones a fake cannot. The ones that skip are the live probes, which need real accounts:
 the Microsoft ones a mailbox reconnected since the Teams scopes went in, `LiveGmailProbe`
