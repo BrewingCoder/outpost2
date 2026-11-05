@@ -10,6 +10,8 @@ using OutPost2.Infrastructure.Jobs;
 using OutPost2.Core.Mail;
 using OutPost2.Infrastructure.Mail;
 
+using OutPost2.Web.Mcp;
+
 namespace OutPost2.Web.Jobs;
 
 /// <summary>
@@ -305,7 +307,7 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
                     job.Id, wait.TotalSeconds);
 
                 await jobs.UpdateProgressAsync(job.Id, JobState.Sending, Percent(cleared, payload.Expected),
-                    $"{cleared} moved so far, paused for {(int)wait.TotalSeconds}s because {(connection.Provider == ProviderKind.Google ? "Google" : "Microsoft")} is "
+                    $"{cleared} moved so far, paused for {(int)wait.TotalSeconds}s because {MailWords.For(connection.Provider).Company} is "
                     + "rate-limiting the mailbox", ct);
 
                 await Task.Delay(wait, ct);
@@ -339,7 +341,10 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
         var summary = $"{cleared} message{(cleared == 1 ? "" : "s")} from \"{payload.From}\" "
                     + $"moved to {TrashName(connection)} in {connection.Label}"
                     + (failed > 0 ? $", {failed} refused" : "")
-                    + ". They stay there until you empty it.";
+                    // The provider's own promise about the bin. "They stay there until you
+                    // empty it" is Outlook's; Gmail empties Trash itself after 30 days, and a
+                    // user who believed otherwise would leave the rescue too late (OP2-294).
+                    + ". " + MailWords.For(connection.Provider).TrashKeeps;
 
         await jobs.UpdateProgressAsync(job.Id, JobState.Sending, 100, summary, ct);
         await jobs.CompleteAsync(job.Id, true, null, false, ct);
@@ -361,8 +366,7 @@ public sealed class JobRunner(IServiceScopeFactory scopes, ILogger<JobRunner> lo
     private const int MaxClearPasses = 200;
 
     /// <summary>Where a clear puts mail, in the provider's own word (OP2-282).</summary>
-    private static string TrashName(Connection c) =>
-        c.Provider == ProviderKind.Google ? "Trash" : "Deleted Items";
+    private static string TrashName(Connection c) => MailWords.For(c.Provider).Trash;
 }
 
 /// <summary>Housekeeping: expired staging files, spent auth codes and pending connections.</summary>
