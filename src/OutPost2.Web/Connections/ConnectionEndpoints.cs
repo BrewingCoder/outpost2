@@ -363,12 +363,50 @@ public static class ConnectionEndpoints
             }
         });
 
+        // ── add a Jira Cloud connection (email + API token: OP2-82) ──────────
+        group.MapPost("/jira/add", async (
+            HttpContext ctx,
+            IJiraConnectionService jira,
+            IConnectionStore connections,
+            [FromForm] string label, [FromForm] string site, [FromForm] string email, [FromForm] string token) =>
+        {
+            var userId = ctx.User.UserId();
+            label = (label ?? "").Trim();
+
+            if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(site)
+                || string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(token))
+                return Results.Redirect("/connections?error=Name,+site,+email+and+API+token+are+all+required.");
+
+            if (await connections.FindByLabelAsync(userId, label) is not null)
+                return Results.Redirect($"/connections?error={Uri.EscapeDataString($"You already have a connection called '{label}'.")}");
+
+            try
+            {
+                var c = await jira.ConnectAsync(userId, site, email, token, label);
+                return Results.Redirect($"/connections?added={Uri.EscapeDataString(c.Label)}");
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Redirect($"/connections?error={Uri.EscapeDataString(ex.Message)}");
+            }
+        });
+
         // ── re-check a connection's health ──────────────────────────────────
         group.MapPost("/{id:guid}/check", async (
             HttpContext ctx, IConnectionStore s, IYouTrackConnectionService yt, IGiteaConnectionService gitea, Guid id) =>
         {
             var c = await s.GetAsync(ctx.User.UserId(), id);
             if (c is null) return Results.Redirect("/connections");
+
+            // Jira (OP2-82). Resolved here rather than added to the parameter list, so this
+            // block stands alone.
+            if (c.Provider == ProviderKind.Jira)
+            {
+                var ok = await ctx.RequestServices.GetRequiredService<IJiraConnectionService>().CheckHealthAsync(c);
+                return Results.Redirect(ok
+                    ? "/connections"
+                    : $"/connections?error={Uri.EscapeDataString($"{c.Label} is no longer authenticating - the API token may have been revoked or expired.")}");
+            }
 
             if (c.Provider is ProviderKind.YouTrack or ProviderKind.Gitea)
             {
@@ -434,6 +472,9 @@ public static class ConnectionEndpoints
                     ProviderKind.YouTrack => await yt.ConnectAsync(userId, c.Instance, token, c.Label),
                     ProviderKind.GitHub => await gh.ConnectAsync(userId, c.Instance, token, c.Label),
                     ProviderKind.Gitea => await gitea.ConnectAsync(userId, c.Instance, token, c.Label),
+                    // Only the API token changes; the email is the one it was connected with.
+                    ProviderKind.Jira => await ctx.RequestServices.GetRequiredService<IJiraConnectionService>()
+                        .ConnectAsync(userId, c.Instance, c.AccountIdentifier ?? "", token, c.Label),
                     _ => throw new InvalidOperationException(
                         "That connection signs in through its provider. Reconnect it instead."),
                 };
